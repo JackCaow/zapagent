@@ -102,6 +102,10 @@ describe("isolated Agent workspace merge", () => {
       expect(artifact.changedPaths.sort()).toEqual(["a.txt", "a.txt/source.txt"]);
       expect(git(artifact.repoPath!, "ls-tree", "-r", "--name-only", "HEAD")).not.toContain("noise.generated");
       expect(git(artifact.repoPath!, "ls-tree", "-r", "--name-only", "HEAD")).not.toContain(".env");
+      expect((await new MergeCoordinator(manager).merge([artifact.artifactId])).success).toBe(true);
+      expect(readFileSync(join(root, "a.txt", "source.txt"), "utf8")).toBe("fixture source.txt\n");
+      expect(existsSync(join(root, "a.txt", ".env"))).toBe(false);
+      expect(existsSync(join(root, "a.txt", "noise.generated"))).toBe(false);
     } finally { await manager.cleanup(); }
   });
 
