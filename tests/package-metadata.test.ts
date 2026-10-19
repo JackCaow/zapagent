@@ -42,10 +42,13 @@ describe("package metadata", () => {
     expect(readme).not.toContain("ZAPCODE_SPLIT_FOOTER_HEIGHT")
   })
 
-  it("keeps README slash commands in sync with the built-in palette", () => {
-    const readme = readFileSync(join(root, "README.md"), "utf-8")
+  it("keeps CLI reference slash commands in sync with the built-in palette", () => {
+    const reference = readFileSync(join(root, "docs/usage.md"), "utf-8")
+    for (const filename of ["README.md", "README.zh-CN.md"]) {
+      expect(readFileSync(join(root, filename), "utf-8")).toContain("docs/usage.md")
+    }
     const documented = new Set(
-      [...readme.matchAll(/^\| `([^`]+)` \|/gm)].map((match) => match[1]),
+      [...reference.matchAll(/^\| `([^`]+)` \|/gm)].map((match) => match[1]),
     )
     const expected = BUILTIN_COMMANDS.map((entry) => entry.name)
 

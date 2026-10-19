@@ -1,0 +1,107 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1110" viewBox="0 0 1440 1110" role="img" aria-labelledby="title desc">
+<title id="title">zapAgent: coordinate, isolate, observe</title>
+<desc id="desc">The host drives AgentRuntime and the root model loop. The coordinator delegates read-only work to a shared view and writing work to private snapshots. Writing agents produce artifacts that pass an explicit merge gate with conflict and parent drift checks. Tools pass through policy and an execution broker; runtime metadata feeds the read-only Watch interface.</desc>
+<defs>
+  <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#101814"/><stop offset="1" stop-color="#0c1015"/></linearGradient>
+  <linearGradient id="active" x2="1" y2="1"><stop stop-color="#203521"/><stop offset="1" stop-color="#15231c"/></linearGradient>
+  <marker id="arrow" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0 0L8 4L0 8" fill="none" stroke="#b8ed71" stroke-width="1.5"/></marker>
+  <marker id="mutedArrow" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0 0L8 4L0 8" fill="none" stroke="#80958a" stroke-width="1.5"/></marker>
+  <style>
+    text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+    .title { fill:#f0f6ef; font-weight:650; font-size:23px; }
+    .body { fill:#b1c1b7; font-size:19px; }
+    .small { fill:#91a49a; font-size:17px; }
+    .label { fill:#b8ed71; font-size:15px; font-weight:650; letter-spacing:2px; }
+    .box { fill:#151e1b; stroke:#35483d; stroke-width:1.5; }
+    .flow { fill:none; stroke:#b8ed71; stroke-width:2; marker-end:url(#arrow); }
+    .event { fill:none; stroke:#80958a; stroke-width:1.5; stroke-dasharray:5 6; marker-end:url(#mutedArrow); }
+  </style>
+</defs>
+<rect width="1440" height="1110" rx="24" fill="url(#bg)"/>
+<text x="52" y="59" class="label">ZAPAGENT / ARCHITECTURE</text>
+<text x="52" y="106" fill="#f0f6ef" font-size="36" font-weight="650">One task. Independent work. Visible progress.</text>
+<text x="52" y="140" class="body">A shared runtime coordinates the work; private snapshots contain each writer's edits.</text>
+
+<!-- Main collaboration column -->
+<rect x="52" y="178" width="918" height="74" rx="14" class="box"/>
+<text x="77" y="209" class="title">Your terminal · Headless CLI · ACP client</text>
+<text x="77" y="235" class="small">Host input, session state, and approval decisions</text>
+<path d="M511 252V284" class="flow"/>
+<rect x="52" y="286" width="918" height="136" rx="16" fill="url(#active)" stroke="#6b9652" stroke-width="1.5"/>
+<text x="77" y="319" class="label">AGENTRUNTIME</text>
+<text x="77" y="353" class="title">Root agent · LoopAgent</text>
+<text x="77" y="383" class="body">Model ↔ tools · context &amp; memory · execution budgets</text>
+<text x="77" y="407" class="small">Anthropic / OpenAI / OpenAI-compatible APIs</text>
+<path d="M511 422V454" class="flow"/>
+<rect x="52" y="456" width="918" height="86" rx="14" class="box"/>
+<text x="77" y="490" class="title">AgentCoordinator</text>
+<text x="77" y="520" class="body">Dependencies · concurrency · messaging · run lifecycle</text>
+
+<path d="M511 542V565H191V590" class="flow"/>
+<path d="M511 542V590" class="flow"/>
+<path d="M511 565H831V590" class="flow"/>
+<rect x="52" y="592" width="278" height="139" rx="14" class="box"/>
+<text x="74" y="624" class="label">READ-ONLY AGENT</text>
+<text x="74" y="659" class="title">Explore / plan</text>
+<text x="74" y="689" class="body">Shared workspace view</text>
+<text x="74" y="714" class="small">Returns findings to the parent</text>
+<rect x="372" y="592" width="278" height="139" rx="14" fill="url(#active)" stroke="#6b9652" stroke-width="1.5"/>
+<text x="394" y="624" class="label">WRITING AGENT A</text>
+<text x="394" y="659" class="title">Private snapshot</text>
+<text x="394" y="689" class="body">Own files &amp; tool cwd</text>
+<text x="394" y="714" class="small">Git clone or controlled copy</text>
+<rect x="692" y="592" width="278" height="139" rx="14" fill="url(#active)" stroke="#6b9652" stroke-width="1.5"/>
+<text x="714" y="624" class="label">WRITING AGENT B</text>
+<text x="714" y="659" class="title">Private snapshot</text>
+<text x="714" y="689" class="body">Own files &amp; tool cwd</text>
+<text x="714" y="714" class="small">Git clone or controlled copy</text>
+
+<path d="M511 731V783" class="flow"/>
+<path d="M831 731V783" class="flow"/>
+<text x="548" y="765" class="small">frozen artifacts</text>
+<rect x="372" y="786" width="598" height="90" rx="14" class="box"/>
+<text x="396" y="822" class="title">Explicit merge gate</text>
+<text x="396" y="852" class="body">Conflict checks + parent-workspace drift checks</text>
+<path d="M671 876V910" class="flow"/>
+<rect x="372" y="913" width="598" height="72" rx="14" fill="url(#active)" stroke="#6b9652" stroke-width="1.5"/>
+<text x="396" y="945" class="title">Your project receives the changes</text>
+<text x="396" y="970" class="small">File changes are applied; child Git history stays private.</text>
+<text x="52" y="804" class="label">WORKSPACE RULE</text>
+<text x="52" y="839" class="body">Writing agents edit</text>
+<text x="52" y="866" class="body">their own snapshots.</text>
+<text x="52" y="908" class="small">Their changes reach the</text>
+<text x="52" y="933" class="small">parent through the merge.</text>
+
+<!-- Shared execution and observation side rail -->
+<rect x="1010" y="178" width="378" height="807" rx="18" fill="#111a17" stroke="#2b3c33"/>
+<text x="1036" y="211" class="label">ACROSS ROOT &amp; CHILD RUNS</text>
+<rect x="1034" y="237" width="330" height="264" rx="14" class="box"/>
+<text x="1056" y="272" class="title">Tool execution</text>
+<text x="1056" y="304" class="body">Registry &amp; executor</text>
+<path d="M1199 320V347" class="flow"/>
+<text x="1056" y="378" class="title">Policy &amp; approvals</text>
+<path d="M1199 392V420" class="flow"/>
+<text x="1056" y="450" class="title">Execution broker</text>
+<text x="1056" y="479" class="small">OS sandbox / optional VM</text>
+<path d="M970 353H1031" class="flow"/>
+
+<rect x="1034" y="562" width="330" height="110" rx="14" class="box"/>
+<text x="1056" y="599" class="title">Runtime observations</text>
+<text x="1056" y="631" class="body">Run, tool, approval events</text>
+<text x="1056" y="655" class="small">Metadata projection</text>
+<path d="M1199 501V559" class="event"/>
+<path d="M970 499H994V616H1031" class="event"/>
+<path d="M1199 672V722" class="event"/>
+<rect x="1034" y="725" width="330" height="219" rx="14" fill="url(#active)" stroke="#6b9652" stroke-width="1.5"/>
+<text x="1056" y="759" class="label">ZAP --WATCH</text>
+<text x="1056" y="797" class="title">A live view of the work</text>
+<text x="1056" y="832" class="body">Agent tree · tool activity</text>
+<text x="1056" y="861" class="body">Approval waits · timeline</text>
+<text x="1056" y="907" class="small">Local browser · read-only</text>
+<text x="1056" y="932" class="small">No prompts or tool output</text>
+
+<path d="M52 1020H1388" stroke="#2b3c33"/>
+<path d="M52 1060H95" class="flow"/><text x="108" y="1066" class="small">Execution / artifacts</text>
+<path d="M372 1060H415" class="event"/><text x="428" y="1066" class="small">Observation only</text>
+<text x="815" y="1066" class="small">Execution outcome ≠ task acceptance</text>
+</svg>
