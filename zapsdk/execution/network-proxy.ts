@@ -64,8 +64,8 @@ const MAX_HEAD_BYTES = 64 * 1024;
 
 /**
  * Loopback HTTP/CONNECT proxy that enforces a domain allowlist for sandboxed
- * commands. The OS sandbox only lets a command reach this port, so a tool that
- * ignores the proxy settings fails closed instead of bypassing the policy.
+ * commands. The OS sandbox confines egress to loopback (including dev servers),
+ * so ignoring proxy settings does not permit direct external connections.
  * Host-name filtering only: it does not inspect TLS traffic.
  */
 export class NetworkProxy {
@@ -87,6 +87,10 @@ export class NetworkProxy {
 
   /** Hosts refused so far, with the reason, for diagnostics. */
   blockedHosts(): ReadonlyMap<string, string> { return this.blocked; }
+
+  /** A command owns its listener and diagnostics until its processes exit.
+   * Concurrent commands must never inherit one another's denial evidence. */
+  fork(): NetworkProxy { return new NetworkProxy(this.policy); }
 
   close(): void {
     this.server.close();
@@ -150,7 +154,10 @@ export class NetworkProxy {
     if (isIP(address) === 0) {
       try { address = (await lookup(address)).address; } catch { return this.reject(client, 502, `cannot resolve ${host}`); }
     }
-    if (isLinkLocalAddress(address)) return this.reject(client, 403, `zap sandbox: ${host} resolves to a link-local address`);
+    if (isLinkLocalAddress(address)) {
+      this.blocked.set(normalizeHost(host), "destination resolves to a link-local address");
+      return this.reject(client, 403, `zap sandbox: ${host} resolves to a link-local address`);
+    }
     const upstream = connect({ host: address, port });
     this.sockets.add(upstream);
     upstream.once("close", () => this.sockets.delete(upstream));

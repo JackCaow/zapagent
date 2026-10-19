@@ -111,6 +111,9 @@ export function ApprovalBar({ toolName, args, onChoose, rulePreview, unsandboxed
   return (
     <Box flexDirection="column" paddingX={1} marginTop={1}>
       <Text color={c.text.primary}>{formatToolCall(toolName, args)}</Text>
+      {toolName === "bash" && ([ ["read_paths", "Additional read access"], ["write_paths", "Additional write access"] ] as const).map(([field, label]) =>
+        Array.isArray(args[field]) && args[field].length > 0
+          ? <Text key={field} color={c.warning}>{label}: {JSON.stringify(args[field])}</Text> : null)}
       {unsandboxed && <Text color={c.error}>Runs outside the OS sandbox: full access to your files and network.</Text>}
       <Text color={c.warning} bold>Approve?</Text>
       <Box flexDirection="column">

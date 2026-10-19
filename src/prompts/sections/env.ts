@@ -4,6 +4,7 @@ import { release } from "node:os"
 import { getOS } from "../../../zapsdk/utils/platform.js"
 import { localExecutionShell } from "../../../zapsdk/execution/shell.js"
 import type { PromptSection } from "../registry.js"
+import { sandboxTemporaryDirectoryDescription } from "../execution-facts.js"
 
 /**
  * Environment block — the one section guaranteed to vary per session
@@ -35,6 +36,7 @@ export const envSection: PromptSection = {
       // Runtime data informs the Agent without importing backend-specific
       // recovery rules, completion decisions or prompt fragments.
       lines.push(`- Process environment facts: ${JSON.stringify(execution)}`)
+      lines.push(...sandboxTemporaryDirectoryDescription(execution).map(line => `- ${line}`))
     }
     if (ctx.executionCapacity) {
       lines.push(`- Local execution capacity observations (visible limits only): ${JSON.stringify(ctx.executionCapacity)}`)

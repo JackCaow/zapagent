@@ -385,12 +385,16 @@ interface DiffMetaShape {
   skipped?: string
 }
 
-const ToolResult = memo(function ToolResult({ log }: { log: LogEntry }) {
+export const ToolResult = memo(function ToolResult({ log }: { log: LogEntry }) {
   const tool = log.tool
   if (!tool || tool.name === "todo_write") return null
   const ok = tool.success !== false && !log.text.startsWith("ERR")
-  const status = ok ? "✓" : "✗"
-  const statusFg = ok ? c.text.ghost : c.error
+  const runtime = (tool.meta as { runtime?: { command?: { exitCode?: number; stderrPresent?: boolean }; networkDenials?: unknown[] } } | undefined)?.runtime
+  const command = runtime?.command
+  const networkWarning = (runtime?.networkDenials?.length ?? 0) > 0
+  const shellWarning = ok && tool.name === "bash" && command?.exitCode === 0 && (command.stderrPresent === true || networkWarning)
+  const status = !ok ? "✗" : shellWarning ? "⚠" : "✓"
+  const statusFg = !ok ? c.error : shellWarning ? c.warning : c.text.ghost
   const output = tool.output ?? ""
   const checkpoint = (tool.meta as {
     runtime?: { checkpoint?: { covered?: boolean; error?: string } }
@@ -432,7 +436,7 @@ const ToolResult = memo(function ToolResult({ log }: { log: LogEntry }) {
   const meta = tool.meta as DiffMetaShape | undefined
   const metaDiff = meta && typeof meta.diff === "string" && meta.diff.length > 0 ? meta : null
   const looksLike = looksLikeDiff(output)
-  const renderAsDiff = metaDiff !== null || looksLike
+  const renderAsDiff = !shellWarning && (metaDiff !== null || looksLike)
 
   if (renderAsDiff) {
     const source = metaDiff ? metaDiff.diff : output
@@ -472,6 +476,13 @@ const ToolResult = memo(function ToolResult({ log }: { log: LogEntry }) {
       >
         <Text color={c.text.muted}>{formatResultLabel(tool.name, tool.arguments)}</Text>
       </IndentedRow>
+      {shellWarning && (
+        <IndentedRow width={NESTED_COLS}>
+          <Text color={c.warning}>{networkWarning
+            ? "exit 0 with network refusals — inspect diagnostics; some requests were blocked"
+            : "exit 0 with stderr — inspect diagnostics; earlier commands may have failed"}</Text>
+        </IndentedRow>
+      )}
       {lines.length > 0 && (
         <IndentedRow width={NESTED_COLS}>
           <Text color={c.text.muted}>{lines.join("\n")}</Text>

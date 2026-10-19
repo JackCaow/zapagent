@@ -359,6 +359,43 @@ describe("bash defaultCwd", () => {
 })
 
 describe("foreground command receipts", () => {
+  it("surfaces masked failures before stdout without fabricating an exit code", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "zap-stderr-"))
+    try {
+      const result = await executeCommandTool({ defaultCwd: dir }).handler({
+        command: "cat missing-input | wc -l; printf done",
+      })
+      expect(result.success).toBe(true)
+      expect(result.runtime?.command).toMatchObject({ exitCode: 0, stderrPresent: true })
+      expect(result.output.startsWith("[Shell exited 0 with stderr;")).toBe(true)
+      expect(result.output).toContain("missing-input")
+      expect(result.output.indexOf("[stderr]")).toBeLessThan(result.output.indexOf("[stdout]"))
+      expect(result.output).toContain("done")
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  it("distinguishes benign stderr diagnostics from a failed exit", async () => {
+    const tool = executeCommandTool()
+    const warning = await tool.handler({ command: "printf warning >&2; printf done" })
+    const failure = await tool.handler({ command: "printf broken >&2; exit 7" })
+    const clean = await tool.handler({ command: "printf ok" })
+    expect(warning.success).toBe(true)
+    expect(warning.runtime?.command).toMatchObject({ exitCode: 0, stderrPresent: true })
+    expect(failure.success).toBe(false)
+    expect(failure.runtime?.command).toMatchObject({ exitCode: 7, stderrPresent: true })
+    expect(failure.output).not.toContain("Shell exited 0")
+    expect(clean.output).toBe("ok")
+    expect(clean.runtime?.command?.stderrPresent).toBeUndefined()
+  })
+
+  it("retains diagnostics from earlier successful check steps", async () => {
+    const result = await executeCommandTool().handler({ check_steps: ["printf warning >&2", "printf done"] })
+    expect(result.success).toBe(true)
+    expect(result.runtime?.command).toMatchObject({ exitCode: 0, stderrPresent: true })
+    expect(result.runtime?.verification?.steps).toHaveLength(2)
+    expect(result.output.startsWith("[Shell exited 0 with stderr;")).toBe(true)
+  })
+
   it("records actual exit codes alongside tool success", async () => {
     const tool = executeCommandTool()
     const success = await tool.handler({ command: "printf ok" }, undefined, { executionId: "receipt-1" })

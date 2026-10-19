@@ -57,3 +57,9 @@ motion-dom and motion-utils. Their copyright and full MIT notices, together
 with tslib's 0BSD license, are retained in the generated `src/watch/client.html`
 and therefore travel with both the npm source package and the standalone CLI.
 Versions are pinned by `bun.lock`; `bun run build:watch` regenerates the asset.
+
+The sandbox Node fetch proxy preload embeds Undici 7.30.1 (MIT), from
+https://github.com/nodejs/undici. Its full license is retained inside
+`zapsdk/execution/node-proxy-preload.generated.ts`, including in the standalone
+CLI and npm source package. `bun run build:node-proxy` regenerates it from the
+pinned development dependency; `bun run check:node-proxy` checks freshness.

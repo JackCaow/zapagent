@@ -1,0 +1,5 @@
+{"version":2,"width":120,"height":16,"title":"Shell result component capture: clean, stderr warning, nonzero failure","env":{"TERM":"xterm-256color"}}
+[0,"o","\u001b[2J\u001b[H\u001b[33m✓ \u001b[39m  \u001b[37m$ Bash(printf ok)\u001b[39m\r\n     \u001b[37mok\u001b[39m\r\n"]
+[3,"o","\u001b[2J\u001b[H\u001b[33m⚠ \u001b[39m  \u001b[37m$ Bash(cat missing-input | wc -l)\u001b[39m\r\n     \u001b[33mexit 0 with stderr — inspect diagnostics; earlier commands may have failed\u001b[39m\r\n     \u001b[37m[Shell exited 0 with stderr; earlier commands may have failed. Inspect \u001b[39m\r\n     \u001b[37mdiagnostics before treating the operation as successful.]\u001b[39m\r\n     \u001b[37m[stderr]\u001b[39m\r\n     \u001b[37mcat: missing-input: No such file or directory\u001b[39m\r\n     \u001b[37m… 3 more lines\u001b[39m\r\n"]
+[6,"o","\u001b[2J\u001b[H\u001b[31m✗ \u001b[39m  \u001b[37m$ Bash(printf broken >&2; exit 7)\u001b[39m\r\n     \u001b[37mbroken\u001b[39m\r\n"]
+[9,"o","\r\n"]

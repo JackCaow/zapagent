@@ -15,6 +15,8 @@ export interface ExecutionEnvironmentFacts {
   workspace: "mapped" | "native";
   rootFilesystem: "read-only" | "read-write";
   temporaryStorage: "request" | "session" | "persistent" | "unknown";
+  /** Applies only to commands launched through the local OS sandbox. */
+  sandboxTemporaryDirectory?: { environmentVariables: string[]; scope: "command" | "workspace"; cleanup: "on-command-exit" | "workspace-storage" };
   workspaceMode?: string;
   network: "off" | "computer-allowlist" | "per-command-declaration" | "runtime-policy";
   commands?: string[];
@@ -27,6 +29,7 @@ export interface SandboxedCommand {
   args: string[];
   env: NodeJS.ProcessEnv;
   release(): void;
+  networkDenials?(): Array<{ host: string; reason: string }>;
 }
 
 export interface SandboxCommandOptions {
@@ -65,6 +68,7 @@ export interface SandboxExecutionContext {
 export interface ExecutionProcessBroker {
   readonly spawnCount: number;
   readonly sandboxedSpawnCount: number;
+  readonly networkDenials?: Array<{ host: string; reason: string }>;
   /** Adapter readiness is checked under the execution deadline, before the
    * handler may launch anything. Failure never selects a different backend. */
   ensureReady?(): Promise<void>;

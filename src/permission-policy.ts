@@ -41,6 +41,10 @@ export function evaluateApprovalPolicy(manager: PermissionManager, name: string,
     if (options.mode === "bypassPermissions") return result("allow", "unsandboxed under bypassPermissions", "sandbox")
     return result("ask", "unsandboxed bash needs interactive approval or a project sandbox authorization", "sandbox", true)
   }
+  if (name === "bash" && options.mode !== "bypassPermissions") {
+    const paths = manager.checkShellPaths(args, options.context)
+    if (paths.decision === "ask") return result("ask", paths.reason ?? "Shell filesystem paths require authorization", "fallback", true)
+  }
   if (rule.decision === "allow") return result("allow", rule.reason ?? `rule ${rule.rule?.pattern}`, "rule")
   if (options.allowedTools?.includes(name)) return result("allow", "allowed by --allowed-tools")
   if (name === "read_tool_output") return result("allow", "session-scoped runtime output read")

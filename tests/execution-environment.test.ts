@@ -10,6 +10,8 @@ import { createCapabilityGrant } from "../zapsdk/policy/engine.js"
 import { emptyToolEffects } from "../zapsdk/tools/effects.js"
 import { z } from "zod"
 import { localExecutionShell } from "../zapsdk/execution/shell.js"
+import { createPlatformSandbox } from "../zapsdk/execution/sandbox.js"
+import { sandboxTemporaryDirectoryDescription } from "../src/prompts/execution-facts.js"
 
 const keys = ["ZAPCODE_EXECUTION", "ZAPCODE_RESIDENT_AGENT", "ZAPCODE_DISABLE_ZAPVM", "ZAPCODE_ZAPVM_CLOUD_CONFIG", "ZAPVM_ARTIFACT_DIR", "ZAPCODE_DISABLE_BACKGROUND_TASKS", "SHELL", "PSModulePath"] as const
 let saved: Array<string | undefined>
@@ -27,6 +29,47 @@ afterEach(() => {
 })
 
 describe("Agent / execution environment boundary", () => {
+  it("inherits the local network policy in isolated-workspace registries", async () => {
+    delete process.env.ZAPCODE_RESIDENT_AGENT
+    const environment = createExecutionEnvironment(root, "required", "local")
+    const agent = buildAgentObjects(getDefaultConfig(), undefined, undefined, undefined, null, undefined,
+      root, "required", environment)
+    for (const registry of [agent.registry, agent.createRegistryForCwd!(root)]) {
+      const effects = await registry.get("bash")!.definition.resolveEffects!({ command: "curl https://registry.npmjs.org" }, { cwd: root, toolName: "bash" })
+      expect(effects.network).toEqual([{ kind: "network", operation: "connect", destinations: ["*"], methods: [] }])
+    }
+  })
+  it("describes local sandbox scratch lifetime in both prompts and registries only when available", () => {
+    delete process.env.ZAPCODE_RESIDENT_AGENT
+    const config = getDefaultConfig()
+    for (const mode of ["disabled", "required"] as const) {
+      const environment = createExecutionEnvironment(root, mode, "local")
+      const available = mode !== "disabled" && createPlatformSandbox().status().available
+      expect(Boolean(environment.facts?.sandboxTemporaryDirectory)).toBe(available)
+      const agent = buildAgentObjects(config, undefined, undefined, undefined, null, undefined,
+        root, mode, environment)
+      for (const registry of [agent.registry, agent.createRegistryForCwd!(root)]) {
+        const prompt = registry.get("bash")!.definition.prompt ?? ""
+        expect(prompt.includes("private writable scratch directory")).toBe(available)
+        if (available) expect(prompt).toContain("persist across commands in this workspace")
+      }
+      for (const customSystemPrompt of ["", "Custom instructions"]) {
+        const prompt = buildSystemPrompt({ ...config, customSystemPrompt }, root, undefined,
+          new Set(), undefined, agent.executionFacts)
+        expect(prompt.includes("Sandboxed shell scratch space:")).toBe(available)
+        if (available) {
+          expect(prompt).toContain("TMPDIR, TMP, TEMP")
+          expect(prompt).toContain("persist across commands")
+          expect(prompt).toContain("Approved unsandboxed commands")
+        }
+      }
+    }
+    const facts = { processPlatform: "win32", sandboxTemporaryDirectory: {
+      environmentVariables: ["TMPDIR", "TMP", "TEMP"], scope: "command", cleanup: "on-command-exit",
+    } } as ExecutionEnvironmentFacts
+    expect(sandboxTemporaryDirectoryDescription(facts).join("\n")).toContain("Use %TEMP%")
+  })
+
   it("describes the execution shell in default/custom prompts and both registries", async () => {
     delete process.env.ZAPCODE_RESIDENT_AGENT
     process.env.SHELL = "/bin/zsh"
@@ -118,7 +161,7 @@ describe("Agent / execution environment boundary", () => {
     writeFileSync(invalid, "not JSON", { mode: 0o600 })
     process.env.ZAPCODE_ZAPVM_CLOUD_CONFIG = invalid
     const local = createExecutionEnvironment(root, "required")
-    expect(local.facts).toBeUndefined()
+    expect(local.facts?.workspace).toBe("native")
     expect(local.capacity?.source).toBe("local-process")
     expect(local.commandOptions.restrictedNetwork).toBe(false)
     expect(() => createExecutionEnvironment(root, "required", "vm")).toThrow("not valid JSON")

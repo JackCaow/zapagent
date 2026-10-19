@@ -109,7 +109,7 @@
     "preview:watch": "bun scripts/watch-preview.ts",
     "build:watch": "bun scripts/build-watch.ts",
     "check:watch": "bun scripts/build-watch.ts --check",
-    "build": "bun run build:watch && bun build --compile src/index.tsx --outfile dist/zap",
+    "build": "bun run build:watch && bun run build:node-proxy && bun build --compile src/index.tsx --outfile dist/zap",
     "pack:npm": "bun scripts/pack-npm.ts",
     "verify:npm": "bun scripts/verify-npm-package.ts",
     "typecheck:npm": "tsc --noEmit -p scripts/tsconfig.npm.json",
@@ -121,10 +121,13 @@
     "check:vm": "cd zapvm && ./scripts/verify-repository.sh && go test ./... && go vet ./...",
     "check:all": "bun run check && bun run check:vm",
     "benchmark:real-repo": "bun run scripts/run-real-repo-benchmark.ts",
-    "check": "bun run typecheck && bun test && bun run build"
+    "check": "bun run typecheck && bun test && bun run build",
+    "build:node-proxy": "bun scripts/build-node-proxy.ts",
+    "check:node-proxy": "bun scripts/build-node-proxy.ts --check"
   },
   "type": "module",
   "devDependencies": {
-    "motion": "14.3.0"
+    "motion": "14.3.0",
+    "undici": "7.30.1"
   }
 }

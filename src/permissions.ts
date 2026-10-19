@@ -8,7 +8,7 @@ import { approvalFacts, opaqueShell } from "./approval-facts.js"
 import type { ApprovalContext } from "../zapsdk/tools/executor.js"
 import type { Logger } from "../zapsdk/debug/logger.js"
 import { writeFileAtomic } from "./utils/secure-write.js"
-import { canonicalizeWithNearestExistingAncestorSync } from "../zapsdk/builtin-tools/filesystem.js"
+import { canonicalizeWithNearestExistingAncestorSync, resolveToolPathCanonical } from "../zapsdk/builtin-tools/filesystem.js"
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -595,14 +595,24 @@ export function inferPattern(toolName: string, args: Record<string, unknown>, cw
 
 /** The same complete rule set powers previews and both persistence lifetimes. */
 export function inferInvocationRules(name: string, args: Record<string, unknown>, cwd: string, context?: Readonly<ApprovalContext>): PermissionRule[] {
-  if (opaqueShell(approvalFacts(name, args, context), context)) return [{ pattern: name, type: "allow" }]
+  const pathPatterns = name === "bash" ? shellPathRequests(args, context?.cwd ?? cwd)
+    .map(request => inferPattern(request.tool, { path: request.path }, cwd)).filter((pattern): pattern is string => !!pattern) : []
+  if (opaqueShell(approvalFacts(name, args, context), context)) return [name, ...pathPatterns].map(pattern => ({ pattern, type: "allow" }))
   const views = [normalizeFileArgs(name, args, cwd, context)]
   if (MUTATION_TOOLS.has(name)) views.push(normalizeFileArgs(name, args, cwd, context, "entry"))
   const invocations = views.flatMap(normalized => name === "bash"
     ? shellExecutionCommands(normalized).flatMap(command => splitShellSubcommands(command, context?.shell?.syntax)).map(command => ({ ...normalized, command }))
     : name === "move_file" ? [normalized.source, normalized.destination].map(path => ({ source: path, destination: path })) : [normalized])
   const patterns = invocations.map(value => inferPattern(name, value, cwd)).filter((pattern): pattern is string => !!pattern)
+  patterns.push(...pathPatterns)
   return [...new Set(patterns)].map(pattern => ({ pattern, type: "allow" }))
+}
+
+function shellPathRequests(args: Record<string, unknown>, cwd: string): Array<{ tool: "read_file" | "write_file"; path: string }> {
+  const runCwd = resolveToolPathCanonical(typeof args.cwd === "string" ? args.cwd : cwd, cwd)
+  return ([ ["read_paths", "read_file"], ["write_paths", "write_file"] ] as const).flatMap(([field, tool]) =>
+    Array.isArray(args[field]) ? args[field].filter((path): path is string => typeof path === "string")
+      .map(path => ({ tool, path: resolve(runCwd, path === "~" ? homedir() : path.startsWith("~/") ? join(homedir(), path.slice(2)) : path) })) : [])
 }
 
 // ─── PermissionManager ────────────────────────────────────────────────────────
@@ -697,6 +707,12 @@ export class PermissionManager {
   grantCoversCall(rules: PermissionRule[], name: string, args: Record<string, unknown>, context?: Readonly<ApprovalContext>): boolean {
     const normalized = normalizeFileArgs(name, args, this.cwd, context)
     const facts = approvalFacts(name, args, context)
+    if (name === "bash" && !shellPathRequests(args, context?.cwd ?? this.cwd).every(({ tool, path }) => {
+      const field = tool === "read_file" ? "read_paths" : "write_paths"
+      if (this.checkShellPaths({ [field]: [path] }, context).decision === "allow") return true
+      const fileArgs = normalizeFileArgs(tool, { path }, this.cwd, context)
+      return rules.some(rule => rule.type === "allow" && ruleMatchesTool(rule, tool, fileArgs))
+    })) return false
     if (opaqueShell(facts, context)) return rules.some(rule => rule.type === "allow" && isWholeToolRule(rule, name))
     if (name === "bash") {
       const commands = shellExecutionCommands(normalized).flatMap(command => splitShellSubcommands(command, context?.shell?.syntax))
@@ -723,6 +739,34 @@ export class PermissionManager {
    * companion fix that strips wrappers (nohup/cd&&/timeout/...) symmetrically.
    */
   checkPermission(toolName: string, args: Record<string, unknown>, context?: Readonly<ApprovalContext>): PermissionDecision {
+    const base = this.checkPermissionCore(toolName, args, context)
+    if (toolName !== "bash" || base.decision === "deny") return base
+    const decisions = [base, this.checkShellPaths(args, context)]
+    return decisions.find(value => value.decision === "deny")
+      ?? decisions.find(value => value.decision === "ask" && value.rule)
+      ?? decisions.find(value => value.decision === "ask") ?? base
+  }
+
+  /** Shell patterns cannot silently authorize new filesystem roots. */
+  checkShellPaths(args: Record<string, unknown>, context?: Readonly<ApprovalContext>): PermissionDecision {
+    this.merged = loadMergedSettings(this.cwd)
+    const decisions = shellPathRequests(args, context?.cwd ?? this.cwd).map(({ tool, path }) => {
+      // Grants cover descendants and write roots also permit reads/edits/removal.
+      const names = tool === "read_file" ? [tool] : ["read_file", "write_file", "edit_file", "delete_file"]
+      const restriction = this.matchRules(rule => rule.type !== "allow" && names.some(name =>
+        directoryRuleIntersects(rule, name, { path }, this.cwd, context)))
+      if (restriction) return restriction
+      const decision = this.checkPermissionCore(tool, { path }, context)
+      if (decision.decision === "allow") return decision
+      if (!pathReadOutsideCwdReason("read_file", { path }, context?.workspaceRoot ?? this.cwd)) return { decision: "allow" as const }
+      return { decision: "ask" as const, reason: `Shell ${tool === "read_file" ? "read" : "write"} path requires authorization: ${path}` }
+    })
+    return decisions.find(value => value.decision === "deny")
+      ?? decisions.find(value => value.decision === "ask" && value.rule)
+      ?? decisions.find(value => value.decision === "ask") ?? { decision: "allow" }
+  }
+
+  private checkPermissionCore(toolName: string, args: Record<string, unknown>, context?: Readonly<ApprovalContext>): PermissionDecision {
     // Normalize once at the entry; rule evaluation and generation both
     // operate in cwd-relative space afterwards. This is the fix for the
     // "I selected 'always allow' but keep getting reprompted" bug —

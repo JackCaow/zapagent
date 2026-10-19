@@ -84,7 +84,8 @@ describe("bash cwd and shell cd composition", () => {
         const tool = executeCommandTool({ defaultCwd: root });
         const args = { command, cwd: "selected" };
         const effects = tool.definition.resolveEffects!(args, { cwd: root } as never);
-        expect(effects.filesystem.map(e => e.paths)).toEqual([[selected], [selected]]);
+        // cwd changes the shell's starting directory, not its workspace grant.
+        expect(effects.filesystem.map(e => e.paths)).toEqual([[root], [root]]);
         const result = await tool.handler(args);
         expect(result.success).toBe(true);
         expect(result.output.trim()).toBe(expected);

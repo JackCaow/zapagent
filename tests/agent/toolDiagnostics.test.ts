@@ -182,7 +182,9 @@ describe("buildToolSchemaDiagnostics", () => {
         ],
       })!.definition,
       memorySaveTool({ store: emptyMemoryStore() }).definition,
-      executeCommandTool({ timeoutMs: 60_000, store: {} as never }).definition,
+      executeCommandTool({ timeoutMs: 60_000, store: {} as never, sandboxTemporaryDirectory: {
+        environmentVariables: ["TMPDIR", "TMP", "TEMP"], scope: "command", cleanup: "on-command-exit",
+      } }).definition,
       readFileTool().definition,
       writeFileTool().definition,
       subagentTool({
@@ -208,9 +210,12 @@ describe("buildToolSchemaDiagnostics", () => {
     // drift back into provider tool definitions. The +100 covers bash's
     // dangerouslyDisableSandbox parameter (the sandbox escape hatch); another +100
     // covers bash's timeout_ms parameter.
-    expect(diagnostics.chars).toBeLessThanOrEqual(5_950)
-    expect(diagnostics.estimatedTokens).toBeLessThanOrEqual(2_350)
-    expect(guidanceChars).toBeLessThanOrEqual(1_400)
+    // +350 for explicit, independently authorized shell filesystem paths.
+    expect(diagnostics.chars).toBeLessThanOrEqual(6_300)
+    expect(diagnostics.estimatedTokens).toBeLessThanOrEqual(2_500)
+    // +700 for shell status caveats and the local sandbox scratch lifecycle.
+    // +300 for cwd scope and external-path authorization/lifetime guidance.
+    expect(guidanceChars).toBeLessThanOrEqual(2_400)
   })
 })
 

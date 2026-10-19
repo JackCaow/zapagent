@@ -15,8 +15,8 @@ Linux 环境：本机工具链（Xcode、Swift、npm 全局工具）、浏览器
 | --- | --- |
 | 默认执行位置 | 本机，套 OS 沙箱（macOS Seatbelt / Linux bubblewrap / Windows AppContainer） |
 | VM | 显式 opt-in：配置 `executionBackend: "vm"` 或环境变量 `ZAPCODE_EXECUTION=vm`（环境变量优先） |
-| 沙箱内写入 | 工作区、每命令临时目录，以及已存在的包管理器缓存（见下文）；`.git`、`.zapcode` 只读；HOME 为每命令临时目录 |
-| 沙箱内读取 | 系统目录、工作区，以及 `~/.bun/bin`、`~/.cargo/bin`、`~/.nvm/versions`、Xcode 等工具链只读根 |
+| 沙箱内写入 | 工作区、工作区私有 HOME／缓存／临时目录，以及已存在的包管理器缓存（见下文）；`.git`、`.zapcode` 只读 |
+| 沙箱内读取 | 系统目录、整个工作区、经双向指针校验的 Git worktree 元数据，以及本机工具链只读根 |
 | 网络 | macOS：只能连回环，经本地代理按域名白名单访问；Linux/Windows：目前仍全开（见下文） |
 | 沙箱外重试 | bash 参数 `dangerouslyDisableSandbox: true`，每次调用都需要用户批准 |
 | 关闭逃生口 | 配置 `allowUnsandboxedCommands: false`；该参数随即不再出现在工具 schema 中 |
@@ -59,11 +59,45 @@ Agent 本身（模型调用、界面、权限判定）始终在宿主上。所�
 - 仍会询问：沙箱外运行（永远）、用户自己的 ask/deny 规则、危险命令模式、没有沙箱时的所有命令。
 - 命令的工作目录离开项目（`cwd` 在工作区外）时不享受放行。
 
+## 临时目录与命令结果
+
+本机 App 的沙箱按规范化工作区路径分配私有 HOME、缓存与可写临时目录。HOME／缓存位于
+`ZAPCODE_DATA_DIR/sandbox/workspaces/<hash>/`（未配置时使用应用数据目录）；它们与
+`TMPDIR`、`TMP`、`TEMP` 指向的 scratch 在后续 Bash 调用和 `check_steps` 间复用，
+不同工作区分别存储。临时目录位于系统临时区域，macOS 使用短路径 `/private/tmp/zap-<uid>/<hash>`，
+避免 Unix socket 的路径长度限制；目录必须为当前用户所有且权限为 0700。系统可能清理临时区域，
+长期产物仍应写到获准的项目／输出目录。HOME 不复制宿主凭据，宿主环境变量也不会全部透传。
+
+POSIX shell 使用 `"$TMPDIR"`，Windows cmd 使用 `"%TEMP%"`，不要硬编码 `/tmp`。
+并发计算应使用唯一名称，例如 `f=$(mktemp "$TMPDIR/tally.XXXXXX")`，用完删除。
+每次命令的内部包装器、Node preload 等文件仍在退出时清理；后台命令持有它们直到退出。
+直接使用 SDK、未配置 `workspaceStateRoot` 时保持逐命令临时目录行为；VM 与获准的沙箱外命令
+遵循各自环境。标准／自定义系统提示词及主／子 Agent Bash 说明均描述实际生命周期。
+
+`cwd` 只选择起始目录，进入项目子目录不会收窄整个工作区的访问范围。外部输入／输出可以用
+Bash 的 `read_paths`／`write_paths` 声明（相对 `cwd` 解析），经文件权限审批后加入该次执行 grant。
+普通 Bash allow 不能替代文件授权；已有 Read 授权可在声明相同 `read_paths` 后复用，不能靠之前
+读过文件隐式扩展后续 shell。目录授权检查其下显式 deny/ask，`.git`／`.zapcode` 仍受保护。
+
+macOS 只为必要的 Apple 命令包装器创建专用 shim，不把整个 Xcode bin 提到 PATH 前面，
+因此不会顺带替换 Python。Rust 读取工具链选择元数据，C／Swift 获取 SDKROOT 与私有模块缓存。
+Unix socket 只在已获准的写入目录内允许绑定／连接；不会自动开放宿主 SSH／Docker socket。
+
+Shell 退出码通常只表示最后一条命令或管道末端的状态。前序写入失败后，末尾 `wc -l` 仍可能
+返回 0。前台 Bash 回执因此额外记录 `stderrPresent`：退出 0 但有 stderr 时，将诊断置于 stdout
+之前，给模型附加检查提示，TUI 显示 `⚠` 而非 `✓`。stderr 也可能是正常警告，所以仍保留真实
+退出码和 shell 的成功状态，不根据文本伪造失败码。无 stderr 的前序失败仍可能被 shell 掩盖。
+依赖前一步成功的操作应使用 `&&`；独立验证使用 `check_steps`，遇到非零退出即停止；管道内
+各阶段需显式检查，或在支持的 shell 中启用 `pipefail`。不能仅凭最后退出 0 声称所有步骤成功，
+也不能因为警告就自动重跑可能产生副作用的命令。
+
 ## 包管理器缓存
 
 沙箱额外保留这些**已存在**目录可写：`~/.cache/{pip,uv,pnpm,yarn}`、`~/.npm`、`~/.bun/install`、
 `~/.cargo/{registry,git}`、`~/go/pkg/mod`、`~/Library/{Caches/pip,Caches/Yarn,pnpm,Python}`、`~/.local/lib`。
 不放开任何 `bin` 目录（在 `PATH` 上）。目的是 `pip install`、`npm install`、`cargo build` 不再需要沙箱外重试。
+私有 HOME 中的 `.local/bin`、`.cargo/bin`、`.bun/bin`（Windows 为私有 npm 目录）加入沙箱 PATH，
+使用户级安装的 CLI 在下一条命令中仍可调用；不会修改宿主 PATH 或可执行文件目录。
 
 **风险**：沙箱里的命令可以往用户 site-packages 和包缓存里放代码，之后沙箱外的 python/node 可能导入。已记入 #59。
 
@@ -74,6 +108,13 @@ Agent 本身（模型调用、界面、权限判定）始终在宿主上。所�
 - 白名单：常见开发域名（包仓库、git 托管、工具链下载、常用 CDN）+ `sandboxNetwork.allowedDomains`；
   `deniedDomains` 优先；`*.example.com` 只匹配子域；`*` 放开全部。回环地址放行；链路本地地址（`169.254.*`，云元数据）永远不可达。
 - 被拦的主机返回 `403` 并带提示（加入 `sandboxNetwork.allowedDomains`，或批准后沙箱外重试）。
+- 每条命令独占代理与拒绝记录，主／子 Agent 继承同一后端策略；修改配置不会关闭已有后台命令的代理。
+  代理初始化失败返回 `BACKEND_UNAVAILABLE`，不会退化成开放网络。非零退出同时出现代理拒绝时，
+  回执保留实际退出码并报告 `SANDBOX_DENIED` 与缺失的域名能力；普通 stderr 不作为拒绝证据。
+  若 shell 掩盖错误并退出 0，也保留拒绝记录并显示警告，避免误报全步骤成功。
+- 为 Node 20.18.1+／22 的内置 fetch 注入固定版本的 Undici 代理 dispatcher；旧 Node 的
+  `NODE_USE_ENV_PROXY` 无效也能使用相同代理。它不替换 fetch、不关闭 TLS 校验；Bun 保留原生代理行为。
+  自建 dispatcher、裸 TCP／SSH 客户端等不保证兼容，仍需按实际资源与权限处理。
 - 关闭：`sandboxNetwork.mode: "open"` 或 `ZAPCODE_SANDBOX_NETWORK=open`。
 - 局限：只按主机名过滤，不检查 TLS；对已放行域名不能防止数据外传。本机自己的局域网 IP 经回环投递，Seatbelt 视同回环。
   Linux/Windows 暂无网络过滤，需要独立网络命名空间加桥接，另做。

@@ -1,5 +1,6 @@
 import { canonicalModelId } from "../zapsdk/core/model-identity.js"
 import { existsSync, readFileSync } from "node:fs"
+import { sandboxTemporaryDirectoryDescription } from "./prompts/execution-facts.js"
 import { buildDefaultPrompt, type PromptContext } from "./prompts/index.js"
 import { planDisciplineSection } from "./prompts/sections/plan-discipline.js"
 import { skillsSection } from "./prompts/sections/skills.js"
@@ -1055,6 +1056,7 @@ export function buildCustomSystemPrompt(
     ...dynamicLines,
     `Shell: ${ctx.executionFacts?.shell ?? localExecutionShell().executable}`,
     ...(ctx.executionFacts ? [`Process environment facts: ${JSON.stringify(ctx.executionFacts)}`] : []),
+    ...sandboxTemporaryDirectoryDescription(ctx.executionFacts),
     ...(ctx.executionCapacity ? [`Local execution capacity observations (visible limits only): ${JSON.stringify(ctx.executionCapacity)}`] : []),
   ].map((line) => escapeDynamicBoundaryText(line).trim()).filter(Boolean)
   recordPromptSection(ctx, { name: "custom", purpose: "user", compute: () => null }, escapeDynamicBoundaryText(customPrompt).trim())
