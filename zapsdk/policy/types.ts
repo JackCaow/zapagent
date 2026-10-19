@@ -21,6 +21,9 @@ export interface WorkspaceIdentity {
   root: string;
   mode?: "root" | "shared-readonly" | "isolated-write";
   sandbox?: "enforced" | "none";
+  /** Host-owned standalone Git directory of a writing Agent's private clone.
+   * Never derived from tool arguments, repository files or linked worktrees. */
+  privateGitDirectory?: string;
 }
 
 export interface CapabilityGrant {

@@ -40,7 +40,9 @@ async function fingerprint(path: string): Promise<string> {
     if (info.isDirectory()) return "directory";
     return createHash("sha256").update(await readFile(path)).digest("hex");
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return "missing";
+    const code = (err as NodeJS.ErrnoException).code;
+    // A child path is absent while its parent is still a file in the baseline.
+    if (code === "ENOENT" || code === "ENOTDIR") return "missing";
     throw err;
   }
 }

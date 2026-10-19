@@ -109,7 +109,12 @@ export async function mergeCopyArtifacts(
         for (const child of new Set([...Object.keys(base), ...Object.keys(current)])) {
           if (descendant(child, path) && !sameEntry(current[child], base[child])) conflicts.add(child);
         }
-        await scanCopyTree(join(root, path));
+        const complete = await scanCopyTree(join(root, path));
+        for (const child of Object.keys(complete)) {
+          // Excluded environments may contain only regular files (--copies).
+          // Replacing their parent must not silently delete those local files.
+          if (!current[`${path}/${child}`]) conflicts.add(`${path}/${child}`);
+        }
       }
       let parent = dirname(path);
       while (parent !== ".") {

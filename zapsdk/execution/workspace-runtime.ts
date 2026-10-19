@@ -3,6 +3,23 @@ import { execFileSync } from "node:child_process";
 import { accessSync, closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readSync, realpathSync, statSync, symlinkSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
+import type { WorkspaceIdentity } from "../policy/types.js";
+import { isWithin } from "../workspace/context.js";
+
+/** Only the host may mark a private clone writable. Never follow a .git file
+ * or symlink into the parent repository's control directory. */
+export function privateGitWriteRoot(workspace: WorkspaceIdentity): string | undefined {
+  if (workspace.mode !== "isolated-write" || !workspace.privateGitDirectory) return undefined;
+  const path = workspace.privateGitDirectory;
+  const stat = lstatSync(path);
+  const root = realpathSync(workspace.root);
+  const repo = realpathSync(dirname(path));
+  if (!stat.isDirectory() || stat.isSymbolicLink() || path !== join(repo, ".git")
+    || !isWithin(repo, root) || realpathSync(path) !== path) {
+    throw new Error("Private Agent Git directory must belong to its standalone clone");
+  }
+  return path;
+}
 
 /** Host-owned storage, keyed by workspace rather than a command's cwd. */
 export function workspaceRuntimeDirectory(base: string, workspace: string): string {

@@ -9,6 +9,7 @@ import {
   readlink,
   rm,
   symlink,
+  writeFile,
 } from "node:fs/promises";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { promisify } from "node:util";
@@ -31,6 +32,7 @@ import {
 import { futureRealpath, isWithin, workspaceContext } from "./context.js";
 import { changedCopyPaths, copyTreeOid, materializeCopyTree, removeOwnedCopyTree, scanCopyTree } from "./copy.js";
 import { COPY_MERGE_JOURNAL } from "../merge/copy-transaction.js";
+import { agentIndexPaths, copyAgentIndex } from "./git-index.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -57,6 +59,21 @@ async function git(cwd: string, args: string[]): Promise<GitOutput> {
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
   });
+  return { stdout: result.stdout, stderr: result.stderr };
+}
+
+/** Artifact commands never consult child-controlled config, hooks or objects.
+ * An optional copied index is used only for a read-only filename inventory. */
+async function artifactGit(cwd: string, args: string[], indexFile?: string): Promise<GitOutput> {
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
+  const nullFile = process.platform === "win32" ? "NUL" : "/dev/null";
+  const result = await execFileAsync("git", [
+    "--no-optional-locks", "--literal-pathspecs",
+    "-c", `core.hooksPath=${nullFile}`, "-c", "core.fsmonitor=false",
+    "-c", "commit.gpgsign=false", ...args,
+  ], { cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024,
+    env: { ...env, GIT_CONFIG_GLOBAL: nullFile, GIT_CONFIG_SYSTEM: nullFile,
+      ...(indexFile ? { GIT_INDEX_FILE: indexFile } : {}) } });
   return { stdout: result.stdout, stderr: result.stderr };
 }
 
@@ -209,22 +226,59 @@ export class WorkspaceManager {
     if (lease.mode === "shared-readonly") return null;
     if (!lease.repoPath || !lease.baseOid) throw new Error("Invalid isolated workspace lease");
     if (lease.mode === "isolated-copy") return this.finalizeCopy(lease);
-
-    await git(lease.repoPath, ["add", "-A"]);
-    const staged = await git(lease.repoPath, ["diff", "--cached", "--name-only", "-z"]);
+    const recorded = this.leases.get(lease.workspaceId);
+    if (!recorded || JSON.stringify(recorded) !== JSON.stringify(lease)) throw new Error("Git workspace lease does not belong to this manager");
+    const artifactId = `artifact_${safeRunId(lease.runId)}`;
+    const artifactRoot = join(this.batchRoot!, "artifacts", artifactId);
+    await mkdir(dirname(artifactRoot), { recursive: true });
+    await artifactGit(this.batchRoot!, ["clone", "--local", "--no-hardlinks", this.templatePath!, artifactRoot]);
+    const indexInput = await mkdtemp(join(artifactRoot, ".git", "agent-index-"));
+    try {
+      const indexFile = await copyAgentIndex(lease.repoPath, indexInput);
+      const tracked = indexFile
+        ? agentIndexPaths((await artifactGit(artifactRoot, ["ls-files", "--cached", "-z"], indexFile)).stdout)
+        : [];
+      const present: string[] = [];
+      for (const path of tracked) {
+        const info = await lstat(join(lease.repoPath, path)).catch((error) => {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT" || (error as NodeJS.ErrnoException).code === "ENOTDIR") return undefined;
+          throw error;
+        });
+        // A tracked file can have become a directory. Force-adding that directory
+        // would recursively collect ignored neighbors, not just this index entry.
+        if (info?.isFile() || info?.isSymbolicLink()) present.push(path);
+      }
+      // Retain trusted baseline entries (including uninitialized gitlinks).
+      // Sync removed tracking by name, never importing child object IDs/config.
+      const baselinePaths = agentIndexPaths((await artifactGit(artifactRoot, ["ls-files", "--cached", "-z"])).stdout);
+      const trackedSet = new Set(tracked);
+      const removed = baselinePaths.filter(path => !trackedSet.has(path));
+      for (let start = 0; start < removed.length; start += 128) {
+        await artifactGit(artifactRoot, ["update-index", "--force-remove", "--", ...removed.slice(start, start + 128)]);
+      }
+      if (present.length) {
+        const pathsFile = join(indexInput, "tracked-paths");
+        await writeFile(pathsFile, present.join("\0") + "\0", { mode: 0o600 });
+        await artifactGit(artifactRoot, [`--work-tree=${lease.repoPath}`, "add", "-f", `--pathspec-from-file=${pathsFile}`, "--pathspec-file-nul"]);
+      }
+    } finally { await removeOwnedCopyTree(indexInput); }
+    // Git reads only the child's working files, through an explicit work-tree.
+    // Never execute host Git in the child's writable control directory.
+    await artifactGit(artifactRoot, [`--work-tree=${lease.repoPath}`, "add", "-A"]);
+    const staged = await artifactGit(artifactRoot, ["diff", "--cached", "--name-only", "-z"]);
     if (staged.stdout.length > 0) {
-      await git(lease.repoPath, [
+      await artifactGit(artifactRoot, [
         "-c", "user.name=Zap Agent",
         "-c", "user.email=agent@zapcode.local",
         "commit", "-m", `zap agent artifact ${lease.runId}`,
       ]);
     }
-    const resultOid = (await git(lease.repoPath, ["rev-parse", "HEAD"])).stdout.trim();
-    const changedOutput = (await git(lease.repoPath, [
+    const resultOid = (await artifactGit(artifactRoot, ["rev-parse", "HEAD"])).stdout.trim();
+    const changedOutput = (await artifactGit(artifactRoot, [
       "diff", "--name-only", "-z", lease.baseOid, resultOid,
     ])).stdout;
     const changedPaths = changedOutput.split("\0").filter(Boolean);
-    const numstat = (await git(lease.repoPath, [
+    const numstat = (await artifactGit(artifactRoot, [
       "diff", "--numstat", lease.baseOid, resultOid,
     ])).stdout.trim();
     let additions = 0;
@@ -236,11 +290,11 @@ export class WorkspaceManager {
     }
 
     const artifact: AgentArtifact = {
-      artifactId: `artifact_${safeRunId(lease.runId)}`,
+      artifactId,
       runId: lease.runId,
       workspaceId: lease.workspaceId,
       workspacePath: lease.path,
-      repoPath: lease.repoPath,
+      repoPath: artifactRoot,
       baseOid: lease.baseOid,
       resultOid,
       changedPaths,
@@ -268,7 +322,13 @@ export class WorkspaceManager {
     }
     const baseline = await scanCopyTree(this.templatePath!);
     if (copyTreeOid(baseline) !== lease.baseOid) throw new Error("Copy workspace baseline was modified");
-    const result = await scanCopyTree(lease.path);
+    const excludedEnvironments = new Set<string>();
+    const result = await scanCopyTree(lease.path, false, true, true, excludedEnvironments);
+    for (const path of excludedEnvironments) {
+      if (Object.hasOwn(baseline, path)) {
+        throw new Error(`Cannot exclude existing snapshot path as a Python environment: ${path}. Create the environment in a new directory instead.`);
+      }
+    }
     const resultOid = copyTreeOid(result);
     const artifactId = `artifact_${safeRunId(lease.runId)}`;
     const artifactRoot = join(this.batchRoot!, "artifacts", artifactId);
@@ -345,13 +405,16 @@ export class WorkspaceManager {
       if (await realpath(lease.path) !== expectedWorkspacePath) {
         throw new Error(`Workspace lease ${lease.workspaceId} has an invalid workspace path`);
       }
-      if (!copy) await git(realRepoPath, ["cat-file", "-e", `${lease.baseOid}^{commit}`]);
+      // A private clone's metadata is writable by its Agent. Validate commits
+      // against the host snapshot/artifact below, never against this directory.
     }
     for (const artifact of input.artifacts) {
       const lease = input.leases.find((item) => item.workspaceId === artifact.workspaceId);
       if (!lease
         || artifact.workspacePath !== lease.path
-        || artifact.repoPath !== lease.repoPath
+        || artifact.runId !== lease.runId
+        || artifact.artifactId !== `artifact_${safeRunId(lease.runId)}`
+        || artifact.repoPath !== (copy ? lease.repoPath : join(realBatch, "artifacts", artifact.artifactId))
         || artifact.baseOid !== lease.baseOid
         || (artifact.mode ?? "isolated-git") !== lease.mode) {
         throw new Error(`Artifact ${artifact.artifactId} does not match its workspace lease`);
@@ -368,7 +431,10 @@ export class WorkspaceManager {
           || JSON.stringify(changedCopyPaths(baseline, result)) !== JSON.stringify(artifact.changedPaths)) {
           throw new Error("Copy artifact content or changed paths were modified");
         }
-      } else await git(artifact.repoPath, ["cat-file", "-e", `${artifact.resultOid}^{commit}`]);
+      } else {
+        if (await realpath(artifact.repoPath) !== artifact.repoPath) throw new Error("Git artifact escaped its recorded path");
+        await artifactGit(artifact.repoPath, ["cat-file", "-e", `${artifact.resultOid}^{commit}`]);
+      }
     }
     if (copy) {
       if (await realpath(snapshotPath) !== snapshotPath
@@ -447,7 +513,22 @@ export class WorkspaceManager {
   }
 
   private initialize(): Promise<void> {
-    if (!this.initializePromise) this.initializePromise = this.initializeOnce();
+    if (!this.initializePromise) this.initializePromise = this.initializeOnce().catch(async (error) => {
+      // Concurrent acquires share one attempt. Discard its partial snapshot
+      // before allowing a later acquire to retry the corrected source tree.
+      try {
+        if (this.batchRoot) await removeOwnedCopyTree(this.batchRoot);
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], "Workspace initialization and partial snapshot cleanup failed");
+      }
+      this.batchRoot = undefined;
+      this.workspaceTempRoot = undefined;
+      this.templatePath = undefined;
+      this.baseOid = undefined;
+      this.repoRoot = undefined;
+      this.initializePromise = undefined;
+      throw error;
+    });
     return this.initializePromise;
   }
 

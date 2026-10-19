@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WorkspaceManager } from "../../workspace/manager.js";
@@ -27,6 +27,87 @@ describe("isolated Agent workspace merge", () => {
     git(path, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "base");
     return path;
   }
+
+  for (const format of ["staged", "committed", "version4", "split"]) {
+    it(`preserves explicitly tracked ignored files (${format}) without collecting ignored neighbors`, async () => {
+      const root = repo();
+      writeFileSync(join(root, ".gitignore"), "*.generated\n");
+      git(root, "add", ".gitignore");
+      git(root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "ignore generated files");
+      const manager = new WorkspaceManager({ root });
+      try {
+        const lease = await manager.acquire(format, true);
+        const names = ["space name.generated", ...(process.platform === "win32" ? [] : [":(glob)literal.generated", "line\nbreak.generated"])];
+        for (const name of [...names, "noise.generated"]) writeFileSync(join(lease.path, name), `content of ${name}\n`);
+        git(lease.path, "--literal-pathspecs", "add", "-f", "--", ...names);
+        if (format === "committed") git(lease.path, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "explicit generated files");
+        if (format === "version4") git(lease.path, "update-index", "--index-version", "4");
+        if (format === "split") git(lease.path, "update-index", "--split-index");
+        const artifact = (await manager.finalize(lease))!;
+        expect(artifact.changedPaths.sort()).toEqual([...names].sort());
+        expect((await new MergeCoordinator(manager).merge([artifact.artifactId])).success).toBe(true);
+        for (const name of names) expect(readFileSync(join(root, name), "utf8")).toBe(`content of ${name}\n`);
+        expect(existsSync(join(root, "noise.generated"))).toBe(false);
+      } finally { await manager.cleanup(); }
+    });
+  }
+
+  it("honors removal of tracking for an ignored baseline file", async () => {
+    const root = repo();
+    writeFileSync(join(root, ".gitignore"), "a.txt\n");
+    git(root, "add", ".gitignore");
+    git(root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "ignore tracked fixture");
+    const manager = new WorkspaceManager({ root });
+    try {
+      const lease = await manager.acquire("untrack", true);
+      git(lease.path, "rm", "--cached", "a.txt");
+      const artifact = (await manager.finalize(lease))!;
+      expect(artifact.changedPaths).toEqual(["a.txt"]);
+      expect(git(artifact.repoPath!, "ls-tree", "HEAD", "a.txt")).toBe("");
+      expect(readFileSync(join(lease.path, "a.txt"), "utf8")).toBe("base-a\n");
+    } finally { await manager.cleanup(); }
+  });
+
+  it("preserves an unchanged uninitialized submodule from the trusted baseline", async () => {
+    const root = repo();
+    const oid = git(root, "rev-parse", "HEAD").trim();
+    git(root, "update-index", "--add", "--cacheinfo", `160000,${oid},vendor`);
+    mkdirSync(join(root, "vendor"));
+    git(root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "submodule fixture");
+    const manager = new WorkspaceManager({ root });
+    try {
+      const lease = await manager.acquire("uninitialized-submodule", true);
+      const artifact = (await manager.finalize(lease))!;
+      expect(artifact.changedPaths).toEqual([]);
+      expect(git(artifact.repoPath!, "ls-tree", "HEAD", "vendor")).toBe(`160000 commit ${oid}\tvendor\n`);
+      expect((await new MergeCoordinator(manager).merge([artifact.artifactId])).success).toBe(true);
+      expect(git(root, "ls-files", "--stage", "vendor")).toContain(`160000 ${oid}`);
+    } finally { await manager.cleanup(); }
+  });
+
+  it("respects ignored neighbors when a tracked file is replaced by a directory", async () => {
+    const root = repo();
+    writeFileSync(join(root, ".gitignore"), ".env\n*.generated\n");
+    git(root, "add", ".gitignore");
+    git(root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "ignore local files");
+    const manager = new WorkspaceManager({ root });
+    try {
+      const lease = await manager.acquire("directory-replacement", true);
+      rmSync(join(lease.path, "a.txt"));
+      mkdirSync(join(lease.path, "a.txt"));
+      for (const name of ["source.txt", ".env", "noise.generated"]) {
+        writeFileSync(join(lease.path, "a.txt", name), `fixture ${name}\n`);
+      }
+      const artifact = (await manager.finalize(lease))!;
+      expect(artifact.changedPaths.sort()).toEqual(["a.txt", "a.txt/source.txt"]);
+      expect(git(artifact.repoPath!, "ls-tree", "-r", "--name-only", "HEAD")).not.toContain("noise.generated");
+      expect(git(artifact.repoPath!, "ls-tree", "-r", "--name-only", "HEAD")).not.toContain(".env");
+      expect((await new MergeCoordinator(manager).merge([artifact.artifactId])).success).toBe(true);
+      expect(readFileSync(join(root, "a.txt", "source.txt"), "utf8")).toBe("fixture source.txt\n");
+      expect(existsSync(join(root, "a.txt", ".env"))).toBe(false);
+      expect(existsSync(join(root, "a.txt", "noise.generated"))).toBe(false);
+    } finally { await manager.cleanup(); }
+  });
 
   it("captures dirty root state and atomically merges non-conflicting artifacts", async () => {
     const root = repo();
