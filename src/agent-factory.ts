@@ -7,6 +7,7 @@ import { join } from "node:path"
 import Anthropic from "@anthropic-ai/sdk"
 import {
   OpenAICompatibleProvider,
+  OpenAIResponsesProvider,
   AnthropicProvider,
   RetryProvider,
   createBuiltinRegistry,
@@ -125,7 +126,7 @@ export function buildAgentObjects(
             defaultHeaders: active?.authMode === "none" ? { "x-api-key": null, "Authorization": null } : undefined }),
           maxTokens: maxOutputTokens,
         })
-      : new OpenAICompatibleProvider({
+      : new (active?.protocol === "openai-responses" ? OpenAIResponsesProvider : OpenAICompatibleProvider)({
           maxRequestBytes: active?.maxRequestBytes,
           canonicalModelIds: modelCanonicalIds(active),
           model,

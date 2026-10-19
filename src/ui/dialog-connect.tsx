@@ -102,8 +102,8 @@ export function ConnectDialog({ config, onSave, onCommit, onCancel }: Props) {
       setStep("name")
     }} />
 
-  if (step === "protocol") return <PickerDialog key={step} title="Connection · wire protocol" initialIndex={draft.protocol === "anthropic" ? 1 : 0}
-    options={[{ id: "openai", label: "OpenAI Chat Completions" }, { id: "anthropic", label: "Anthropic Messages" }]}
+  if (step === "protocol") return <PickerDialog key={step} title="Connection · wire protocol" initialIndex={draft.protocol === "anthropic" ? 1 : draft.protocol === "openai-responses" ? 2 : 0}
+    options={[{ id: "openai", label: "OpenAI Chat Completions" }, { id: "anthropic", label: "Anthropic Messages" }, { id: "openai-responses", label: "OpenAI Responses" }]}
     onCancel={() => setStep("endpoint")} onSelect={id => { setDraft({ ...draft, protocol: id as ProviderProtocol }); setStep("auth") }} />
   if (step === "auth") return <PickerDialog key={step} title="Connection · authentication" initialIndex={draft.authMode === "none" ? 1 : 0}
     options={[{ id: "api-key", label: "API key", meta: "stored locally; never sent to the public catalog" },

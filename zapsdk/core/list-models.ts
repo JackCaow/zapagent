@@ -31,7 +31,7 @@ export async function listModels(
   apiKey: string,
   timeoutMs = 8000,
   signal?: AbortSignal,
-  protocol?: "openai" | "anthropic",
+  protocol?: "openai" | "openai-responses" | "anthropic",
 ): Promise<string[]> {
   const deadline = AbortSignal.timeout(timeoutMs)
   const requestSignal = signal ? AbortSignal.any([signal, deadline]) : deadline
@@ -75,9 +75,9 @@ export async function listModels(
     headers: {
       ...(apiKey ? {
         ...(withBearer ? { "Authorization": `Bearer ${apiKey}` } : {}),
-        ...(protocol !== "openai" ? { "x-api-key": apiKey } : {}),
+        ...((protocol === undefined || protocol === "anthropic") ? { "x-api-key": apiKey } : {}),
       } : {}),
-      ...(protocol !== "openai" ? { "anthropic-version": "2023-06-01" } : {}),
+      ...((protocol === undefined || protocol === "anthropic") ? { "anthropic-version": "2023-06-01" } : {}),
       "Accept": "application/json",
     },
     signal: requestSignal,

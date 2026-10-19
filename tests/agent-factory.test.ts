@@ -26,23 +26,25 @@ describe("buildAgentObjects — first-run safety", () => {
     const requests: { auth: string | null; key: string | null }[] = []
     const server = Bun.serve({ port: 0, fetch: request => {
       requests.push({ auth: request.headers.get("authorization"), key: request.headers.get("x-api-key") })
-      return Response.json(new URL(request.url).pathname.endsWith("/messages")
+      return Response.json(new URL(request.url).pathname.endsWith("/responses")
+        ? { id: "resp", status: "completed", output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "ok" }] }], usage: { input_tokens: 1, output_tokens: 1 } }
+        : new URL(request.url).pathname.endsWith("/messages")
         ? { id: "msg", type: "message", role: "assistant", model: "test", content: [{ type: "text", text: "ok" }], stop_reason: "end_turn", usage: { input_tokens: 1, output_tokens: 1 } }
         : { id: "chat", choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } })
     } })
     try {
-      for (const protocol of ["openai", "anthropic"] as const) {
+      for (const protocol of ["openai", "anthropic", "openai-responses"] as const) {
         const p: Provider = { id: "local", name: "test", baseURL: `http://127.0.0.1:${server.port}`, apiKey: "",
           authMode: "none", protocol, contextWindow: 128000, models: ["test"] }
         const config = { ...getDefaultConfig(), maxTokens: 512, providers: [p], active: { providerId: p.id, model: "test" } }
         await buildAgentObjects(config).provider.call([{ role: "user", content: "hello" }])
       }
-      expect(requests).toEqual([{ auth: null, key: null }, { auth: null, key: null }])
+      expect(requests).toEqual(Array(3).fill({ auth: null, key: null }))
     } finally { server.stop() }
   })
 
   it("enforces a configured request byte limit before either protocol starts transport", async () => {
-    for (const protocol of ["openai", "anthropic"] as const) {
+    for (const protocol of ["openai", "anthropic", "openai-responses"] as const) {
       const provider: Provider = { id: "bounded", name: "bounded", baseURL: "http://127.0.0.1:1",
         apiKey: "", authMode: "none", protocol, contextWindow: 1000000, models: ["test"], maxRequestBytes: 100 }
       const config = { ...getDefaultConfig(), providers: [provider], active: { providerId: provider.id, model: "test" } }

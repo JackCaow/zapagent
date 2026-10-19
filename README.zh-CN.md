@@ -19,7 +19,7 @@
 
 zapAgent 把 **多 agent 协作、隔离工作区和实时运行图**带进你的终端。让它梳理陌生仓库、拆分独立实现任务，或审查一组改动。写入型 agent 在私有快照里工作，你可以观察过程，再审批将产物合并回项目。
 
-支持 Anthropic、OpenAI 和 OpenAI 兼容 API，沿用你现有的编辑器、终端和工具链。
+支持 Anthropic Messages、OpenAI Chat Completions、**OpenAI Responses API** 及兼容服务，沿用你现有的编辑器、终端和工具链。
 
 ## 让复杂任务有分工，让每份改动有边界
 

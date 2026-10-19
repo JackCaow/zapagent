@@ -19,7 +19,7 @@
 
 zapAgent brings **multi-agent collaboration, isolated workspaces, and live runtime visualization** into your terminal. Ask it to investigate a codebase, split an implementation into independent pieces, or review a change. Writing agents work in private snapshots; you can inspect their progress and approve artifact merges back into your project.
 
-Use Anthropic, OpenAI, or an OpenAI-compatible API. Keep your editor, terminal, and existing toolchain.
+Use Anthropic Messages, OpenAI Chat Completions, or **OpenAI Responses API**, including compatible endpoints. Keep your editor, terminal, and existing toolchain.
 
 ## Built for work that needs more than one agent
 

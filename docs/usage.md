@@ -38,8 +38,38 @@ On first run, use `/connect` to add an AI provider:
 Supported providers:
 
 - Anthropic (Claude)
-- OpenAI
-- Any OpenAI-compatible API
+- OpenAI Chat Completions (`/chat/completions`)
+- OpenAI Responses (`/responses`)
+- Compatible endpoints using either OpenAI protocol
+
+### OpenAI Responses API
+
+In `/connect`, create or edit a connection and select **OpenAI Responses** at
+**wire protocol**. Set the base URL to `https://api.openai.com/v1` (or your
+compatible gateway's API base), then enter its API key and choose a model.
+The SDK appends `/responses`; do not add it to the base URL yourself.
+Existing connections keep their current protocol until you change it.
+
+Saved connections use `"protocol": "openai-responses"`. `/effort high` is mapped
+to `reasoning.effort`; other Responses options such as
+`"reasoning": { "summary": "auto" }` may be set in `extraRequestParams` when the
+chosen model supports them. Reasoning summaries depend on model/account support.
+
+The adapter supports streamed text, reasoning summaries, parallel function calls,
+image inputs, tool-result images, cached-token accounting, cancellation and
+request/stream timeouts. It keeps conversation state locally with `store: false`
+and replays returned reasoning items and assistant message phases, including
+across tool calls. Function arguments are released to the executor only after a
+successful terminal response. Token-limit truncation requests continuation without
+executing unfinished calls; failed or disconnected responses report errors.
+
+SDK consumers can import `OpenAIResponsesProvider` from `zapagent` with the same
+connection options as `OpenAICompatibleProvider`. Responses does not support
+`stopSequences`; supplying it produces an explicit error. Server-side conversation
+IDs and background responses are not used; built-in hosted tools are not exposed
+by this adapter. Existing Chat Completions and Anthropic connections are unchanged.
+
+Protocol reference: [OpenAI Responses migration guide](https://developers.openai.com/api/docs/guides/migrate-to-responses).
 
 ## Slash Commands
 

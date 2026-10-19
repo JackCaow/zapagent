@@ -22,6 +22,17 @@ function makeTmpDir(): string {
 }
 
 describe("config persistence", () => {
+  it("preserves Responses protocol and effort across save/load", () => {
+    const dir = makeTmpDir(), path = join(dir, "config.json")
+    try {
+      const config = { ...getDefaultConfig(), providers: [{ id: "responses", name: "Responses", apiKey: "",
+        baseURL: "http://localhost:1234/v1", protocol: "openai-responses" as const, models: ["fixture"],
+        contextWindow: 128000, extraRequestParams: { reasoning_effort: "high" } }],
+        active: { providerId: "responses", model: "fixture" } }
+      saveAppConfig(path, config)
+      expect(loadAppConfig(path).providers[0]).toMatchObject({ protocol: "openai-responses", extraRequestParams: { reasoning_effort: "high" } })
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
   it("persists Queue/Steer defaults and normalizes invalid modes to Queue", () => {
     const dir = makeTmpDir(), path = join(dir, "config.json")
     try {

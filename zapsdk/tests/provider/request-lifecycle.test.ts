@@ -3,6 +3,7 @@ import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import type { LLMCallOptions, LLMProvider, ProviderRequestEvent } from "../../core/llm.js";
 import type { LLMChunk } from "../../core/types.js";
+import { OpenAIResponsesProvider } from "../../core/providers/openai-responses.js";
 import { OpenAICompatibleProvider } from "../../core/providers/openai-compatible.js";
 import { AnthropicProvider } from "../../core/providers/anthropic.js";
 import { RetryProvider } from "../../core/retry.js";
@@ -15,13 +16,15 @@ async function collect(source: AsyncIterable<LLMChunk>) {
   for await (const chunk of source) chunks.push(chunk);
   return chunks;
 }
-function provider(kind: "openai" | "anthropic", create: (params: any, opts: any) => any) {
-  return kind === "openai"
+function provider(kind: "openai" | "anthropic" | "openai-responses", create: (params: any, opts: any) => any) {
+  return kind === "openai-responses"
+    ? new OpenAIResponsesProvider({ model: "fixture", client: { responses: { create } } as any })
+    : kind === "openai"
     ? new OpenAICompatibleProvider({ model: "fixture", client: { chat: { completions: { create } } } as any })
     : new AnthropicProvider({ model: "fixture", client: { messages: { create, stream: create } } as any });
 }
 
-for (const kind of ["openai", "anthropic"] as const) {
+for (const kind of ["openai", "anthropic", "openai-responses"] as const) {
   describe(`${kind} request lifecycle`, () => {
     test("bounds stream creation before headers and aborts the transport", async () => {
       let signal: AbortSignal | undefined;
@@ -87,10 +90,12 @@ for (const kind of ["openai", "anthropic"] as const) {
       const events: ProviderRequestEvent[] = [];
       const adapter = provider(kind, async () => ({
         async *[Symbol.asyncIterator]() {
-          yield kind === "openai" ? { choices: [{ delta: { content: "hello" }, finish_reason: null }] }
+          yield kind === "openai-responses" ? { type: "response.output_text.delta", delta: "hello" }
+            : kind === "openai" ? { choices: [{ delta: { content: "hello" }, finish_reason: null }] }
             : { type: "content_block_delta", delta: { type: "text_delta", text: "hello" } };
           await sleep(65);
-          yield kind === "openai" ? { choices: [{ delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } }
+          yield kind === "openai-responses" ? { type: "response.completed", response: { status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: "hello" }] }] } }
+            : kind === "openai" ? { choices: [{ delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } }
             : { type: "message_stop" };
         },
         finalMessage: async () => ({ usage: { input_tokens: 1, output_tokens: 1 }, stop_reason: "end_turn" }),

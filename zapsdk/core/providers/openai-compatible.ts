@@ -586,6 +586,12 @@ export class OpenAICompatibleProvider implements LLMProvider {
    *       consistent across the whole history. Currently one rule — the
    *       "reasoning roundtrip" invariant — is enforced here; see below. */
   serializeMessages(messages: Message[]): Record<string, unknown>[] {
+    // Responses-only state must not leak when a session switches protocols.
+    messages = messages.map(message => {
+      if (!message.raw?.openaiResponses) return message;
+      const { openaiResponses: _, ...raw } = message.raw;
+      return { ...message, raw };
+    });
     let leadingSystemEnd = 0;
     while (messages[leadingSystemEnd]?.role === "system") leadingSystemEnd++;
 
