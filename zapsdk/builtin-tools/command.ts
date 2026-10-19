@@ -14,6 +14,8 @@ import { pathConverter } from "../utils/path.js";
 import { matchesAnyCommandPattern, shellCommandDisplay, shellExecutionCommands } from "../utils/shell.js";
 import type { TaskStore } from "../tasks/store.js";
 import { resolveToolPath, resolveToolPathCanonical } from "./filesystem.js";
+import { pathIsInsideRoot } from "../tools/effects.js";
+import { ExecutionBoundaryError } from "../execution/failure.js";
 
 export interface ExecuteCommandOptions {
   timeoutMs?: number;
@@ -150,6 +152,8 @@ export function executeCommandTool(options: ExecuteCommandOptions = {}): Tool {
     check_steps: z.array(z.string().min(1)).min(1).max(32).optional()
       .describe("Self-checks without command. Fresh shells at cwd; stop on nonzero. Inner pipelines keep shell semantics."),
     cwd: z.string().optional().describe("Initial directory"),
+    read_paths: z.array(z.string().min(1)).max(16).optional().describe("Extra filesystem inputs requiring authorization"),
+    write_paths: z.array(z.string().min(1)).max(16).optional().describe("Extra output paths requiring authorization"),
     timeout_ms: z.number().int().min(1000).max(600_000).optional()
       .describe("Foreground timeout (ms)"),
   });
@@ -237,11 +241,14 @@ export function executeCommandTool(options: ExecuteCommandOptions = {}): Tool {
   promptLines.push(
     "",
     "Exit 0 reports final shell status only. Inspect stderr for warnings or masked failures; do not auto-replay side effects. Chain dependencies with &&. Pipelines report the last stage: check stages or use supported pipefail. Use check_steps for independent checks; each uses a fresh shell and stops on nonzero.",
+    "cwd selects the starting directory, not a narrower workspace. For external inputs/outputs declare read_paths/write_paths (relative to cwd); these need file authorization. A prior Read alone does not grant Bash access. Sandboxed .git/.zapcode remain read-only.",
   );
   if (options.sandboxTemporaryDirectory) {
     promptLines.push(
       `Local sandbox: expand ${options.sandboxTemporaryDirectory.environmentVariables.join(", ")} for a private writable scratch directory; avoid hard-coded /tmp or disposable project files.`,
-      "Create and consume scratch files in one command; cleanup happens on exit. Neither separate Bash calls nor check_steps entries share this directory. Unsandboxed commands differ.",
+      options.sandboxTemporaryDirectory.scope === "workspace"
+        ? "Scratch, private HOME and caches persist across commands in this workspace. Use unique names; remove disposable files when done. The OS may clear scratch. Host credentials are not copied."
+        : "Create and consume scratch files in one command; cleanup happens on exit. Neither separate Bash calls nor check_steps entries share this directory. Unsandboxed commands differ.",
     );
   }
   const prompt = promptLines.length > 0 ? promptLines.join("\n") : undefined;
@@ -275,10 +282,12 @@ export function executeCommandTool(options: ExecuteCommandOptions = {}): Tool {
           && Array.isArray((args as { network_destinations?: unknown }).network_destinations)
           ? ((args as { network_destinations: string[] }).network_destinations)
           : [];
+        const workspace = resolveToolPathCanonical(options.defaultCwd ?? context.cwd, context.cwd);
+        const accessRoot = pathIsInsideRoot(cwd, workspace) ? workspace : cwd;
         return {
           filesystem: [
-            { kind: "filesystem", operation: "read", paths: [cwd] },
-            { kind: "filesystem", operation: "modify", paths: [cwd] },
+            { kind: "filesystem", operation: "read", paths: [accessRoot, ...((args.read_paths ?? []) as string[]).map(path => resolveToolPathCanonical(path, cwd))] },
+            { kind: "filesystem", operation: "modify", paths: [accessRoot, ...((args.write_paths ?? []) as string[]).map(path => resolveToolPathCanonical(path, cwd))] },
           ],
           network: declaredDestinations.length > 0
             ? [{ kind: "network", operation: "connect", destinations: declaredDestinations, methods: [] }]
@@ -357,6 +366,7 @@ export function executeCommandTool(options: ExecuteCommandOptions = {}): Tool {
         } catch (err) {
           return {
             success: false,
+            ...(err instanceof ExecutionBoundaryError ? { failure: err.failure } : {}),
             output: "",
             error: `Failed to start background task: ${(err as Error).message}`,
           };
@@ -460,6 +470,7 @@ export function executeCommandTool(options: ExecuteCommandOptions = {}): Tool {
       } catch (error) {
         return {
           success: false,
+          ...(error instanceof ExecutionBoundaryError ? { failure: error.failure } : {}),
           output: outputs.join("\n"),
           error: formatError(error instanceof Error ? error.message : String(error), checkedCommand),
           runtime: {

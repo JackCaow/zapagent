@@ -1,8 +1,20 @@
 import { describe, expect, it } from "bun:test"
-import { approvalChoiceForInput } from "../../src/ui/dialog-approval.js"
+import { ApprovalBar, approvalChoiceForInput } from "../../src/ui/dialog-approval.js"
+import { createElement } from "react"
+import { renderToString } from "ink"
 import { planIdleActionForInput } from "../../src/ui/dialog-plan-approval.js"
 
 describe("approvalChoiceForInput", () => {
+  it("shows external path grants even when only one-time approval is offered", () => {
+    const output = renderToString(createElement(ApprovalBar, { toolName: "bash", allowScope: false,
+      args: { command: "fixture-command", read_paths: ["/external/input"], write_paths: ["/external/output"] },
+      onChoose: () => {},
+    }), { columns: 100 })
+    expect(output).toContain("Additional read access")
+    expect(output).toContain("/external/input")
+    expect(output).toContain("Additional write access")
+    expect(output).toContain("/external/output")
+  })
   it("uses the selected row for a bare return", () => {
     expect(approvalChoiceForInput("\r", {}, 0)).toBe("once")
     expect(approvalChoiceForInput("", { return: true }, 2)).toBe("forever")

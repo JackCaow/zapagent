@@ -1,5 +1,4 @@
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, rmdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, rmdirSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import type {
@@ -11,6 +10,9 @@ import type {
 } from "./types.js";
 import { WINDOWS_APPCONTAINER_HELPER } from "./windows-appcontainer.js";
 import { localExecutionShell } from "./shell.js";
+import { linkedWorktreeReadRoots, macToolShimPath, workspaceRuntimeDirectory, workspaceRuntimeEnvironment, workspaceRuntimeTemporaryDirectory } from "./workspace-runtime.js";
+import { NODE_PROXY_PRELOAD } from "./node-proxy-preload.generated.js";
+import { ExecutionBoundaryError, operationFailure } from "./failure.js";
 
 export interface PlatformSandboxOptions {
   platform?: NodeJS.Platform;
@@ -18,6 +20,9 @@ export interface PlatformSandboxOptions {
   bwrapPath?: string;
   windowsHelperPath?: string;
   tempRoot?: string;
+  /** Host-owned, workspace-scoped home/cache/scratch. Omitted for strict,
+   * stateless SDK sandboxes and remote runtimes. */
+  workspaceStateRoot?: string;
   /** Embedder-owned paths that stay writable inside the process sandbox.
    * These are not derived from model/tool grants and must only be supplied by
    * a trusted runtime boundary such as a per-Computer persistent tool store. */
@@ -26,9 +31,9 @@ export interface PlatformSandboxOptions {
    * processes. Values still come from the current process; callers must not
    * use this for model/search credentials. */
   trustedEnvironmentNames?: string[];
-  /** Domain-filtering proxy. Where the OS sandbox can enforce it (macOS), a
-   * command with network access may only reach this loopback port. */
-  networkProxy?: NetworkProxy;
+  /** Domain-filtering proxy for platforms that confine egress to loopback.
+   * A factory returns a command-owned proxy. A supplied instance is forked. */
+  networkProxy?: NetworkProxy | (() => NetworkProxy | undefined);
   /** Emit Windows helper lifecycle diagnostics. Intended for acceptance tests. */
   trace?: boolean;
 }
@@ -47,7 +52,8 @@ abstract class CommandWrappingSandbox implements OsSandbox {
   protected readonly tempRoot: string;
   private readonly trustedWritablePaths: string[];
   private readonly trustedEnvironmentNames: string[];
-  protected readonly networkProxy?: NetworkProxy;
+  protected readonly networkProxy?: NetworkProxy | (() => NetworkProxy | undefined);
+  protected readonly workspaceStateRoot?: string;
   /** True only where the OS sandbox confines a command to the proxy port. */
   protected readonly enforcesNetworkProxy: boolean = false;
 
@@ -55,9 +61,11 @@ abstract class CommandWrappingSandbox implements OsSandbox {
     tempRoot?: string,
     trustedWritablePaths: string[] = [],
     trustedEnvironmentNames: string[] = [],
-    networkProxy?: NetworkProxy,
+    networkProxy?: NetworkProxy | (() => NetworkProxy | undefined),
+    workspaceStateRoot?: string,
   ) {
     this.networkProxy = networkProxy;
+    this.workspaceStateRoot = workspaceStateRoot;
     this.tempRoot = resolve(tempRoot ?? join(tmpdir(), "zapcode-sandbox"));
     this.trustedWritablePaths = trustedWritablePaths.map((path) => canonicalPath(resolve(path)));
     this.trustedEnvironmentNames = [...new Set(trustedEnvironmentNames)];
@@ -83,14 +91,20 @@ abstract class CommandWrappingSandbox implements OsSandbox {
     if (!status.available || status.provider === "none") {
       throw new Error(status.reason ?? "OS sandbox is unavailable");
     }
+    const runtimeDirectory = this.workspaceStateRoot
+      ? workspaceRuntimeDirectory(this.workspaceStateRoot, input.workspace.root) : undefined;
+    const runtimeTemp = runtimeDirectory ? workspaceRuntimeTemporaryDirectory(runtimeDirectory) : undefined;
     const writablePaths = [...new Set([
       ...(input.grant.filesystem?.write ?? []),
       ...this.trustedWritablePaths,
+      ...(runtimeDirectory ? [runtimeDirectory] : []),
+      ...(runtimeTemp ? [runtimeTemp] : []),
     ].map((path) => canonicalPath(resolve(input.workspace.root, path))))];
     const readablePaths = [...new Set([
       ...(input.grant.filesystem?.read ?? []),
       ...writablePaths,
       ...hostToolchainReadRoots(),
+      ...linkedWorktreeReadRoots(input.workspace.root),
       dirname(canonicalPath(process.execPath)),
     ].map((path) => canonicalPath(resolve(input.workspace.root, path))))];
     const networkAllowed = (input.grant.network?.destinations.length ?? 0) > 0;
@@ -105,37 +119,55 @@ abstract class CommandWrappingSandbox implements OsSandbox {
       mkdirSync(this.tempRoot, { recursive: true, mode: 0o700 });
       const tempDir = mkdtempSync(join(this.tempRoot, "run-"));
       const canonicalExecutable = canonicalPath(executable);
-      const proxy = networkAllowed && this.enforcesNetworkProxy ? this.networkProxy : undefined;
-      const wrapped = this.wrap(executable, args, {
-        cwd: canonicalPath(resolve(options.cwd)),
-        readablePaths: [...new Set([
-          ...readablePaths,
-          dirname(canonicalExecutable),
-          canonicalPath(tempDir),
-        ])],
-        writablePaths,
-        protectedPaths,
-        networkAllowed,
-        proxyPort: proxy?.port,
-        tempDir: canonicalPath(tempDir),
-      });
-      let released = false;
-      return {
-        ...wrapped,
-        env: sandboxEnvironment(tempDir, options, this.trustedEnvironmentNames, proxy?.url),
-        release: () => {
-          if (released) return;
-          released = true;
-          try { wrapped.release?.(); } catch {}
+      let proxy: NetworkProxy | undefined;
+      let wrapped: { executable: string; args: string[]; release?: () => void } | undefined;
+      try {
+        if (networkAllowed && this.enforcesNetworkProxy) {
           try {
-            rmSync(tempDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+            proxy = typeof this.networkProxy === "function" ? this.networkProxy() : this.networkProxy?.fork();
           } catch {
-            // Cleanup must never turn a completed tool into a failed call.
-            // Windows AV/ACL propagation can briefly retain a handle; the
-            // next startup retention pass may safely remove this private dir.
+            throw new ExecutionBoundaryError("Sandbox network proxy could not start; the command was not launched. Check loopback listener availability.",
+              operationFailure("BACKEND_UNAVAILABLE", "backend", input.executionId));
           }
-        },
-      };
+        }
+        wrapped = this.wrap(executable, args, {
+          cwd: canonicalPath(resolve(options.cwd)),
+          readablePaths: [...new Set([
+            ...readablePaths,
+            dirname(canonicalExecutable),
+            canonicalPath(tempDir),
+          ])],
+          writablePaths,
+          protectedPaths,
+          networkAllowed,
+          proxyPort: proxy?.port,
+          tempDir: canonicalPath(tempDir),
+        });
+        let released = false;
+        return {
+          ...wrapped,
+          env: sandboxEnvironment(tempDir, options, this.trustedEnvironmentNames, proxy?.url, runtimeDirectory, runtimeTemp),
+          networkDenials: () => [...(proxy?.blockedHosts() ?? [])].map(([host, reason]) => ({ host, reason })),
+          release: () => {
+            if (released) return;
+            released = true;
+            proxy?.close();
+            try { wrapped?.release?.(); } catch {}
+            try {
+              rmSync(tempDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+            } catch {
+              // Cleanup must never turn a completed tool into a failed call.
+              // Windows AV/ACL propagation can briefly retain a handle; the
+              // next startup retention pass may safely remove this private dir.
+            }
+          },
+        };
+      } catch (error) {
+        proxy?.close();
+        try { wrapped?.release?.(); } catch {}
+        rmSync(tempDir, { recursive: true, force: true });
+        throw error;
+      }
     };
     return {
       provider,
@@ -158,7 +190,7 @@ class MacOsSeatbeltSandbox extends CommandWrappingSandbox {
   protected override readonly enforcesNetworkProxy = true;
 
   constructor(options: PlatformSandboxOptions) {
-    super(options.tempRoot, options.trustedWritablePaths, options.trustedEnvironmentNames, options.networkProxy);
+    super(options.tempRoot, options.trustedWritablePaths, options.trustedEnvironmentNames, options.networkProxy, options.workspaceStateRoot);
     this.executable = options.sandboxExecPath ?? "/usr/bin/sandbox-exec";
   }
 
@@ -203,6 +235,9 @@ class MacOsSeatbeltSandbox extends CommandWrappingSandbox {
       "(allow signal (target self))",
       "(allow file-write* (literal \"/dev/null\") (literal \"/dev/tty\"))",
       writable ? `(allow file-write* ${writable})` : "",
+      // Workspace-local IPC is needed by build/watch tools. External sockets
+      // (SSH agents, Docker, user daemons) remain outside these grants.
+      `(allow network-bind network-outbound ${writable})`,
       `(deny file-write* ${input.protectedPaths
         .map((path) => `(literal ${schemeString(path)}) (subpath ${schemeString(path)})`)
         .join(" ")})`,
@@ -223,7 +258,7 @@ class LinuxBubblewrapSandbox extends CommandWrappingSandbox {
   private readonly executable: string;
 
   constructor(options: PlatformSandboxOptions) {
-    super(options.tempRoot, options.trustedWritablePaths, options.trustedEnvironmentNames);
+    super(options.tempRoot, options.trustedWritablePaths, options.trustedEnvironmentNames, undefined, options.workspaceStateRoot);
     this.executable = options.bwrapPath ?? findOnPath("bwrap") ?? "bwrap";
   }
 
@@ -325,7 +360,7 @@ class WindowsHelperSandbox extends CommandWrappingSandbox {
   private readonly trace: boolean;
 
   constructor(options: PlatformSandboxOptions) {
-    super(options.tempRoot, options.trustedWritablePaths, options.trustedEnvironmentNames);
+    super(options.tempRoot, options.trustedWritablePaths, options.trustedEnvironmentNames, undefined, options.workspaceStateRoot);
     this.executable = options.windowsHelperPath
       ?? join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
     this.trace = options.trace === true;
@@ -415,7 +450,7 @@ function hostToolchainReadRoots(): string[] {
   const home = homedir();
   const roots = [
     ".bun/bin", ".cargo/bin", ".deno/bin", ".local/bin", ".volta", ".nvm/versions", ".fnm",
-    ".asdf", ".pyenv", ".rbenv", ".rustup/toolchains", ".sdkman/candidates", ".nix-profile",
+    ".asdf", ".pyenv", ".rbenv", ".rustup", ".sdkman/candidates", ".nix-profile",
   ].map((name) => join(home, name));
   if (process.platform === "darwin") roots.push("/Applications/Xcode.app", "/Library/Developer");
   // A symlinked root (for example into a dotfiles repo) must not widen the
@@ -459,6 +494,8 @@ function sandboxEnvironment(
   options: SandboxCommandOptions,
   trustedEnvironmentNames: string[] = [],
   proxyUrl?: string,
+  runtimeDirectory?: string,
+  runtimeTemp?: string,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   const safeNames = new Set([
@@ -478,7 +515,7 @@ function sandboxEnvironment(
     const value = process.env[key];
     if (value !== undefined) env[key] = value;
   }
-  const realGitDir = macRealGitDir();
+  const realGitDir = macToolShimPath(tempDir);
   if (realGitDir) env.PATH = env.PATH ? `${realGitDir}${delimiter}${env.PATH}` : realGitDir;
   Object.assign(env, options.environment);
   for (const key of options.temporaryDirectoryEnvironment ?? []) env[key] = tempDir;
@@ -486,49 +523,32 @@ function sandboxEnvironment(
   env.TMPDIR = tempDir;
   env.TMP = tempDir;
   env.TEMP = tempDir;
+  if (runtimeDirectory && runtimeTemp && !options.hostHome) {
+    Object.assign(env, workspaceRuntimeEnvironment(runtimeDirectory, runtimeTemp));
+    // User installs live in the private HOME too. Keep their entry points
+    // available to later commands without writing into the host's PATH bins.
+    const bins = process.platform === "win32" ? [join(env.HOME!, "npm")]
+      : [join(env.HOME!, ".local", "bin"), join(env.HOME!, ".cargo", "bin"), join(env.HOME!, ".bun", "bin")];
+    env.PATH = [...bins, ...(env.PATH ? [env.PATH] : [])].join(delimiter);
+  }
   env.GIT_CONFIG_GLOBAL = "/dev/null";
   if (proxyUrl) {
     for (const name of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]) env[name] = proxyUrl;
     env.NO_PROXY = env.no_proxy = "localhost,127.0.0.1,::1";
     env.NODE_USE_ENV_PROXY = "1";
+    const preload = join(tempDir, "node-proxy.cjs");
+    writeFileSync(preload, NODE_PROXY_PRELOAD, { mode: 0o600 });
+    // Host NODE_OPTIONS is deliberately filtered. JSON quoting supports spaces
+    // in the sandbox storage path; no shell interprets this value.
+    env.NODE_OPTIONS = `${env.NODE_OPTIONS ? `${env.NODE_OPTIONS} ` : ""}--require ${JSON.stringify(preload)}`;
   }
   if (process.platform === "win32") {
-    env.USERPROFILE = tempDir;
-    env.LOCALAPPDATA = tempDir;
-    env.APPDATA = tempDir;
+    env.USERPROFILE = env.HOME;
+    env.LOCALAPPDATA = runtimeDirectory && !options.hostHome ? join(runtimeDirectory, "cache") : tempDir;
+    env.APPDATA = env.HOME;
     env.GIT_CONFIG_GLOBAL = "NUL";
   }
   return env;
-}
-
-let cachedRealGit: string | null | undefined;
-
-/** /usr/bin/git on macOS is an xcrun shim: every run, and every helper it
- * spawns (git-remote-https, ...), goes through xcrun, which must create its
- * cache file in the per-user temp directory. The sandbox must not make that
- * cache writable: it records where each developer tool lives, and a poisoned
- * entry would point a later UNSANDBOXED git or clang at an attacker's binary.
- * Resolve the real git once, on the host, and put its directory first on the
- * sandbox PATH instead. Its helpers are found through its own exec path, so
- * xcrun is never involved.
- *
- * Only a root-owned directory that nobody else can write to is accepted. */
-function macRealGitDir(): string | undefined {
-  if (process.platform !== "darwin") return undefined;
-  if (cachedRealGit === undefined) {
-    cachedRealGit = null;
-    try {
-      const found = execFileSync("/usr/bin/xcrun", ["--find", "git"], {
-        encoding: "utf8", timeout: 3000, env: process.env, stdio: ["ignore", "pipe", "ignore"],
-      }).trim();
-      if (found.startsWith("/") && found !== "/usr/bin/git" && existsSync(found)) {
-        const dir = canonicalPath(dirname(found));
-        const info = statSync(dir);
-        if (info.uid === 0 && (info.mode & 0o022) === 0) cachedRealGit = dir;
-      }
-    } catch { /* No Xcode or Command Line Tools: keep the shim. */ }
-  }
-  return cachedRealGit ?? undefined;
 }
 
 function findOnPath(name: string): string | undefined {

@@ -389,8 +389,10 @@ export const ToolResult = memo(function ToolResult({ log }: { log: LogEntry }) {
   const tool = log.tool
   if (!tool || tool.name === "todo_write") return null
   const ok = tool.success !== false && !log.text.startsWith("ERR")
-  const command = (tool.meta as { runtime?: { command?: { exitCode?: number; stderrPresent?: boolean } } } | undefined)?.runtime?.command
-  const shellWarning = ok && tool.name === "bash" && command?.exitCode === 0 && command.stderrPresent === true
+  const runtime = (tool.meta as { runtime?: { command?: { exitCode?: number; stderrPresent?: boolean }; networkDenials?: unknown[] } } | undefined)?.runtime
+  const command = runtime?.command
+  const networkWarning = (runtime?.networkDenials?.length ?? 0) > 0
+  const shellWarning = ok && tool.name === "bash" && command?.exitCode === 0 && (command.stderrPresent === true || networkWarning)
   const status = !ok ? "✗" : shellWarning ? "⚠" : "✓"
   const statusFg = !ok ? c.error : shellWarning ? c.warning : c.text.ghost
   const output = tool.output ?? ""
@@ -476,7 +478,9 @@ export const ToolResult = memo(function ToolResult({ log }: { log: LogEntry }) {
       </IndentedRow>
       {shellWarning && (
         <IndentedRow width={NESTED_COLS}>
-          <Text color={c.warning}>exit 0 with stderr — inspect diagnostics; earlier commands may have failed</Text>
+          <Text color={c.warning}>{networkWarning
+            ? "exit 0 with network refusals — inspect diagnostics; some requests were blocked"
+            : "exit 0 with stderr — inspect diagnostics; earlier commands may have failed"}</Text>
         </IndentedRow>
       )}
       {lines.length > 0 && (

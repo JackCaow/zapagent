@@ -29,6 +29,16 @@ afterEach(() => {
 })
 
 describe("Agent / execution environment boundary", () => {
+  it("inherits the local network policy in isolated-workspace registries", async () => {
+    delete process.env.ZAPCODE_RESIDENT_AGENT
+    const environment = createExecutionEnvironment(root, "required", "local")
+    const agent = buildAgentObjects(getDefaultConfig(), undefined, undefined, undefined, null, undefined,
+      root, "required", environment)
+    for (const registry of [agent.registry, agent.createRegistryForCwd!(root)]) {
+      const effects = await registry.get("bash")!.definition.resolveEffects!({ command: "curl https://registry.npmjs.org" }, { cwd: root, toolName: "bash" })
+      expect(effects.network).toEqual([{ kind: "network", operation: "connect", destinations: ["*"], methods: [] }])
+    }
+  })
   it("describes local sandbox scratch lifetime in both prompts and registries only when available", () => {
     delete process.env.ZAPCODE_RESIDENT_AGENT
     const config = getDefaultConfig()
@@ -41,7 +51,7 @@ describe("Agent / execution environment boundary", () => {
       for (const registry of [agent.registry, agent.createRegistryForCwd!(root)]) {
         const prompt = registry.get("bash")!.definition.prompt ?? ""
         expect(prompt.includes("private writable scratch directory")).toBe(available)
-        if (available) expect(prompt).toContain("Neither separate Bash calls nor check_steps entries share")
+        if (available) expect(prompt).toContain("persist across commands in this workspace")
       }
       for (const customSystemPrompt of ["", "Custom instructions"]) {
         const prompt = buildSystemPrompt({ ...config, customSystemPrompt }, root, undefined,
@@ -49,8 +59,8 @@ describe("Agent / execution environment boundary", () => {
         expect(prompt.includes("Sandboxed shell scratch space:")).toBe(available)
         if (available) {
           expect(prompt).toContain("TMPDIR, TMP, TEMP")
-          expect(prompt).toContain("removed when that command finishes")
-          expect(prompt).toContain("approved unsandboxed commands")
+          expect(prompt).toContain("persist across commands")
+          expect(prompt).toContain("Approved unsandboxed commands")
         }
       }
     }

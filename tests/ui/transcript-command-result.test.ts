@@ -3,16 +3,22 @@ import { createElement } from "react"
 import { renderToString } from "ink"
 import { ToolResult } from "../../src/ui/Transcript.js"
 
-function renderResult(success: boolean, exitCode: number, stderrPresent?: boolean, output = "output") {
+function renderResult(success: boolean, exitCode: number, stderrPresent?: boolean, output = "output", networkDenials?: unknown[]) {
   return renderToString(createElement(ToolResult, {
     log: { id: 1, type: "result", text: "", tool: {
       name: "bash", arguments: { command: "cat missing | wc -l" }, success, output,
-      meta: { runtime: { command: { exitCode, stderrPresent } } },
+      meta: { runtime: { command: { exitCode, stderrPresent }, networkDenials } },
     } },
   }), { columns: 120 }).replace(/\x1b\[[0-9;]*m/g, "")
 }
 
 describe("shell result status", () => {
+  it("warns on authoritative network refusals even if the shell hides stderr", () => {
+    const output = renderResult(true, 0, false, "output", [{ host: "denied.example" }])
+    expect(output).toContain("⚠")
+    expect(output).toContain("exit 0 with network refusals")
+    expect(output).not.toContain("✓")
+  })
   it("warns for exit zero with stderr even when output is folded", () => {
     const output = renderResult(true, 0, true, Array.from({ length: 30 }, (_, i) => `line ${i}`).join("\n"))
     expect(output).toContain("⚠")

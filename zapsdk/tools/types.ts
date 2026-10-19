@@ -130,6 +130,8 @@ export interface ToolResult {
   /** Runtime metadata for audit/UI. Only bounded command/check status fields
    * are projected into model-visible results; the rest stays host-side. */
   runtime?: {
+    /** Actual refusals observed by this command's filtering proxy. */
+    networkDenials?: Array<{ host: string; reason: string }>;
     /** Host-generated duplicate notice; no tool execution or fresh content occurred. */
     suppression?: "duplicate";
     service?: ServiceReceipt;

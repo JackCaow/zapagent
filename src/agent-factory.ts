@@ -239,8 +239,8 @@ export function buildAgentObjects(
         executionShell: environment.facts?.shell,
         sandboxTemporaryDirectory: environment.facts?.sandboxTemporaryDirectory,
         disableBackgroundTasks: true,
-        // Isolated subagent shells keep the brokered http tools as their only egress.
-        sandboxNetwork: false,
+        // Inherit the selected backend's network policy; filesystem isolation
+        // is enforced separately by the child's execution grant.
       },
       webSearch: config.serperKey ? { searchFn: createSerperSearch(config.serperKey) } : undefined,
       exclude: [],

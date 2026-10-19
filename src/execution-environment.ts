@@ -1,5 +1,7 @@
 import { localServiceOwnerNetworkPolicyDigest } from "../zapsdk/services/local-owner.js"
 import { localExecutionShell } from "../zapsdk/execution/shell.js"
+import { getAppDataDir } from "../zapsdk/utils/platform.js"
+import { join } from "node:path"
 // Application composition adapter. Only this layer knows how a runtime is
 // discovered; Agent construction consumes a broker and factual capabilities.
 import {
@@ -59,8 +61,8 @@ function describeExecutionEnvironment({ resident, cloud, installation, capabilit
     network: "runtime-policy",
     ...(localSandboxAvailable ? { sandboxTemporaryDirectory: {
       environmentVariables: ["TMPDIR", "TMP", "TEMP"],
-      scope: "command" as const,
-      cleanup: "on-command-exit" as const,
+      scope: "workspace" as const,
+      cleanup: "workspace-storage" as const,
     } } : {}),
   }
   const persistent = resident || cloud?.computer_profile === "work" ||
@@ -86,25 +88,15 @@ export interface SandboxNetworkConfig {
   deniedDomains?: string[]
 }
 
-let sharedProxy: { key: string; proxy: NetworkProxy } | undefined
-
-/** One filtering proxy per policy for the whole process; commands in every
- * registry (main agent, subagents) go through it. Undefined = network stays open. */
+/** Each command owns a proxy with a policy snapshot, including subagents.
+ * Configuration changes cannot close a running background command's proxy. */
 function networkProxyFor(config: SandboxNetworkConfig | undefined): NetworkProxy | undefined {
   if (process.platform !== "darwin") return undefined
   if (process.env.ZAPCODE_SANDBOX_NETWORK?.trim().toLowerCase() === "open" || config?.mode === "open") return undefined
   const allowedDomains = [...DEFAULT_ALLOWED_DOMAINS, ...(config?.allowedDomains ?? [])]
-  const deniedDomains = config?.deniedDomains ?? []
-  const key = JSON.stringify([allowedDomains, deniedDomains])
-  if (sharedProxy?.key === key) return sharedProxy.proxy
-  try {
-    sharedProxy?.proxy.close()
-    const proxy = new NetworkProxy(() => ({ allowedDomains, deniedDomains }))
-    sharedProxy = { key, proxy }
-    return proxy
-  } catch {
-    return undefined
-  }
+  const deniedDomains = [...(config?.deniedDomains ?? [])]
+  // Initialization failure must not silently turn an allowlist into open egress.
+  return new NetworkProxy(() => ({ allowedDomains, deniedDomains }))
 }
 
 export function createExecutionEnvironment(
@@ -131,9 +123,10 @@ export function createExecutionEnvironment(
   const local = new DefaultExecutionBroker({
     services: serviceOwner,
     sandbox: createPlatformSandbox({
+      workspaceStateRoot: resident || installation || cloud ? undefined : join(getAppDataDir(), "sandbox", "workspaces"),
       // Trusted outer mounts/egress are enforcement details, not Agent policy.
       trustedWritablePaths: resident ? ["/nix"] : (installation || cloud ? [] : hostPackageWriteRoots()),
-      networkProxy: resident || installation || cloud ? undefined : networkProxyFor(sandboxNetwork),
+      networkProxy: resident || installation || cloud ? undefined : () => networkProxyFor(sandboxNetwork),
       trustedEnvironmentNames: resident
         ? ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy"]
         : [],

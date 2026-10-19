@@ -14,6 +14,7 @@ export class DefaultExecutionProcessBroker implements ExecutionProcessBroker {
   private readonly children = new Set<ChildProcess>();
   private _spawnCount = 0;
   private _sandboxedSpawnCount = 0;
+  private readonly denialSources: Array<() => Array<{ host: string; reason: string }>> = [];
 
   constructor(
     private readonly sandbox: SandboxExecutionContext | undefined,
@@ -22,6 +23,9 @@ export class DefaultExecutionProcessBroker implements ExecutionProcessBroker {
 
   get spawnCount(): number { return this._spawnCount; }
   get sandboxedSpawnCount(): number { return this._sandboxedSpawnCount; }
+  get networkDenials(): Array<{ host: string; reason: string }> {
+    return [...new Map(this.denialSources.flatMap(read => read()).map(item => [item.host, item])).values()];
+  }
 
   spawnCommand(
     executable: string,
@@ -29,6 +33,7 @@ export class DefaultExecutionProcessBroker implements ExecutionProcessBroker {
     options: SandboxCommandOptions,
   ): ChildProcess {
     const prepared = this.sandbox?.prepareCommand(executable, args, options);
+    if (prepared?.networkDenials) this.denialSources.push(prepared.networkDenials);
     return this.launch(
       prepared?.executable ?? executable,
       prepared?.args ?? args,
@@ -41,6 +46,7 @@ export class DefaultExecutionProcessBroker implements ExecutionProcessBroker {
 
   spawnShell(command: string, options: SandboxCommandOptions): ChildProcess {
     const prepared = this.sandbox?.prepareShell(command, options);
+    if (prepared?.networkDenials) this.denialSources.push(prepared.networkDenials);
     if (prepared) {
       return this.launch(
         prepared.executable,
