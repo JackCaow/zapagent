@@ -61,6 +61,24 @@ describe("non-Git writing workspaces", () => {
     expect(readdirSync(resolve(lease.batchPath!, "..")).filter(name => name.startsWith("batch-"))).toHaveLength(1);
   });
 
+  it("rejects a new environment marker on existing source instead of merging a deletion", async () => {
+    const { root, manager } = setup();
+    mkdirSync(join(root, "project"));
+    writeFileSync(join(root, "project", "main.py"), "original source\n");
+    const lease = await manager.acquire("marker-on-source", true);
+    writeFileSync(join(lease.path, "project", "main.py"), "intentional edit\n");
+    writeFileSync(join(lease.path, "project", "pyvenv.cfg"), "home = /usr/bin\n");
+    await expect(manager.finalize(lease)).rejects.toThrow("Cannot exclude existing snapshot path");
+    expect(manager.getArtifact("artifact_marker-on-source")).toBeUndefined();
+    expect(readFileSync(join(root, "project", "main.py"), "utf8")).toBe("original source\n");
+    expect(readFileSync(join(lease.path, "project", "main.py"), "utf8")).toBe("intentional edit\n");
+    rmSync(join(lease.path, "project", "pyvenv.cfg"));
+    const artifact = (await manager.finalize(lease))!;
+    expect(artifact.changedPaths).toEqual(["project/main.py"]);
+    expect((await new MergeCoordinator(manager).merge([artifact.artifactId])).success).toBe(true);
+    expect(readFileSync(join(root, "project", "main.py"), "utf8")).toBe("intentional edit\n");
+  });
+
   it("does not delete an excluded --copies environment when merging a parent directory deletion", async () => {
     const { root, manager } = setup();
     mkdirSync(join(root, "project", ".venv"), { recursive: true });

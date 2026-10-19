@@ -9,6 +9,7 @@ import {
   readlink,
   rm,
   symlink,
+  writeFile,
 } from "node:fs/promises";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { promisify } from "node:util";
@@ -31,6 +32,7 @@ import {
 import { futureRealpath, isWithin, workspaceContext } from "./context.js";
 import { changedCopyPaths, copyTreeOid, materializeCopyTree, removeOwnedCopyTree, scanCopyTree } from "./copy.js";
 import { COPY_MERGE_JOURNAL } from "../merge/copy-transaction.js";
+import { agentIndexPaths, copyAgentIndex } from "./git-index.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -60,16 +62,18 @@ async function git(cwd: string, args: string[]): Promise<GitOutput> {
   return { stdout: result.stdout, stderr: result.stderr };
 }
 
-/** Artifact commands never consult child-controlled .git/config, hooks, index
- * or objects. Their metadata lives in a separate host-owned clone. */
-async function artifactGit(cwd: string, args: string[]): Promise<GitOutput> {
+/** Artifact commands never consult child-controlled config, hooks or objects.
+ * An optional copied index is used only for a read-only filename inventory. */
+async function artifactGit(cwd: string, args: string[], indexFile?: string): Promise<GitOutput> {
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
   const nullFile = process.platform === "win32" ? "NUL" : "/dev/null";
   const result = await execFileAsync("git", [
+    "--no-optional-locks", "--literal-pathspecs",
     "-c", `core.hooksPath=${nullFile}`, "-c", "core.fsmonitor=false",
     "-c", "commit.gpgsign=false", ...args,
   ], { cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024,
-    env: { ...env, GIT_CONFIG_GLOBAL: nullFile, GIT_CONFIG_SYSTEM: nullFile } });
+    env: { ...env, GIT_CONFIG_GLOBAL: nullFile, GIT_CONFIG_SYSTEM: nullFile,
+      ...(indexFile ? { GIT_INDEX_FILE: indexFile } : {}) } });
   return { stdout: result.stdout, stderr: result.stderr };
 }
 
@@ -228,6 +232,36 @@ export class WorkspaceManager {
     const artifactRoot = join(this.batchRoot!, "artifacts", artifactId);
     await mkdir(dirname(artifactRoot), { recursive: true });
     await artifactGit(this.batchRoot!, ["clone", "--local", "--no-hardlinks", this.templatePath!, artifactRoot]);
+    const indexInput = await mkdtemp(join(artifactRoot, ".git", "agent-index-"));
+    try {
+      const indexFile = await copyAgentIndex(lease.repoPath, indexInput);
+      const tracked = indexFile
+        ? agentIndexPaths((await artifactGit(artifactRoot, ["ls-files", "--cached", "-z"], indexFile)).stdout)
+        : [];
+      const present: string[] = [];
+      for (const path of tracked) {
+        const info = await lstat(join(lease.repoPath, path)).catch((error) => {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT" || (error as NodeJS.ErrnoException).code === "ENOTDIR") return undefined;
+          throw error;
+        });
+        // A tracked file can have become a directory. Force-adding that directory
+        // would recursively collect ignored neighbors, not just this index entry.
+        if (info?.isFile() || info?.isSymbolicLink()) present.push(path);
+      }
+      // Retain trusted baseline entries (including uninitialized gitlinks).
+      // Sync removed tracking by name, never importing child object IDs/config.
+      const baselinePaths = agentIndexPaths((await artifactGit(artifactRoot, ["ls-files", "--cached", "-z"])).stdout);
+      const trackedSet = new Set(tracked);
+      const removed = baselinePaths.filter(path => !trackedSet.has(path));
+      for (let start = 0; start < removed.length; start += 128) {
+        await artifactGit(artifactRoot, ["update-index", "--force-remove", "--", ...removed.slice(start, start + 128)]);
+      }
+      if (present.length) {
+        const pathsFile = join(indexInput, "tracked-paths");
+        await writeFile(pathsFile, present.join("\0") + "\0", { mode: 0o600 });
+        await artifactGit(artifactRoot, [`--work-tree=${lease.repoPath}`, "add", "-f", `--pathspec-from-file=${pathsFile}`, "--pathspec-file-nul"]);
+      }
+    } finally { await removeOwnedCopyTree(indexInput); }
     // Git reads only the child's working files, through an explicit work-tree.
     // Never execute host Git in the child's writable control directory.
     await artifactGit(artifactRoot, [`--work-tree=${lease.repoPath}`, "add", "-A"]);
@@ -288,7 +322,13 @@ export class WorkspaceManager {
     }
     const baseline = await scanCopyTree(this.templatePath!);
     if (copyTreeOid(baseline) !== lease.baseOid) throw new Error("Copy workspace baseline was modified");
-    const result = await scanCopyTree(lease.path, false, true, true);
+    const excludedEnvironments = new Set<string>();
+    const result = await scanCopyTree(lease.path, false, true, true, excludedEnvironments);
+    for (const path of excludedEnvironments) {
+      if (Object.hasOwn(baseline, path)) {
+        throw new Error(`Cannot exclude existing snapshot path as a Python environment: ${path}. Create the environment in a new directory instead.`);
+      }
+    }
     const resultOid = copyTreeOid(result);
     const artifactId = `artifact_${safeRunId(lease.runId)}`;
     const artifactRoot = join(this.batchRoot!, "artifacts", artifactId);

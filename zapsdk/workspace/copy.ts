@@ -107,7 +107,7 @@ async function fileEntry(path: string, mode: number): Promise<CopyEntry> {
 /** Never follows directory links. Hashing is streamed, including large inputs.
  * source=true excludes private/control files from the initial snapshot only;
  * introducing one in a child is rejected rather than silently losing edits. */
-export async function scanCopyTree(root: string, source = false, validateLinks = true, omitEnvironments = source): Promise<CopyTree> {
+export async function scanCopyTree(root: string, source = false, validateLinks = true, omitEnvironments = source, excludedEnvironments?: Set<string>): Promise<CopyTree> {
   const info = await lstat(root);
   if (!info.isDirectory() || info.isSymbolicLink()) throw new Error(`Unsafe copy workspace root: ${root}`);
   const tree: CopyTree = Object.create(null);
@@ -141,7 +141,10 @@ export async function scanCopyTree(root: string, source = false, validateLinks =
           if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
           throw error;
         });
-        if (omitEnvironments && environment?.isFile()) continue;
+        if (omitEnvironments && environment?.isFile()) {
+          excludedEnvironments?.add(path);
+          continue;
+        }
         tree[path] = { kind: "directory", mode: stat.mode & 0o777 };
         await walk(path);
       } else if (stat.isFile()) {
