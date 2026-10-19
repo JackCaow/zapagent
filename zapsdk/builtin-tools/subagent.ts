@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { join } from "node:path";
 import { currentRuntimeObservation, observeRuntime, withRuntimeObservation, withChildObservation } from "../runtime/observation.js";
 import type { Tool, ToolExecutionContext, ToolResult } from "../tools/types.js";
 import type { LLMProvider } from "../core/llm.js";
@@ -787,7 +788,9 @@ function createDirectSubagentTool(options: SubagentToolOptions): Tool {
           ...options.executorOptions,
           cwd: workspaceLease?.path ?? options.storageProjectCwd,
           workspace: workspaceLease
-            ? { id: workspaceLease.workspaceId, root: workspaceLease.path, mode: "isolated-write" }
+            ? { id: workspaceLease.workspaceId, root: workspaceLease.path, mode: "isolated-write",
+              ...(workspaceLease.mode === "isolated-git" && workspaceLease.repoPath
+                ? { privateGitDirectory: join(workspaceLease.repoPath, ".git") } : {}) }
             : undefined,
           // Child writes need their own coverage. Never reuse root-path
           // checkpoints or bypass the destructive-write gate in a worktree.
@@ -810,7 +813,9 @@ function createDirectSubagentTool(options: SubagentToolOptions): Tool {
             : workspaceLease
               ? `${systemPrompt}\n\n${workspacePrompt}\n\n[Isolated execution capabilities]\n${registry.has("bash")
                 ? "Shell access: bash requires the OS sandbox and remains subject to execution policy."
-                : "Shell access: bash is unavailable in this isolated subagent. Report required builds, tests or diagnostics to the parent so it can run them with its own tools after artifact integration; do not claim they were executed."}\nFile changes remain private until the parent merges the artifact. Do not work around the workspace boundary.`
+                : "Shell access: bash is unavailable in this isolated subagent. Report required builds, tests or diagnostics to the parent so it can run them with its own tools after artifact integration; do not claim they were executed."}\n${workspaceLease.mode === "isolated-copy"
+                  ? "Python virtual environments (directories with a regular pyvenv.cfg) are excluded from snapshots and merged artifacts. Recreate dependencies here as needed and deliver dependency manifests or source files; the private environment stays in this workspace."
+                  : "Git commands may write this private clone's metadata; the parent repository and sibling workspaces remain outside the write boundary."}\nFile changes remain private until the parent merges the artifact. Do not work around the workspace boundary.`
               : systemPrompt,
           promptProfile: options.promptProfile,
           maxSteps,

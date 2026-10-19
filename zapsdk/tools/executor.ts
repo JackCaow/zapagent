@@ -245,6 +245,8 @@ export class ToolExecutor {
       root: options.workspace?.root ?? this._cwd,
       id: options.workspace?.id,
       mode: options.workspace?.mode ?? "root",
+      ...(options.workspace?.privateGitDirectory
+        ? { privateGitDirectory: options.workspace.privateGitDirectory } : {}),
       sandbox: options.workspace?.sandbox
         ?? (sandboxStatus.available ? "enforced" : "none"),
     };

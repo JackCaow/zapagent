@@ -10,7 +10,7 @@ import type {
 } from "./types.js";
 import { WINDOWS_APPCONTAINER_HELPER } from "./windows-appcontainer.js";
 import { localExecutionShell } from "./shell.js";
-import { linkedWorktreeReadRoots, macToolShimPath, workspaceRuntimeDirectory, workspaceRuntimeEnvironment, workspaceRuntimeTemporaryDirectory } from "./workspace-runtime.js";
+import { linkedWorktreeReadRoots, privateGitWriteRoot, macToolShimPath, workspaceRuntimeDirectory, workspaceRuntimeEnvironment, workspaceRuntimeTemporaryDirectory } from "./workspace-runtime.js";
 import { NODE_PROXY_PRELOAD } from "./node-proxy-preload.generated.js";
 import { ExecutionBoundaryError, operationFailure } from "./failure.js";
 
@@ -94,9 +94,11 @@ abstract class CommandWrappingSandbox implements OsSandbox {
     const runtimeDirectory = this.workspaceStateRoot
       ? workspaceRuntimeDirectory(this.workspaceStateRoot, input.workspace.root) : undefined;
     const runtimeTemp = runtimeDirectory ? workspaceRuntimeTemporaryDirectory(runtimeDirectory) : undefined;
+    const privateGit = privateGitWriteRoot(input.workspace);
     const writablePaths = [...new Set([
       ...(input.grant.filesystem?.write ?? []),
       ...this.trustedWritablePaths,
+      ...(privateGit ? [privateGit] : []),
       ...(runtimeDirectory ? [runtimeDirectory] : []),
       ...(runtimeTemp ? [runtimeTemp] : []),
     ].map((path) => canonicalPath(resolve(input.workspace.root, path))))];
@@ -109,7 +111,8 @@ abstract class CommandWrappingSandbox implements OsSandbox {
     ].map((path) => canonicalPath(resolve(input.workspace.root, path))))];
     const networkAllowed = (input.grant.network?.destinations.length ?? 0) > 0;
     const protectedPaths = [".git", ".zapcode"]
-      .map((name) => canonicalPath(resolve(input.workspace.root, name)));
+      .map((name) => canonicalPath(resolve(input.workspace.root, name)))
+      .filter((path) => path !== privateGit);
     const provider = status.provider;
     const prepare = (
       executable: string,

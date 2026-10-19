@@ -30,6 +30,57 @@ describe("non-Git writing workspaces", () => {
     return { root, manager };
   }
 
+  it("excludes Python environments from source snapshots and artifacts while preserving the parent's environment", async () => {
+    const { root, manager } = setup();
+    const makeEnvironment = (base: string) => {
+      mkdirSync(join(base, "bin"), { recursive: true });
+      writeFileSync(join(base, "pyvenv.cfg"), "home = /host/python\n");
+      symlinkSync(process.execPath, join(base, "bin", "python"));
+    };
+    makeEnvironment(join(root, ".venv"));
+    const lease = await manager.acquire("venv", true);
+    expect(existsSync(join(lease.path, ".venv"))).toBe(false);
+    makeEnvironment(join(lease.path, "custom-env"));
+    writeFileSync(join(lease.path, "requirements.txt"), "packaging==24.2\n");
+    const artifact = (await manager.finalize(lease))!;
+    expect(artifact.changedPaths).toEqual(["requirements.txt"]);
+    expect((await new MergeCoordinator(manager).merge([artifact.artifactId])).success).toBe(true);
+    expect(existsSync(join(root, ".venv", "bin", "python"))).toBe(true);
+    expect(existsSync(join(lease.path, "custom-env", "bin", "python"))).toBe(true);
+    expect(existsSync(join(root, "custom-env"))).toBe(false);
+  });
+
+  it("retries initialization after concurrent failures without retaining partial batches", async () => {
+    const { root, manager } = setup();
+    symlinkSync(process.execPath, join(root, "unsafe"));
+    const failed = await Promise.allSettled([manager.acquire("first", true), manager.acquire("second", true)]);
+    expect(failed.map(result => result.status)).toEqual(["rejected", "rejected"]);
+    rmSync(join(root, "unsafe"));
+    const lease = await manager.acquire("retry", true);
+    expect(readFileSync(join(lease.path, "a"), "utf8")).toBe("base-a");
+    expect(readdirSync(resolve(lease.batchPath!, "..")).filter(name => name.startsWith("batch-"))).toHaveLength(1);
+  });
+
+  it("does not delete an excluded --copies environment when merging a parent directory deletion", async () => {
+    const { root, manager } = setup();
+    mkdirSync(join(root, "project", ".venv"), { recursive: true });
+    writeFileSync(join(root, "project", ".venv", "pyvenv.cfg"), "home = python\n");
+    writeFileSync(join(root, "project", "main.py"), "pass\n");
+    const lease = await manager.acquire("delete", true);
+    rmSync(join(lease.path, "project"), { recursive: true });
+    const artifact = (await manager.finalize(lease))!;
+    expect((await new MergeCoordinator(manager).merge([artifact.artifactId])).success).toBe(false);
+    expect(existsSync(join(root, "project", ".venv", "pyvenv.cfg"))).toBe(true);
+    expect(existsSync(join(root, "project", "main.py"))).toBe(true);
+  });
+
+  it("does not let a symlink masquerade as a virtual environment marker", async () => {
+    const { root, manager } = setup();
+    mkdirSync(join(root, "fake-env"));
+    symlinkSync(process.execPath, join(root, "fake-env", "pyvenv.cfg"));
+    await expect(manager.acquire("unsafe-marker", true)).rejects.toThrow("copy workspace");
+  });
+
   it("isolates siblings and merges frozen binary, deletion, directory and executable edits", async () => {
     const { root, manager } = setup();
     writeFileSync(join(root, ".env"), "private");
