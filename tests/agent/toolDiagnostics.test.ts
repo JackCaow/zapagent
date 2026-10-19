@@ -182,7 +182,9 @@ describe("buildToolSchemaDiagnostics", () => {
         ],
       })!.definition,
       memorySaveTool({ store: emptyMemoryStore() }).definition,
-      executeCommandTool({ timeoutMs: 60_000, store: {} as never }).definition,
+      executeCommandTool({ timeoutMs: 60_000, store: {} as never, sandboxTemporaryDirectory: {
+        environmentVariables: ["TMPDIR", "TMP", "TEMP"], scope: "command", cleanup: "on-command-exit",
+      } }).definition,
       readFileTool().definition,
       writeFileTool().definition,
       subagentTool({
@@ -210,7 +212,8 @@ describe("buildToolSchemaDiagnostics", () => {
     // covers bash's timeout_ms parameter.
     expect(diagnostics.chars).toBeLessThanOrEqual(5_950)
     expect(diagnostics.estimatedTokens).toBeLessThanOrEqual(2_350)
-    expect(guidanceChars).toBeLessThanOrEqual(1_400)
+    // +700 for shell status caveats and the local sandbox scratch lifecycle.
+    expect(guidanceChars).toBeLessThanOrEqual(2_100)
   })
 })
 

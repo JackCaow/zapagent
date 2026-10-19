@@ -15,6 +15,8 @@ export interface ExecutionEnvironmentFacts {
   workspace: "mapped" | "native";
   rootFilesystem: "read-only" | "read-write";
   temporaryStorage: "request" | "session" | "persistent" | "unknown";
+  /** Applies only to commands launched through the local OS sandbox. */
+  sandboxTemporaryDirectory?: { environmentVariables: string[]; scope: "command"; cleanup: "on-command-exit" };
   workspaceMode?: string;
   network: "off" | "computer-allowlist" | "per-command-declaration" | "runtime-policy";
   commands?: string[];

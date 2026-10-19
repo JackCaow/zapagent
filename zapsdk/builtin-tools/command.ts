@@ -3,6 +3,7 @@ import { localExecutionShell } from "../execution/shell.js";
 import { z } from "zod";
 import { backgroundTaskLifecycle, describeBackgroundTaskLifecycle } from "../tasks/lifecycle.js";
 import type { Tool } from "../tools/types.js";
+import type { ExecutionEnvironmentFacts } from "../execution/types.js";
 import { zodToJsonSchema } from "../tools/schema.js";
 import {
   createLocalProcessBroker,
@@ -20,6 +21,7 @@ export interface ExecuteCommandOptions {
   /** Backend-reported shell for the tool description. Does not select or
    * launch an interpreter; the execution broker owns that decision. */
   executionShell?: string;
+  sandboxTemporaryDirectory?: ExecutionEnvironmentFacts["sandboxTemporaryDirectory"];
   /** Inject a shared TaskStore to enable the `run_in_background:true`
    *  flag. When omitted (or when `ZAPCODE_DISABLE_BACKGROUND_TASKS=1` is
    *  set), background fields are stripped from the schema entirely — the
@@ -232,6 +234,16 @@ export function executeCommandTool(options: ExecuteCommandOptions = {}): Tool {
       "network_destinations declares requested egress, not a guarantee of access. The runtime may apply a narrower policy or a shared environment allowlist. Execution errors report the observed outcome.",
     );
   }
+  promptLines.push(
+    "",
+    "Exit 0 reports final shell status only. Inspect stderr for warnings or masked failures; do not auto-replay side effects. Chain dependencies with &&. Pipelines report the last stage: check stages or use supported pipefail. Use check_steps for independent checks; each uses a fresh shell and stops on nonzero.",
+  );
+  if (options.sandboxTemporaryDirectory) {
+    promptLines.push(
+      `Local sandbox: expand ${options.sandboxTemporaryDirectory.environmentVariables.join(", ")} for a private writable scratch directory; avoid hard-coded /tmp or disposable project files.`,
+      "Create and consume scratch files in one command; cleanup happens on exit. Neither separate Bash calls nor check_steps entries share this directory. Unsandboxed commands differ.",
+    );
+  }
   const prompt = promptLines.length > 0 ? promptLines.join("\n") : undefined;
 
   // An explicit approved escape, or a command the user listed as incompatible
@@ -358,6 +370,7 @@ export function executeCommandTool(options: ExecuteCommandOptions = {}): Tool {
       let outcome: CommandOutcome | undefined;
       let checkedCommand = command;
       let pendingStep: string | undefined;
+      let stderrPresent = false;
       try {
         const callTimeout = callTimeoutMs(args);
         const deadline = Date.now() + callTimeout;
@@ -375,7 +388,12 @@ export function executeCommandTool(options: ExecuteCommandOptions = {}): Tool {
           outcome = await captureCommand(child, signal, Math.max(1, deadline - Date.now()), Math.max(1, maxBuffer - outputBytes));
           observedSteps.push({ command: step, exitCode: outcome.code });
           pendingStep = undefined;
-          const output = [outcome.stdout, outcome.stderr].filter(Boolean).join("\n");
+          stderrPresent ||= outcome.stderr.trim().length > 0;
+          // Do not bury diagnostics below stdout when a later shell command
+          // masks an earlier error. Stderr alone is not a nonzero exit code.
+          const output = (outcome.code === 0 && outcome.stderr.trim()
+            ? ["[stderr]", outcome.stderr, ...(outcome.stdout ? ["[stdout]", outcome.stdout] : [])]
+            : [outcome.stdout, outcome.stderr]).filter(Boolean).join("\n");
           outputBytes += Buffer.byteLength(output);
           if (checkSteps) outputs.push(`[Check ${observedSteps.length}/${checkSteps.length}: exit ${outcome.code ?? "unknown"}]\n${output}`);
           else outputs.push(output);
@@ -387,6 +405,7 @@ export function executeCommandTool(options: ExecuteCommandOptions = {}): Tool {
         const runtime = {
           command: { commandRef,
             ...(outcome.code === null ? {} : { exitCode: outcome.code }),
+            ...(stderrPresent ? { stderrPresent: true } : {}),
             timedOut: outcome.timedOut, aborted: outcome.aborted },
           ...(checkSteps ? { verification: {
             passed: observedSteps.length === checkSteps.length && outcome.code === 0
@@ -435,7 +454,9 @@ export function executeCommandTool(options: ExecuteCommandOptions = {}): Tool {
         if (checkSteps && !runtime.verification?.passed) {
           return { success: false, output: combined, error: "Checks did not all complete within the foreground deadline", runtime };
         }
-        return { success: true, output: combined, runtime };
+        return { success: true, output: stderrPresent
+          ? "[Shell exited 0 with stderr; earlier commands may have failed. Inspect diagnostics before treating the operation as successful.]\n" + combined
+          : combined, runtime };
       } catch (error) {
         return {
           success: false,

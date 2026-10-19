@@ -1,4 +1,5 @@
 import { localServiceOwnerNetworkPolicyDigest } from "../zapsdk/services/local-owner.js"
+import { localExecutionShell } from "../zapsdk/execution/shell.js"
 // Application composition adapter. Only this layer knows how a runtime is
 // discovered; Agent construction consumes a broker and factual capabilities.
 import {
@@ -47,8 +48,21 @@ function resolveRuntime(cwd: string, backend: ExecutionBackend) {
 }
 
 /** Descriptive data only: the Agent owns all decisions based on these facts. */
-function describeExecutionEnvironment({ resident, cloud, installation, capabilities }: ReturnType<typeof resolveRuntime>): ExecutionEnvironmentFacts | undefined {
-  if (!resident && !cloud && !installation) return undefined
+function describeExecutionEnvironment({ resident, cloud, installation, capabilities }: ReturnType<typeof resolveRuntime>, localSandboxAvailable: boolean): ExecutionEnvironmentFacts {
+  if (!resident && !cloud && !installation) return {
+    processPlatform: process.platform,
+    shell: localExecutionShell().executable,
+    workspace: "native",
+    rootFilesystem: "read-write",
+    // Escaped/unsandboxed commands retain the host's own temp lifecycle.
+    temporaryStorage: "unknown",
+    network: "runtime-policy",
+    ...(localSandboxAvailable ? { sandboxTemporaryDirectory: {
+      environmentVariables: ["TMPDIR", "TMP", "TEMP"],
+      scope: "command" as const,
+      cleanup: "on-command-exit" as const,
+    } } : {}),
+  }
   const persistent = resident || cloud?.computer_profile === "work" ||
     capabilities?.runtime_package_management === "persistent-rootless"
   return {
@@ -132,7 +146,7 @@ export function createExecutionEnvironment(
   const hostSandboxed = !installation && !cloud && !resident
   return {
     ...(serviceOwner ? { workspaceId: serviceOwner.capabilities.workspaceId } : {}),
-    facts: describeExecutionEnvironment(runtime),
+    facts: describeExecutionEnvironment(runtime, sandboxMode !== "disabled" && local.sandboxStatus().available),
     // A VM transport has its own execution resources. Never substitute Host observations.
     capacity: !installation && !cloud ? observeLocalExecutionCapacity() : undefined,
     broker: new TransparentExecutionBroker({

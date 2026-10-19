@@ -137,7 +137,14 @@ export interface ToolResult {
     /** Host content scope observation; no excluded body or URL is retained here. */
     resultSourcePolicy?: ResultSourcePolicyObservation;
     /** Actual foreground process status; commandRef is runtime-authored. */
-    command?: { commandRef: string; exitCode?: number; timedOut?: boolean; aborted?: boolean };
+    command?: {
+      commandRef: string;
+      exitCode?: number;
+      timedOut?: boolean;
+      aborted?: boolean;
+      /** Nonblank stderr in any foreground step; not proof of failure. */
+      stderrPresent?: boolean;
+    };
     /** Executor-resolved effects, independent of model output. */
     effects?: ToolEffects;
     /** Explicit foreground checks, observed rather than inferred from output.
