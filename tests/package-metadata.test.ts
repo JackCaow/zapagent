@@ -11,7 +11,7 @@ const root = process.cwd()
 describe("package metadata", () => {
   it("ships root license notices and documents the separate VM license", () => {
     const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf-8"))
-    expect(pkg.license).toBe("ISC")
+    expect(pkg.license).toBe("MIT")
     expect(pkg.files).toContain("LICENSE")
     expect(pkg.files).toContain("THIRD_PARTY_NOTICES.md")
     expect(readFileSync(join(root, "LICENSE"), "utf-8")).toContain("zapvm/LICENSE")

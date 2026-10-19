@@ -11,7 +11,7 @@ benchmark manifests, internal research/planning notes and unverified artwork are
 excluded. Existing source attribution remains intact. The original repository
 retains the complete development record.
 
-The CLI/SDK license remains ISC; `zapvm/` retains Apache-2.0 and its notices.
+The CLI/SDK use MIT (prior ISC notices are retained in `THIRD_PARTY_NOTICES.md`); `zapvm/` retains Apache-2.0 and its notices.
 A declared license is not evidence of ownership of every imported fragment.
 See [source provenance review](source-provenance-review.md) for unresolved items.
 

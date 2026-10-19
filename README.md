@@ -142,4 +142,4 @@ If this is the workflow you want in your terminal, star the repository and help 
 
 ## License
 
-CLI and SDK: [ISC](LICENSE). Independent VM module: [Apache-2.0](zapvm/LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.md) and [visual asset notes](docs/images/readme/README.md).
+CLI and SDK: [MIT](LICENSE). Independent VM module: [Apache-2.0](zapvm/LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.md) and [visual asset notes](docs/images/readme/README.md).

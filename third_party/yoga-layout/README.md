@@ -7,5 +7,5 @@ the repository's root LICENSE, but that file is absent from the npm payload.
 https://raw.githubusercontent.com/facebook/yoga/v3.2.1/LICENSE
 
 The npm packer includes it alongside that exact bundled dependency version.
-It does not change the root ISC license or the independent VM's Apache-2.0
+It does not change the root MIT license or the independent VM's Apache-2.0
 license. New dependency versions require checking their own notices.
