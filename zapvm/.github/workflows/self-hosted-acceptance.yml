@@ -1,0 +1,593 @@
+name: Self-hosted target acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Acceptance target to run
+        required: true
+        type: choice
+        options:
+          - linux-multi
+          - linux-power
+          - windows-acl-recovery
+          - windows-power
+          - macos-power
+          - macos-soak-72h
+      runner_label:
+        description: Dedicated zapvm-physical-<host-id> label assigned to exactly one physical runner
+        required: true
+        type: string
+      confirmation:
+        description: Explicit confirmation phrase documented in README
+        required: true
+        type: string
+      wake_seconds:
+        description: Automatic wake delay for power tests (30-300)
+        required: false
+        default: "45"
+        type: string
+      candidate_repository:
+        description: Private repository containing the signed Resident Agent release
+        required: false
+        default: JackCaow/zapcode
+        type: string
+      candidate_tag:
+        description: Immutable Resident Agent release tag (required for Linux/Windows)
+        required: false
+        type: string
+      candidate_bundle_sha256:
+        description: Expected SHA-256 of zapvm-image-amd64.bundle.tar.zst
+        required: false
+        type: string
+      candidate_public_key_sha256:
+        description: Expected SHA-256 of zapvm-image-amd64.public.pem
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: self-hosted-acceptance-${{ inputs.runner_label }}
+  cancel-in-progress: false
+
+env:
+  ZAPVM_CI_IMAGE_VERSION: 0.1.0-self-hosted.${{ github.run_id }}.${{ github.run_attempt }}
+
+jobs:
+  authorize:
+    name: Validate destructive-operation confirmation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Validate dispatch inputs
+        shell: bash
+        env:
+          TARGET: ${{ inputs.target }}
+          RUNNER_LABEL: ${{ inputs.runner_label }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          WAKE_SECONDS: ${{ inputs.wake_seconds }}
+          CANDIDATE_REPOSITORY: ${{ inputs.candidate_repository }}
+          CANDIDATE_TAG: ${{ inputs.candidate_tag }}
+          CANDIDATE_BUNDLE_SHA256: ${{ inputs.candidate_bundle_sha256 }}
+          CANDIDATE_PUBLIC_KEY_SHA256: ${{ inputs.candidate_public_key_sha256 }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$RUNNER_LABEL" =~ ^zapvm-physical-[A-Za-z0-9][A-Za-z0-9._-]{0,62}$ ]]; then
+            echo "runner_label must be a dedicated label named zapvm-physical-<host-id>" >&2
+            exit 2
+          fi
+          [[ "$WAKE_SECONDS" =~ ^[0-9]+$ ]]
+          (( WAKE_SECONDS >= 30 && WAKE_SECONDS <= 300 ))
+          case "$TARGET" in
+            linux-multi|windows-acl-recovery)
+              expected=RUN_SELF_HOSTED_ACCEPTANCE
+              ;;
+            linux-power|windows-power|macos-power)
+              expected=I_UNDERSTAND_THIS_WILL_SUSPEND_THE_RUNNER
+              ;;
+            macos-soak-72h)
+              expected=RUN_72_HOUR_SOAK
+              ;;
+            *)
+              echo "Unsupported target: $TARGET" >&2
+              exit 2
+              ;;
+          esac
+          if [[ "$CONFIRMATION" != "$expected" ]]; then
+            echo "Confirmation for $TARGET must exactly equal $expected" >&2
+            exit 2
+          fi
+          if [[ "$TARGET" == linux-* || "$TARGET" == windows-* ]]; then
+            [[ "$CANDIDATE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || {
+              echo "candidate_repository must be an owner/repository name" >&2
+              exit 2
+            }
+            [[ "$CANDIDATE_TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$ ]] || {
+              echo "candidate_tag is required and must be an immutable release tag" >&2
+              exit 2
+            }
+            [[ "$CANDIDATE_BUNDLE_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+              echo "candidate_bundle_sha256 must be a lowercase SHA-256" >&2
+              exit 2
+            }
+            [[ "$CANDIDATE_PUBLIC_KEY_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+              echo "candidate_public_key_sha256 must be a lowercase SHA-256" >&2
+              exit 2
+            }
+          fi
+
+  fetch-signed-amd64:
+    name: Fetch exact signed amd64 Resident image
+    if: ${{ startsWith(inputs.target, 'linux-') || startsWith(inputs.target, 'windows-') }}
+    needs: authorize
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run source gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./...
+          go vet ./...
+          bash -n scripts/preflight-self-hosted-unix.sh
+          sh -n scripts/acceptance-host-power-unix.sh
+          if grep -nE 'sudo -n (setfacl|sysctl|loginctl enable-linger|systemctl start user@)' \
+            .github/workflows/self-hosted-acceptance.yml; then
+            echo "self-hosted acceptance must not reconfigure Host capabilities" >&2
+            exit 1
+          fi
+      - name: Download the release candidate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.ZAPVM_REPOSITORY_TOKEN }}
+          CANDIDATE_REPOSITORY: ${{ inputs.candidate_repository }}
+          CANDIDATE_TAG: ${{ inputs.candidate_tag }}
+        run: |
+          set -euo pipefail
+          release_dir="$RUNNER_TEMP/zapvm-image"
+          test -n "$GH_TOKEN" || { echo "ZAPVM_REPOSITORY_TOKEN is required" >&2; exit 1; }
+          mkdir -p "$release_dir"
+          gh release download "$CANDIDATE_TAG" \
+            --repo "$CANDIDATE_REPOSITORY" \
+            --pattern zapvm-image-amd64.bundle.tar.zst \
+            --pattern zapvm-image-amd64.public.pem \
+            --dir "$release_dir"
+
+      - name: Verify the exact Resident Agent candidate
+        shell: bash
+        env:
+          CANDIDATE_REPOSITORY: ${{ inputs.candidate_repository }}
+          CANDIDATE_TAG: ${{ inputs.candidate_tag }}
+          CANDIDATE_BUNDLE_SHA256: ${{ inputs.candidate_bundle_sha256 }}
+          CANDIDATE_PUBLIC_KEY_SHA256: ${{ inputs.candidate_public_key_sha256 }}
+        run: |
+          set -euo pipefail
+          release_dir="$RUNNER_TEMP/zapvm-image"
+          bundle="$release_dir/zapvm-image-amd64.bundle.tar.zst"
+          public_key="$release_dir/zapvm-image-amd64.public.pem"
+          test -f "$bundle" && test ! -L "$bundle"
+          test -f "$public_key" && test ! -L "$public_key"
+          printf '%s  %s\n%s  %s\n' \
+            "$CANDIDATE_BUNDLE_SHA256" "$(basename "$bundle")" \
+            "$CANDIDATE_PUBLIC_KEY_SHA256" "$(basename "$public_key")" \
+            >"$release_dir/SHA256SUMS"
+          (cd "$release_dir" && sha256sum -c SHA256SUMS)
+
+          image_tool="$RUNNER_TEMP/zapvm-image-tool"
+          inspect_root="$RUNNER_TEMP/zapvm-image-inspect"
+          go build -trimpath -o "$image_tool" ./cmd/zapvm-image
+          "$image_tool" install-bundle --bundle "$bundle" --public-key "$public_key" \
+            --root "$inspect_root" --arch amd64 --activate=false
+          candidate_directories=("$inspect_root"/*)
+          test "${#candidate_directories[@]}" -eq 1
+          test -d "${candidate_directories[0]}" && test ! -L "${candidate_directories[0]}"
+          active_version=$(basename "${candidate_directories[0]}")
+          provenance="$inspect_root/$active_version/agent-provenance.json"
+          jq -e '
+            .schema_version == 1 and
+            .agent_version != "unavailable" and
+            (.source_commit | test("^[0-9a-f]{40}$")) and
+            (.build_target | test("^bun-linux-x64-musl([+-].*)?$")) and
+            (.builder_version | test("^[0-9A-Za-z._+-]+$")) and
+            (.binary_sha256 | test("^[0-9a-f]{64}$"))
+          ' "$provenance" >/dev/null
+          printf 'candidate_repository=%s\ncandidate_tag=%s\ncandidate_bundle_sha256=%s\ncandidate_public_key_sha256=%s\nactive_version=%s\n' \
+            "$CANDIDATE_REPOSITORY" "$CANDIDATE_TAG" "$CANDIDATE_BUNDLE_SHA256" \
+            "$CANDIDATE_PUBLIC_KEY_SHA256" "$active_version" \
+            >"$release_dir/CANDIDATE_IDENTITY"
+
+      - name: Upload signed image
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: zapvm-self-hosted-image-amd64
+          path: ${{ runner.temp }}/zapvm-image
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  linux:
+    name: Linux ${{ inputs.target }}
+    if: ${{ startsWith(inputs.target, 'linux-') }}
+    needs: [authorize, fetch-signed-amd64]
+    runs-on:
+      - self-hosted
+      - ${{ inputs.runner_label }}
+    timeout-minutes: 90
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download signed image
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: zapvm-self-hosted-image-amd64
+          path: ${{ runner.temp }}/zapvm-image
+
+      - name: Assert real Linux target capabilities
+        shell: bash
+        env:
+          TARGET: ${{ inputs.target }}
+          WAKE_SECONDS: ${{ inputs.wake_seconds }}
+        run: |
+          set -euo pipefail
+          evidence_root="$RUNNER_WORKSPACE/zapvm-linux-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          [[ ! -e "$evidence_root" ]]
+          mkdir -p "$evidence_root"
+          echo "ZAPVM_EVIDENCE_ROOT=$evidence_root" >>"$GITHUB_ENV"
+          uid="$(id -u)"
+          echo "XDG_RUNTIME_DIR=/run/user/$uid" >>"$GITHUB_ENV"
+          export XDG_RUNTIME_DIR="/run/user/$uid"
+          ./scripts/preflight-self-hosted-unix.sh "$TARGET" "$WAKE_SECONDS" 2>&1 | tee "$evidence_root/host-preflight.log"
+          (cd "$RUNNER_TEMP/zapvm-image" && sha256sum -c SHA256SUMS)
+
+      - name: Run complete same-host multi-route acceptance
+        shell: bash
+        env:
+          ZAPVM_ACCEPTANCE_IMAGE_BUNDLE: ${{ runner.temp }}/zapvm-image/zapvm-image-amd64.bundle.tar.zst
+          ZAPVM_ACCEPTANCE_IMAGE_PUBLIC_KEY: ${{ runner.temp }}/zapvm-image/zapvm-image-amd64.public.pem
+          TARGET: ${{ inputs.target }}
+          WAKE_SECONDS: ${{ inputs.wake_seconds }}
+        run: |
+          set -euo pipefail
+          evidence_root="$ZAPVM_EVIDENCE_ROOT"
+          ./scripts/acceptance-linux.sh "$evidence_root/complete"
+          if [[ "$TARGET" == linux-power ]]; then
+            ZAPVM_POWER_WAKE_SECONDS="$WAKE_SECONDS" \
+              ./scripts/acceptance-host-power-unix.sh \
+                "$evidence_root/complete/zapvm" \
+                "$evidence_root/complete/images" \
+                "$ZAPVM_ACCEPTANCE_IMAGE_PUBLIC_KEY" \
+                "$evidence_root/complete/workspace" \
+                "$evidence_root/power"
+          fi
+
+      - name: Collect host diagnostics
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -u
+          if [[ -n "${ZAPVM_EVIDENCE_ROOT:-}" ]]; then
+            mkdir -p "$ZAPVM_EVIDENCE_ROOT"
+            sudo -n dmesg --ctime | tail -n 1000 >"$ZAPVM_EVIDENCE_ROOT/host-dmesg.txt"
+          fi
+
+      - name: Package evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/linux-self-hosted-evidence.tar.gz"
+          if [[ -n "${ZAPVM_EVIDENCE_ROOT:-}" && -d "$ZAPVM_EVIDENCE_ROOT" ]]; then
+            cd "$ZAPVM_EVIDENCE_ROOT"
+            find . -type f \( -name '*.log' -o -name '*.json' -o -name '*.jsonl' -o -name '*.txt' -o -name '*.stderr' -o -name '*.stdout' \) \
+              -print0 | tar --null -czf "$output" --files-from=-
+          else
+            tar -czf "$output" --files-from=/dev/null
+          fi
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux-${{ inputs.target }}-evidence
+          path: ${{ runner.temp }}/linux-self-hosted-evidence.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+
+  windows:
+    name: Windows ${{ inputs.target }}
+    if: ${{ startsWith(inputs.target, 'windows-') }}
+    needs: [authorize, fetch-signed-amd64]
+    runs-on:
+      - self-hosted
+      - ${{ inputs.runner_label }}
+    timeout-minutes: 180
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download signed image
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: zapvm-self-hosted-image-amd64
+          path: ${{ runner.temp }}\zapvm-image
+
+      - name: Assert real Windows target capabilities
+        shell: pwsh
+        env:
+          TARGET: ${{ inputs.target }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $evidenceRoot = Join-Path $env:RUNNER_WORKSPACE "zapvm-windows-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          if (Test-Path -LiteralPath $evidenceRoot) { throw "Refusing existing evidence root: $evidenceRoot" }
+          New-Item -ItemType Directory -Path $evidenceRoot | Out-Null
+          "ZAPVM_EVIDENCE_ROOT=$evidenceRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          & .\scripts\preflight-self-hosted-windows.ps1 -Target $env:TARGET 2>&1 |
+            Tee-Object -FilePath (Join-Path $evidenceRoot "host-preflight.log")
+          $root = Join-Path $env:RUNNER_TEMP "zapvm-image"
+          foreach ($line in Get-Content -LiteralPath (Join-Path $root "SHA256SUMS")) {
+            if ($line -notmatch '^([0-9a-f]{64})  (.+)$') { throw "Malformed SHA256SUMS line: $line" }
+            $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $root ([IO.Path]::GetFileName($Matches[2])))).Hash.ToLowerInvariant()
+            if ($actual -ne $Matches[1]) { throw "SHA-256 mismatch for $($Matches[2])" }
+          }
+
+      - name: Run complete acceptance and selected Windows specialty gate
+        shell: pwsh
+        env:
+          TARGET: ${{ inputs.target }}
+          WAKE_SECONDS: ${{ inputs.wake_seconds }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $evidenceRoot = $env:ZAPVM_EVIDENCE_ROOT
+          $imageArtifact = Join-Path $env:RUNNER_TEMP "zapvm-image"
+          $complete = Join-Path $evidenceRoot "complete"
+          $completeParameters = @{
+            EvidenceDirectory = $complete
+            Architecture = "amd64"
+            SignedImageBundle = Join-Path $imageArtifact "zapvm-image-amd64.bundle.tar.zst"
+            SignedImagePublicKey = Join-Path $imageArtifact "zapvm-image-amd64.public.pem"
+          }
+          & .\scripts\acceptance-windows.ps1 @completeParameters
+          if ($env:TARGET -eq "windows-acl-recovery") {
+            $active = Get-Content -Raw -LiteralPath (Join-Path $complete "images\active.json") | ConvertFrom-Json
+            $aclParameters = @{
+              ImageRoot = Join-Path $complete "images"
+              ImagePublicKey = Join-Path $imageArtifact "zapvm-image-amd64.public.pem"
+              StateTemplate = Join-Path (Join-Path (Join-Path $complete "images") $active.active_version) "state.vhdx"
+              Workspace = Join-Path $complete "workspace"
+              EvidenceDirectory = Join-Path $evidenceRoot "acl-recovery"
+            }
+            & .\scripts\acceptance-windows-hcs-grant-recovery.ps1 @aclParameters
+          } else {
+            $powerParameters = @{
+              ZapVM = Join-Path $complete "zapvm.exe"
+              ImageRoot = Join-Path $complete "images"
+              ImagePublicKey = Join-Path $imageArtifact "zapvm-image-amd64.public.pem"
+              Workspace = Join-Path $complete "workspace"
+              EvidenceDirectory = Join-Path $evidenceRoot "power"
+              WakeSeconds = [int]$env:WAKE_SECONDS
+            }
+            & .\scripts\acceptance-host-power-windows.ps1 @powerParameters
+          }
+
+      - name: Package evidence
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $output = Join-Path $env:RUNNER_TEMP "windows-self-hosted-evidence.zip"
+          $staging = Join-Path $env:RUNNER_TEMP "windows-self-hosted-evidence-staging-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          New-Item -ItemType Directory -Path $staging -Force | Out-Null
+          if (-not [string]::IsNullOrWhiteSpace($env:ZAPVM_EVIDENCE_ROOT) -and (Test-Path -LiteralPath $env:ZAPVM_EVIDENCE_ROOT)) {
+            Get-ChildItem -LiteralPath $env:ZAPVM_EVIDENCE_ROOT -Recurse -File |
+              Where-Object { $_.Extension -in @(".log", ".json", ".jsonl", ".txt", ".stderr", ".stdout") } |
+              ForEach-Object {
+                $relative = [IO.Path]::GetRelativePath($env:ZAPVM_EVIDENCE_ROOT, $_.FullName)
+                $destination = Join-Path $staging $relative
+                New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($destination)) -Force | Out-Null
+                Copy-Item -LiteralPath $_.FullName -Destination $destination
+              }
+          }
+          if (-not (Get-ChildItem -LiteralPath $staging -Recurse -File)) { "No evidence created" | Set-Content (Join-Path $staging "no-evidence.txt") }
+          Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $output -Force
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ inputs.target }}-evidence
+          path: ${{ runner.temp }}\windows-self-hosted-evidence.zip
+          if-no-files-found: error
+          retention-days: 30
+
+  macos-power:
+    name: macOS real Host sleep/wake
+    if: ${{ inputs.target == 'macos-power' }}
+    needs: authorize
+    runs-on:
+      - self-hosted
+      - ${{ inputs.runner_label }}
+    timeout-minutes: 120
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Assert real macOS power target capabilities
+        shell: bash
+        env:
+          WAKE_SECONDS: ${{ inputs.wake_seconds }}
+        run: |
+          set -euo pipefail
+          evidence_root="$RUNNER_WORKSPACE/zapvm-macos-power-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          [[ ! -e "$evidence_root" ]]
+          mkdir -p "$evidence_root"
+          echo "ZAPVM_EVIDENCE_ROOT=$evidence_root" >>"$GITHUB_ENV"
+          ./scripts/preflight-self-hosted-unix.sh macos-power "$WAKE_SECONDS" 2>&1 | tee "$evidence_root/host-preflight.log"
+
+      - name: Build signed Host and arm64 guest image
+        shell: bash
+        env:
+          ZAPVM_IMAGE_VERSION: ${{ env.ZAPVM_CI_IMAGE_VERSION }}
+        run: |
+          set -euo pipefail
+          [[ "$(uname -s)" == Darwin ]]
+          [[ "$(uname -m)" == arm64 ]]
+          command -v go >/dev/null
+          command -v docker >/dev/null
+          go test ./...
+          go vet ./...
+          make image-arm64 build-macos
+
+      - name: Run preparation VM and real Host power transition
+        shell: bash
+        env:
+          WAKE_SECONDS: ${{ inputs.wake_seconds }}
+        run: |
+          set -euo pipefail
+          evidence_root="$ZAPVM_EVIDENCE_ROOT"
+          ./scripts/soak-macos-long.sh 1 1 "$evidence_root/preparation"
+          ZAPVM_POWER_WAKE_SECONDS="$WAKE_SECONDS" \
+            ./scripts/acceptance-host-power-unix.sh \
+              "$GITHUB_WORKSPACE/bin/zapvm" \
+              "$evidence_root/preparation/images" \
+              "$evidence_root/preparation/image-public.pem" \
+              "$evidence_root/preparation/workspace" \
+              "$evidence_root/power"
+
+      - name: Package evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/macos-power-evidence.tar.gz"
+          if [[ -n "${ZAPVM_EVIDENCE_ROOT:-}" && -d "$ZAPVM_EVIDENCE_ROOT" ]]; then
+            cd "$ZAPVM_EVIDENCE_ROOT"
+            find . -type f \( -name '*.log' -o -name '*.json' -o -name '*.jsonl' -o -name '*.txt' -o -name '*.csv' -o -name '*.stderr' -o -name '*.stdout' \) \
+              -print0 | tar --null -czf "$output" --files-from=-
+          else
+            tar -czf "$output" --files-from=/dev/null
+          fi
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-power-evidence
+          path: ${{ runner.temp }}/macos-power-evidence.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+
+  macos-soak:
+    name: macOS 72 hour soak
+    if: ${{ inputs.target == 'macos-soak-72h' }}
+    needs: authorize
+    runs-on:
+      - self-hosted
+      - ${{ inputs.runner_label }}
+    timeout-minutes: 4560
+    outputs:
+      evidence_directory: ${{ steps.paths.outputs.evidence_directory }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Allocate durable evidence directory
+        id: paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_WORKSPACE/zapvm-macos-soak-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          [[ ! -e "$evidence" ]]
+          mkdir -p "$evidence"
+          echo "evidence_directory=$evidence" >>"$GITHUB_OUTPUT"
+          echo "soak_directory=$evidence/soak" >>"$GITHUB_OUTPUT"
+
+      - name: Assert real macOS soak target capabilities
+        shell: bash
+        env:
+          EVIDENCE_DIRECTORY: ${{ steps.paths.outputs.evidence_directory }}
+        run: |
+          set -euo pipefail
+          ./scripts/preflight-self-hosted-unix.sh macos-soak-72h 2>&1 | tee "$EVIDENCE_DIRECTORY/host-preflight.log"
+
+      - name: Build signed Host and arm64 guest image
+        shell: bash
+        env:
+          ZAPVM_IMAGE_VERSION: ${{ env.ZAPVM_CI_IMAGE_VERSION }}
+        run: |
+          set -euo pipefail
+          [[ "$(uname -s)" == Darwin ]]
+          [[ "$(uname -m)" == arm64 ]]
+          command -v go >/dev/null
+          command -v docker >/dev/null
+          go test ./...
+          go vet ./...
+          make image-arm64 build-macos
+
+      - name: Run 72 hour soak without post-24h API calls
+        shell: bash
+        env:
+          SOAK_DIRECTORY: ${{ steps.paths.outputs.soak_directory }}
+        run: |
+          set -euo pipefail
+          ./scripts/soak-macos-long.sh 259200 30 "$SOAK_DIRECTORY"
+
+  macos-soak-upload:
+    name: Upload macOS 72 hour soak evidence with fresh token
+    if: ${{ always() && inputs.target == 'macos-soak-72h' }}
+    needs: macos-soak
+    runs-on:
+      - self-hosted
+      - ${{ inputs.runner_label }}
+    timeout-minutes: 30
+    steps:
+      - name: Package durable evidence
+        shell: bash
+        env:
+          EVIDENCE_DIRECTORY: ${{ needs.macos-soak.outputs.evidence_directory }}
+        run: |
+          set -euo pipefail
+          [[ -n "$EVIDENCE_DIRECTORY" ]]
+          [[ -d "$EVIDENCE_DIRECTORY" ]]
+          output="$RUNNER_TEMP/macos-soak-72h-evidence.tar.gz"
+          cd "$EVIDENCE_DIRECTORY"
+          find . -type f \( -name '*.log' -o -name '*.json' -o -name '*.jsonl' -o -name '*.txt' -o -name '*.csv' \) \
+            -print0 | tar --null -czf "$output" --files-from=-
+
+      - name: Upload evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-soak-72h-evidence
+          path: ${{ runner.temp }}/macos-soak-72h-evidence.tar.gz
+          if-no-files-found: error
+          retention-days: 30

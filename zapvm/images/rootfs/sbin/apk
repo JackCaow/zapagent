@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+for argument in "$@"; do
+	case "$argument" in
+		add|del|fix|update|upgrade)
+			echo "ZAPVM_ERROR[IMMUTABLE_ROOTFS]: system packages are fixed by the signed VM image; use an advertised runtime or a project-local dependency environment" >&2
+			exit 78
+			;;
+	esac
+done
+
+exec /usr/libexec/zapvm/apk-query "$@"

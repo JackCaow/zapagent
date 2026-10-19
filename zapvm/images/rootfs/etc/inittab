@@ -1,0 +1,6 @@
+::sysinit:/sbin/openrc sysinit
+::sysinit:/sbin/openrc boot
+::wait:/sbin/openrc default
+::respawn:/usr/local/sbin/zapvm-getty
+::ctrlaltdel:/sbin/reboot
+::shutdown:/sbin/openrc shutdown

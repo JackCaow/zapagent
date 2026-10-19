@@ -1,0 +1,17 @@
+#!/bin/sh
+set -eu
+
+# HCN/VFP filters traffic crossing the virtual switch, but Windows Host-to-VM
+# traffic on an HCN NAT endpoint can bypass that path. Enforce the VM boundary
+# again inside the signed guest: outbound flows and their replies remain usable,
+# while every unsolicited inbound flow is rejected before workloads start.
+nft delete table inet zapvm_guard 2>/dev/null || true
+nft -f - <<'EOF'
+table inet zapvm_guard {
+	chain input {
+		type filter hook input priority filter; policy drop;
+		iifname "lo" accept
+		ct state established,related accept
+	}
+}
+EOF

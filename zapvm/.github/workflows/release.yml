@@ -1,0 +1,204 @@
+name: Draft release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  source-gates:
+    name: Release source gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Check out tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Authorize signed release tag on main
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || {
+            echo "release tag must be a semantic version" >&2
+            exit 2
+          }
+          ref=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG")
+          tag_object_type=$(jq -r '.object.type' <<<"$ref")
+          tag_object_sha=$(jq -r '.object.sha' <<<"$ref")
+          [[ "$tag_object_type" == tag ]] || {
+            echo "release tag must be annotated and signed; lightweight tags are rejected" >&2
+            exit 1
+          }
+          tag=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$tag_object_sha")
+          jq -e --arg commit "$RELEASE_COMMIT" '
+            .object.type == "commit" and
+            .object.sha == $commit and
+            .verification.verified == true and
+            .verification.reason == "valid"
+          ' <<<"$tag" >/dev/null || {
+            echo "release tag is unsigned, invalid, or does not resolve to the workflow commit" >&2
+            exit 1
+          }
+          comparison=$(gh api "repos/$GITHUB_REPOSITORY/compare/$RELEASE_COMMIT...main")
+          jq -e --arg commit "$RELEASE_COMMIT" '
+            (.status == "ahead" or .status == "identical") and
+            .merge_base_commit.sha == $commit
+          ' <<<"$comparison" >/dev/null || {
+            echo "release commit is not reachable from main" >&2
+            exit 1
+          }
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify source and version
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]
+          ./scripts/verify-repository.sh
+          go test ./...
+          go test -race ./...
+          go vet ./...
+
+  unix-host:
+    name: Package ${{ matrix.runner }}
+    needs: source-gates
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, macos-latest]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - name: Check out tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Package Host tools reproducibly
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOURCE_DATE_EPOCH="$(git show -s --format=%ct "$GITHUB_SHA")"
+          export SOURCE_DATE_EPOCH
+          ./scripts/package-host-release.sh "$GITHUB_REF_NAME" "$RUNNER_TEMP/release"
+          ./scripts/package-host-release.sh "$GITHUB_REF_NAME" "$RUNNER_TEMP/release-rebuild"
+          first=("$RUNNER_TEMP"/release/*.tar.gz)
+          second=("$RUNNER_TEMP"/release-rebuild/*.tar.gz)
+          test "${#first[@]}" -eq 1
+          test "${#second[@]}" -eq 1
+          cmp "${first[0]}" "${second[0]}"
+          if command -v sha256sum >/dev/null 2>&1; then
+            archive_sha256=$(sha256sum "${first[0]}" | awk '{print $1}')
+          else
+            archive_sha256=$(shasum -a 256 "${first[0]}" | awk '{print $1}')
+          fi
+          echo "HOST_PACKAGE_REPRODUCIBLE sha256=$archive_sha256"
+
+      - name: Verify Host package from a clean extraction
+        shell: bash
+        run: ./scripts/verify-host-release.sh "$RUNNER_TEMP/release"/*.tar.gz "$GITHUB_REF_NAME"
+
+      - name: Upload package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: host-${{ matrix.runner }}
+          path: ${{ runner.temp }}/release/*
+          if-no-files-found: error
+
+  windows-host:
+    name: Package windows-2025
+    needs: source-gates
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - name: Check out tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Package Host tools reproducibly
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $env:SOURCE_DATE_EPOCH = (& git show -s --format=%ct $env:GITHUB_SHA).Trim()
+          .\scripts\package-host-release.ps1 -Version $env:GITHUB_REF_NAME -OutputDirectory "$env:RUNNER_TEMP\release"
+          .\scripts\package-host-release.ps1 -Version $env:GITHUB_REF_NAME -OutputDirectory "$env:RUNNER_TEMP\release-rebuild"
+          $first = @(Get-ChildItem "$env:RUNNER_TEMP\release\*.zip")
+          $second = @(Get-ChildItem "$env:RUNNER_TEMP\release-rebuild\*.zip")
+          if ($first.Count -ne 1 -or $second.Count -ne 1) { throw "expected one Host archive in each build" }
+          $firstHash = (Get-FileHash -Algorithm SHA256 $first[0].FullName).Hash.ToLowerInvariant()
+          $secondHash = (Get-FileHash -Algorithm SHA256 $second[0].FullName).Hash.ToLowerInvariant()
+          if ($firstHash -ne $secondHash) { throw "Host package rebuild mismatch: $firstHash != $secondHash" }
+          Write-Output "HOST_PACKAGE_REPRODUCIBLE sha256=$firstHash"
+
+      - name: Verify Host package from a clean extraction
+        shell: pwsh
+        run: .\scripts\verify-host-release.ps1 -Archive (Get-ChildItem "$env:RUNNER_TEMP\release\*.zip").FullName -Version $env:GITHUB_REF_NAME
+
+      - name: Upload package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: host-windows-2025
+          path: ${{ runner.temp }}\release\*
+          if-no-files-found: error
+
+  draft:
+    name: Create draft release
+    needs: [unix-host, windows-host]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Download Host packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: host-*
+          path: release
+          merge-multiple: true
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release
+          checksums=$(mktemp)
+          trap 'rm -f "$checksums"' EXIT
+          find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > "$checksums"
+          mv "$checksums" SHA256SUMS
+          test -s SHA256SUMS
+
+      - name: Create draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --draft \
+            --title "$GITHUB_REF_NAME" \
+            --notes "Unsigned draft artifacts. Complete docs/release.md native signing, image, license, hardware, and publication gates before publishing." \
+            release/*

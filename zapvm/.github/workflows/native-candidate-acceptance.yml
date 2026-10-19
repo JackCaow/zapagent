@@ -1,0 +1,265 @@
+name: Native release candidate acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Native target Host
+        required: true
+        type: choice
+        options:
+          - linux-kvm
+          - windows-hcs
+      runner_label:
+        description: Dedicated zapvm-physical-<host-id> runner label
+        required: true
+        type: string
+      confirmation:
+        description: Must equal RUN_NATIVE_CANDIDATE_ACCEPTANCE
+        required: true
+        type: string
+      candidate_version:
+        description: Host package version without a leading v
+        required: true
+        default: 0.3.0-rc.3
+        type: string
+      candidate_bundle_path:
+        description: Absolute path to the signed amd64 bundle already staged on the runner
+        required: true
+        type: string
+      candidate_public_key_path:
+        description: Absolute path to the image public key already staged on the runner
+        required: true
+        type: string
+      candidate_bundle_sha256:
+        description: Operator-pinned lowercase SHA-256 of the bundle
+        required: true
+        type: string
+      candidate_public_key_sha256:
+        description: Operator-pinned lowercase SHA-256 of the public key
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-candidate-${{ inputs.runner_label }}
+  cancel-in-progress: false
+
+jobs:
+  linux:
+    name: Linux KVM exact candidate
+    if: ${{ inputs.target == 'linux-kvm' }}
+    runs-on:
+      - self-hosted
+      - ${{ inputs.runner_label }}
+    timeout-minutes: 120
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Authorize the dedicated Host
+        shell: bash
+        env:
+          RUNNER_LABEL: ${{ inputs.runner_label }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          CANDIDATE_VERSION: ${{ inputs.candidate_version }}
+          CANDIDATE_BUNDLE: ${{ inputs.candidate_bundle_path }}
+          CANDIDATE_PUBLIC_KEY: ${{ inputs.candidate_public_key_path }}
+          CANDIDATE_BUNDLE_SHA256: ${{ inputs.candidate_bundle_sha256 }}
+          CANDIDATE_PUBLIC_KEY_SHA256: ${{ inputs.candidate_public_key_sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$RUNNER_LABEL" =~ ^zapvm-physical-[A-Za-z0-9][A-Za-z0-9._-]{0,62}$ ]]
+          [[ "$CONFIRMATION" == RUN_NATIVE_CANDIDATE_ACCEPTANCE ]]
+          [[ "$CANDIDATE_VERSION" =~ ^[0-9A-Za-z][0-9A-Za-z.+-]*$ ]]
+          [[ "$CANDIDATE_BUNDLE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$CANDIDATE_PUBLIC_KEY_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$(uname -m)" == x86_64 ]]
+          [[ "$CANDIDATE_BUNDLE" = /* && "$CANDIDATE_PUBLIC_KEY" = /* ]]
+          [[ -f "$CANDIDATE_BUNDLE" && ! -L "$CANDIDATE_BUNDLE" ]]
+          [[ -f "$CANDIDATE_PUBLIC_KEY" && ! -L "$CANDIDATE_PUBLIC_KEY" ]]
+
+          evidence_root="$RUNNER_WORKSPACE/zapvm-native-linux-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          [[ ! -e "$evidence_root" ]]
+          echo "ZAPVM_EVIDENCE_ROOT=$evidence_root" >>"$GITHUB_ENV"
+          XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          export XDG_RUNTIME_DIR
+          echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >>"$GITHUB_ENV"
+
+      - name: Run source gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./...
+          go test -race ./...
+          go vet ./...
+          ./scripts/verify-repository.sh
+
+      - name: Run complete exact-candidate acceptance
+        shell: bash
+        env:
+          CANDIDATE_VERSION: ${{ inputs.candidate_version }}
+          CANDIDATE_BUNDLE: ${{ inputs.candidate_bundle_path }}
+          CANDIDATE_PUBLIC_KEY: ${{ inputs.candidate_public_key_path }}
+          CANDIDATE_BUNDLE_SHA256: ${{ inputs.candidate_bundle_sha256 }}
+          CANDIDATE_PUBLIC_KEY_SHA256: ${{ inputs.candidate_public_key_sha256 }}
+        run: |
+          set -euo pipefail
+          ./scripts/acceptance-native-candidate-linux.sh \
+            "$ZAPVM_EVIDENCE_ROOT" "$CANDIDATE_VERSION" \
+            "$CANDIDATE_BUNDLE" "$CANDIDATE_PUBLIC_KEY" \
+            "$CANDIDATE_BUNDLE_SHA256" "$CANDIDATE_PUBLIC_KEY_SHA256"
+          host_archive="$ZAPVM_EVIDENCE_ROOT/release/zapvm_${CANDIDATE_VERSION}_linux_amd64.tar.gz"
+          echo "ZAPVM_NATIVE_HOST_ARCHIVE=$host_archive" >>"$GITHUB_ENV"
+
+      - name: Package retained evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/linux-native-candidate-evidence.tar.gz"
+          if [[ -n "${ZAPVM_EVIDENCE_ROOT:-}" && -d "$ZAPVM_EVIDENCE_ROOT" ]]; then
+            tar --sparse -czf "$output" -C "$(dirname "$ZAPVM_EVIDENCE_ROOT")" "$(basename "$ZAPVM_EVIDENCE_ROOT")"
+            printf 'Evidence retained on runner: %s\n' "$ZAPVM_EVIDENCE_ROOT" >>"$GITHUB_STEP_SUMMARY"
+          else
+            tar -czf "$output" --files-from=/dev/null
+          fi
+
+      - name: Upload evidence and native Host package
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux-native-candidate-evidence
+          path: |
+            ${{ runner.temp }}/linux-native-candidate-evidence.tar.gz
+            ${{ env.ZAPVM_NATIVE_HOST_ARCHIVE }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+  windows:
+    name: Windows HCS exact candidate
+    if: ${{ inputs.target == 'windows-hcs' }}
+    runs-on:
+      - self-hosted
+      - ${{ inputs.runner_label }}
+    timeout-minutes: 240
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Authorize the dedicated Host
+        shell: pwsh
+        env:
+          RUNNER_LABEL: ${{ inputs.runner_label }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          CANDIDATE_VERSION: ${{ inputs.candidate_version }}
+          CANDIDATE_BUNDLE: ${{ inputs.candidate_bundle_path }}
+          CANDIDATE_PUBLIC_KEY: ${{ inputs.candidate_public_key_path }}
+          CANDIDATE_BUNDLE_SHA256: ${{ inputs.candidate_bundle_sha256 }}
+          CANDIDATE_PUBLIC_KEY_SHA256: ${{ inputs.candidate_public_key_sha256 }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ($env:RUNNER_LABEL -notmatch '^zapvm-physical-[A-Za-z0-9][A-Za-z0-9._-]{0,62}$') { throw "Invalid dedicated runner label" }
+          if ($env:CONFIRMATION -ne 'RUN_NATIVE_CANDIDATE_ACCEPTANCE') { throw "Invalid confirmation" }
+          if ($env:CANDIDATE_VERSION -notmatch '^[0-9A-Za-z][0-9A-Za-z.+-]*$') { throw "Invalid candidate version" }
+          if ($env:CANDIDATE_BUNDLE_SHA256 -notmatch '^[0-9a-f]{64}$') { throw "Invalid bundle SHA-256" }
+          if ($env:CANDIDATE_PUBLIC_KEY_SHA256 -notmatch '^[0-9a-f]{64}$') { throw "Invalid public-key SHA-256" }
+          if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64') { throw "Windows HCS candidate acceptance requires an amd64 Host" }
+          foreach ($path in @($env:CANDIDATE_BUNDLE, $env:CANDIDATE_PUBLIC_KEY)) {
+            if (-not [IO.Path]::IsPathRooted($path)) { throw "Candidate paths must be absolute: $path" }
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing candidate file: $path" }
+            $item = Get-Item -LiteralPath $path -Force
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw "Candidate file is a reparse point: $path" }
+          }
+
+          $evidenceRoot = Join-Path $env:RUNNER_WORKSPACE "zapvm-native-windows-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          if (Test-Path -LiteralPath $evidenceRoot) { throw "Refusing existing evidence root: $evidenceRoot" }
+          "ZAPVM_EVIDENCE_ROOT=$evidenceRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Run source gates
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          & go test ./...
+          if ($LASTEXITCODE -ne 0) { throw "go test failed" }
+          & go vet ./...
+          if ($LASTEXITCODE -ne 0) { throw "go vet failed" }
+
+      - name: Run complete exact-candidate acceptance
+        shell: pwsh
+        env:
+          CANDIDATE_VERSION: ${{ inputs.candidate_version }}
+          CANDIDATE_BUNDLE: ${{ inputs.candidate_bundle_path }}
+          CANDIDATE_PUBLIC_KEY: ${{ inputs.candidate_public_key_path }}
+          CANDIDATE_BUNDLE_SHA256: ${{ inputs.candidate_bundle_sha256 }}
+          CANDIDATE_PUBLIC_KEY_SHA256: ${{ inputs.candidate_public_key_sha256 }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $parameters = @{
+            EvidenceDirectory = $env:ZAPVM_EVIDENCE_ROOT
+            Version = $env:CANDIDATE_VERSION
+            Bundle = $env:CANDIDATE_BUNDLE
+            PublicKey = $env:CANDIDATE_PUBLIC_KEY
+            BundleSHA256 = $env:CANDIDATE_BUNDLE_SHA256
+            PublicKeySHA256 = $env:CANDIDATE_PUBLIC_KEY_SHA256
+          }
+          & .\scripts\acceptance-native-candidate-windows.ps1 @parameters
+          $hostArchive = Join-Path $env:ZAPVM_EVIDENCE_ROOT "release\zapvm_$($env:CANDIDATE_VERSION)_windows_amd64.zip"
+          "ZAPVM_NATIVE_HOST_ARCHIVE=$hostArchive" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Package retained evidence
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $output = Join-Path $env:RUNNER_TEMP "windows-native-candidate-evidence.zip"
+          $staging = Join-Path $env:RUNNER_TEMP "windows-native-candidate-staging-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          New-Item -ItemType Directory -Path $staging | Out-Null
+          if (-not [string]::IsNullOrWhiteSpace($env:ZAPVM_EVIDENCE_ROOT) -and (Test-Path -LiteralPath $env:ZAPVM_EVIDENCE_ROOT)) {
+            Get-ChildItem -LiteralPath $env:ZAPVM_EVIDENCE_ROOT -Recurse -File |
+              Where-Object { $_.Extension -in @(".log", ".json", ".jsonl", ".txt", ".stderr", ".stdout") } |
+              ForEach-Object {
+                $relative = [IO.Path]::GetRelativePath($env:ZAPVM_EVIDENCE_ROOT, $_.FullName)
+                $destination = Join-Path $staging $relative
+                New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($destination)) -Force | Out-Null
+                Copy-Item -LiteralPath $_.FullName -Destination $destination
+              }
+            "Evidence retained on runner: $env:ZAPVM_EVIDENCE_ROOT" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          }
+          if (-not (Get-ChildItem -LiteralPath $staging -Recurse -File)) {
+            "No evidence created" | Set-Content -LiteralPath (Join-Path $staging "no-evidence.txt")
+          }
+          Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $output
+
+      - name: Upload evidence and native Host package
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-native-candidate-evidence
+          path: |
+            ${{ runner.temp }}\windows-native-candidate-evidence.zip
+            ${{ env.ZAPVM_NATIVE_HOST_ARCHIVE }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30

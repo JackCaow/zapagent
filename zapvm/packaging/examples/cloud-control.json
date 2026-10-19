@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "listen": "0.0.0.0:9444",
+  "state_root": "/var/lib/zapvm-control",
+  "trust_domain": "example.internal",
+  "control_id": "primary",
+  "client_ca": "/etc/zapvm/pki/clients-ca.pem",
+  "certificate": "/etc/zapvm/pki/control.pem",
+  "private_key": "/etc/zapvm/pki/control.key",
+  "heartbeat_ttl_seconds": 45,
+  "lease_ttl_seconds": 120,
+  "task_retention_seconds": 2592000,
+  "artifact_bytes_per_task": 21474836480,
+  "artifact_bytes_per_scope": 107374182400,
+  "administrators": [
+    "spiffe://example.internal/tenant/platform/project/operations/client/admin"
+  ],
+  "nodes": [
+    {
+      "id": "host-a",
+      "capacity": 4,
+      "scopes": [
+        {
+          "tenant_id": "acme",
+          "project_id": "weather"
+        }
+      ],
+      "computers": [
+        {
+          "id": "computer-a",
+          "tenant_id": "acme",
+          "project_id": "weather",
+          "agent": "zapcode@1.12.0"
+        }
+      ]
+    }
+  ]
+}

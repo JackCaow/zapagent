@@ -1,0 +1,19 @@
+node_modules/
+dist/
+.env*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.mobileprovision
+.DS_Store
+.zapcode/
+.worktrees/
+package-lock.json
+.claude/settings.local.json
+.*.bun-build
+
+# Local Python evaluation caches
+__pycache__/
+*.py[cod]

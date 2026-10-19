@@ -1,0 +1,554 @@
+name: Linux and Windows VM acceptance
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: platform-acceptance-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  ZAPVM_CI_IMAGE_VERSION: 0.1.0-ci.${{ github.run_id }}.${{ github.run_attempt }}
+
+jobs:
+  build-signed-image:
+    name: Build signed amd64 image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run source gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./...
+          go vet ./...
+
+      - name: Build guest image and locked Linux runtime
+        shell: bash
+        env:
+          ZAPVM_IMAGE_VERSION: ${{ env.ZAPVM_CI_IMAGE_VERSION }}
+          ZAPVM_REPLACE_OUTPUT: "1"
+        run: |
+          set -euo pipefail
+          df -h /
+          ./scripts/build-rootfs.sh amd64
+          df -h /
+
+      - name: Sign and bundle the exact image
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_dir="$RUNNER_TEMP/zapvm-image"
+          private_key="$RUNNER_TEMP/zapvm-image-private.pem"
+          public_key="$release_dir/zapvm-image-public.pem"
+          signature="$RUNNER_TEMP/manifest.sig"
+          image_tool="$RUNNER_TEMP/zapvm-image-tool"
+          bundle="$release_dir/zapvm-image-amd64.bundle.tar.zst"
+          mkdir -p "$release_dir"
+          trap 'if [[ -f "$private_key" ]]; then shred -u "$private_key"; fi' EXIT
+
+          go build -trimpath -o "$image_tool" ./cmd/zapvm-image
+          "$image_tool" keygen --private "$private_key" --public "$public_key"
+          "$image_tool" sign \
+            --manifest "$GITHUB_WORKSPACE/dist/amd64/manifest.json" \
+            --private-key "$private_key" \
+            --output "$signature"
+          "$image_tool" bundle \
+            --manifest "$GITHUB_WORKSPACE/dist/amd64/manifest.json" \
+            --signature "$signature" \
+            --public-key "$public_key" \
+            --output "$bundle"
+          shred -u "$private_key"
+          (
+            cd "$release_dir"
+            sha256sum \
+              zapvm-image-amd64.bundle.tar.zst \
+              zapvm-image-public.pem \
+              > SHA256SUMS
+          )
+          ls -lh "$release_dir"
+
+      - name: Upload signed image
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: zapvm-signed-image-amd64
+          path: ${{ runner.temp }}/zapvm-image
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  linux-kvm:
+    name: Linux complete multi-VM acceptance (self-hosted target only)
+    if: ${{ false }} # Hosted nested KVM permits the first VM but denies later KVM_CREATE_VM calls.
+    needs: build-signed-image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download signed image
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: zapvm-signed-image-amd64
+          path: ${{ runner.temp }}/zapvm-image
+
+      - name: Prepare and assert Linux host capabilities
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(id -u)" -ne 0
+          test "$(systemd --version | awk 'NR == 1 { print $2 }')" -ge 254
+          test "$(stat -fc %T /sys/fs/cgroup)" = cgroup2fs
+          test -c /dev/kvm
+
+          # Ubuntu 24.04's hosted image restricts unprivileged user namespaces
+          # through AppArmor. zapVM keeps virtiofsd's namespace sandbox enabled,
+          # so this ephemeral host must explicitly allow the sandbox rather than
+          # weakening virtiofsd with --sandbox=none.
+          if [[ -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]] &&
+             [[ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1 ]]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          if [[ -r /proc/sys/kernel/unprivileged_userns_clone ]] &&
+             [[ "$(cat /proc/sys/kernel/unprivileged_userns_clone)" = 0 ]]; then
+            sudo sysctl -w kernel.unprivileged_userns_clone=1
+          fi
+          test "$(cat /proc/sys/user/max_user_namespaces)" -gt 0
+
+          if ! [[ -r /dev/kvm && -w /dev/kvm ]]; then
+            sudo setfacl -m "u:${USER}:rw" /dev/kvm
+          fi
+          python3 - <<'PY'
+          import fcntl
+          import os
+
+          fd = os.open("/dev/kvm", os.O_RDWR | os.O_CLOEXEC)
+          try:
+              version = fcntl.ioctl(fd, 0xAE00, 0)
+          finally:
+              os.close(fd)
+          if version != 12:
+              raise SystemExit(f"unexpected KVM API version: {version}")
+          print(f"KVM_GET_API_VERSION={version}")
+          PY
+
+          uid="$(id -u)"
+          echo "XDG_RUNTIME_DIR=/run/user/$uid" >> "$GITHUB_ENV"
+          export XDG_RUNTIME_DIR="/run/user/$uid"
+          if ! systemctl --user show-environment >/dev/null 2>&1; then
+            sudo loginctl enable-linger "$USER"
+            sudo systemctl start "user@${uid}.service"
+          fi
+          systemctl --user show-environment >/dev/null
+          systemd-run --user --scope --quiet true
+
+      - name: Verify downloaded image identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/zapvm-image"
+          sha256sum -c SHA256SUMS
+
+      - name: Run complete Linux target-host acceptance
+        shell: bash
+        env:
+          ZAPVM_ACCEPTANCE_IMAGE_BUNDLE: ${{ runner.temp }}/zapvm-image/zapvm-image-amd64.bundle.tar.zst
+          ZAPVM_ACCEPTANCE_IMAGE_PUBLIC_KEY: ${{ runner.temp }}/zapvm-image/zapvm-image-public.pem
+        run: |
+          set -euo pipefail
+          evidence="$GITHUB_WORKSPACE/.cache/acceptance/github-linux-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "ZAPVM_LINUX_EVIDENCE=$evidence" >> "$GITHUB_ENV"
+          ./scripts/acceptance-linux.sh "$evidence"
+
+      - name: Collect Linux KVM diagnostics
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          if [[ -n "${ZAPVM_LINUX_EVIDENCE:-}" ]]; then
+            mkdir -p "$ZAPVM_LINUX_EVIDENCE"
+            sudo dmesg --ctime | tail -n 500 > "$ZAPVM_LINUX_EVIDENCE/kvm-dmesg.txt"
+          fi
+
+      - name: Package Linux evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/linux-acceptance-evidence.tar.gz"
+          if [[ -n "${ZAPVM_LINUX_EVIDENCE:-}" && -d "$ZAPVM_LINUX_EVIDENCE" ]]; then
+            cd "$ZAPVM_LINUX_EVIDENCE"
+            find . -type f \( \
+              -name '*.log' -o -name '*.json' -o -name '*.jsonl' -o -name '*.txt' \
+            \) -print0 | tar --null -czf "$output" --files-from=-
+          else
+            tar -czf "$output" --files-from=/dev/null
+          fi
+
+      - name: Upload Linux evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux-kvm-acceptance-evidence
+          path: ${{ runner.temp }}/linux-acceptance-evidence.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  linux-kvm-write:
+    name: Linux KVM 1/7 - write and Agent restart
+    needs: build-signed-image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Run phase on a fresh nested-KVM host
+        uses: ./.github/actions/linux-kvm-phase
+        with:
+          phase: write
+          snapshot-output-artifact: linux-state-after-write
+
+  linux-kvm-persistence:
+    name: Linux KVM 2/7 - cross-boot persistence and Session isolation
+    needs: [build-signed-image, linux-kvm-write]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Run phase on a fresh nested-KVM host
+        uses: ./.github/actions/linux-kvm-phase
+        with:
+          phase: persistence-isolation
+          snapshot-input-artifact: linux-state-after-write
+          snapshot-output-artifact: linux-state-after-persistence
+
+  linux-kvm-readonly:
+    name: Linux KVM 3/7 - read-only workspace
+    needs: [build-signed-image, linux-kvm-persistence]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Run phase on a fresh nested-KVM host
+        uses: ./.github/actions/linux-kvm-phase
+        with:
+          phase: readonly
+          snapshot-input-artifact: linux-state-after-persistence
+
+  linux-kvm-restricted:
+    name: Linux KVM 4/7 - restricted egress
+    needs: [build-signed-image, linux-kvm-persistence]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Run phase on a fresh nested-KVM host
+        uses: ./.github/actions/linux-kvm-phase
+        with:
+          phase: restricted
+          snapshot-input-artifact: linux-state-after-persistence
+
+  linux-kvm-crash:
+    name: Linux KVM 5/7 - Agent crash and dirty state
+    needs: [build-signed-image, linux-kvm-persistence]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Run phase on a fresh nested-KVM host
+        uses: ./.github/actions/linux-kvm-phase
+        with:
+          phase: crash
+          snapshot-input-artifact: linux-state-after-persistence
+          snapshot-output-artifact: linux-state-after-crash
+
+  linux-kvm-recovery:
+    name: Linux KVM 6/7 - dirty-state recovery
+    needs: [build-signed-image, linux-kvm-crash]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Run phase on a fresh nested-KVM host
+        uses: ./.github/actions/linux-kvm-phase
+        with:
+          phase: recovery
+          snapshot-input-artifact: linux-state-after-crash
+
+  linux-kvm-daemon:
+    name: Linux KVM 7/7 - single-VM daemon lifecycle
+    needs: build-signed-image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Run phase on a fresh nested-KVM host
+        uses: ./.github/actions/linux-kvm-phase
+        with:
+          phase: daemon-single
+
+  windows-hcn-native:
+    name: Windows native HCN gate
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run Windows-native source gates
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tokens = $null
+          $errors = $null
+          foreach ($path in @(
+            ".\scripts\preflight-self-hosted-windows.ps1",
+            ".\scripts\acceptance-windows-hcs-grant-recovery.ps1",
+            ".\scripts\zapvm-host-windows.ps1",
+            ".\scripts\acceptance-host-install-windows.ps1"
+          )) {
+            $tokens = $null
+            $errors = $null
+            [Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path), [ref]$tokens, [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -ne 0) { throw "$path PowerShell parser errors: $($errors | Out-String)" }
+          }
+          go test ./internal/platform -run '^(TestWindowsPathPin|TestHCSConsole|TestProductionWindowsService)'
+          if ($LASTEXITCODE -ne 0) { throw "go test failed with exit code $LASTEXITCODE" }
+          go test -tags acceptance_fault_injection ./internal/platform -run '^(TestAcceptanceFault|TestHCSGrantJournal)'
+          if ($LASTEXITCODE -ne 0) { throw "fault-injection tests failed with exit code $LASTEXITCODE" }
+          go test -tags=integration ./internal/platform -run '^TestHCNNATNetworkAndEndpoint$' -count=1
+          if ($LASTEXITCODE -ne 0) { throw "HCN integration test failed with exit code $LASTEXITCODE" }
+          go vet ./...
+          if ($LASTEXITCODE -ne 0) { throw "go vet failed with exit code $LASTEXITCODE" }
+
+  windows-hcs:
+    name: Windows HCS acceptance
+    needs: [build-signed-image, windows-hcn-native]
+    runs-on: windows-2025
+    timeout-minutes: 75
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download signed image
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: zapvm-signed-image-amd64
+          path: ${{ runner.temp }}\zapvm-image
+
+      - name: Assert Windows HCS host capabilities
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+          $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+          if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+            throw "GitHub Actions Windows runner is not elevated"
+          }
+          $build = [Environment]::OSVersion.Version.Build
+          if ($build -lt 20348) { throw "Windows build $build is below 20348" }
+          if (-not (Get-CimInstance Win32_ComputerSystem).HypervisorPresent) {
+            throw "Windows hypervisor is not present"
+          }
+          foreach ($serviceName in @("vmcompute", "hns")) {
+            $service = Get-Service $serviceName -ErrorAction Stop
+            if ($service.Status.ToString() -ne "Running") {
+              throw "$serviceName is not running"
+            }
+          }
+          foreach ($library in @("computecore.dll", "vmcompute.dll")) {
+            $path = Join-Path $env:SystemRoot "System32\$library"
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing $path" }
+          }
+          Write-Host "WINDOWS_HCS_HOST_CAPABILITIES_OK build=$build"
+
+      - name: Verify downloaded image identity
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $root = Join-Path $env:RUNNER_TEMP "zapvm-image"
+          $lines = Get-Content -LiteralPath (Join-Path $root "SHA256SUMS")
+          foreach ($line in $lines) {
+            if ($line -notmatch '^([0-9a-f]{64})  (.+)$') { throw "Malformed SHA256SUMS line: $line" }
+            $expected = $Matches[1]
+            $fileName = [IO.Path]::GetFileName($Matches[2])
+            $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $root $fileName)).Hash.ToLowerInvariant()
+            if ($actual -ne $expected) { throw "SHA-256 mismatch for $fileName" }
+          }
+
+      - name: Run complete Windows target-host acceptance
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $evidence = Join-Path $env:GITHUB_WORKSPACE ".cache\acceptance\github-windows-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          "ZAPVM_WINDOWS_EVIDENCE=$evidence" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $imageRoot = Join-Path $env:RUNNER_TEMP "zapvm-image"
+          $parameters = @{
+            EvidenceDirectory = $evidence
+            Architecture = "amd64"
+            SignedImageBundle = Join-Path $imageRoot "zapvm-image-amd64.bundle.tar.zst"
+            SignedImagePublicKey = Join-Path $imageRoot "zapvm-image-public.pem"
+          }
+          & .\scripts\acceptance-windows.ps1 @parameters
+
+      - name: Prove HCS ACL crash recovery at every durable boundary
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $evidence = $env:ZAPVM_WINDOWS_EVIDENCE
+          if ([string]::IsNullOrWhiteSpace($evidence) -or -not (Test-Path -LiteralPath $evidence -PathType Container)) {
+            throw "Windows acceptance evidence root is unavailable"
+          }
+          $imageRoot = Join-Path $evidence "images"
+          $active = Get-Content -Raw -LiteralPath (Join-Path $imageRoot "active.json") | ConvertFrom-Json
+          if ([string]::IsNullOrWhiteSpace($active.active_version)) { throw "Active image version is missing" }
+          $parameters = @{
+            ImageRoot = $imageRoot
+            ImagePublicKey = Join-Path (Join-Path $env:RUNNER_TEMP "zapvm-image") "zapvm-image-public.pem"
+            StateTemplate = Join-Path (Join-Path $imageRoot $active.active_version) "state.vhdx"
+            Workspace = Join-Path $evidence "workspace"
+            EvidenceDirectory = Join-Path $evidence "acl-recovery"
+          }
+          & .\scripts\acceptance-windows-hcs-grant-recovery.ps1 @parameters
+
+      - name: Validate Windows Remote Host install and rollback transaction
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $evidence = $env:ZAPVM_WINDOWS_EVIDENCE
+          if ([string]::IsNullOrWhiteSpace($evidence) -or -not (Test-Path -LiteralPath $evidence -PathType Container)) {
+            throw "Windows acceptance evidence root is unavailable"
+          }
+          $hostEvidence = Join-Path $env:ProgramData "zapVM\Acceptance\github-host-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          "ZAPVM_WINDOWS_HOST_INSTALL_EVIDENCE=$hostEvidence" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $parameters = @{
+            ImageRoot = Join-Path $evidence "images"
+            ImagePublicKey = Join-Path (Join-Path $env:RUNNER_TEMP "zapvm-image") "zapvm-image-public.pem"
+            EvidenceDirectory = $hostEvidence
+          }
+          & .\scripts\acceptance-host-install-windows.ps1 @parameters
+
+      - name: Collect Windows HCS diagnostics
+        if: always()
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          if ([string]::IsNullOrWhiteSpace($env:ZAPVM_WINDOWS_EVIDENCE)) { exit 0 }
+          New-Item -ItemType Directory -Path $env:ZAPVM_WINDOWS_EVIDENCE -Force | Out-Null
+          $output = Join-Path $env:ZAPVM_WINDOWS_EVIDENCE "hcs-event-log.txt"
+          $logs = Get-WinEvent -ListLog "Microsoft-Windows-Hyper-V-Compute-*" -ErrorAction SilentlyContinue |
+            Where-Object { -not $_.IsClassicLog }
+          $logs | Select-Object LogName, RecordCount, IsEnabled | Format-Table -AutoSize |
+            Out-File -LiteralPath $output -Encoding utf8
+          foreach ($log in $logs) {
+            "`n===== $($log.LogName) =====" | Out-File -LiteralPath $output -Append -Encoding utf8
+            Get-WinEvent -LogName $log.LogName -MaxEvents 200 -ErrorAction SilentlyContinue |
+              Select-Object TimeCreated, Id, LevelDisplayName, Message |
+              Format-List | Out-File -LiteralPath $output -Append -Encoding utf8
+          }
+          "`n===== zapVM service state =====" | Out-File -LiteralPath $output -Append -Encoding utf8
+          Get-CimInstance Win32_Service -Filter "Name='zapvm'" -ErrorAction SilentlyContinue |
+            Select-Object Name, State, Status, ExitCode, ProcessId, StartMode, PathName |
+            Format-List | Out-File -LiteralPath $output -Append -Encoding utf8
+          foreach ($logName in @("Application", "System")) {
+            "`n===== $logName zapVM/service events =====" | Out-File -LiteralPath $output -Append -Encoding utf8
+            Get-WinEvent -FilterHashtable @{ LogName = $logName; StartTime = (Get-Date).AddHours(-1) } -ErrorAction SilentlyContinue |
+              Where-Object {
+                $_.ProviderName -in @("zapvm", "Application Error", "Service Control Manager", ".NET Runtime") -and
+                ($_.ProviderName -eq "zapvm" -or $_.Message -match "zapvm")
+              } |
+              Select-Object TimeCreated, ProviderName, Id, LevelDisplayName, Message |
+              Format-List | Out-File -LiteralPath $output -Append -Encoding utf8
+          }
+          $consoleDirectory = Join-Path $env:ProgramData "zapVM"
+          if (Test-Path -LiteralPath $consoleDirectory -PathType Container) {
+            Get-ChildItem -LiteralPath $consoleDirectory -Filter "console-*.log" -File -ErrorAction SilentlyContinue |
+              Copy-Item -Destination $env:ZAPVM_WINDOWS_EVIDENCE -Force
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:ZAPVM_WINDOWS_HOST_INSTALL_EVIDENCE) -and
+              (Test-Path -LiteralPath $env:ZAPVM_WINDOWS_HOST_INSTALL_EVIDENCE -PathType Container)) {
+            $destinationRoot = Join-Path $env:ZAPVM_WINDOWS_EVIDENCE "host-installer"
+            Get-ChildItem -LiteralPath $env:ZAPVM_WINDOWS_HOST_INSTALL_EVIDENCE -Recurse -File -ErrorAction SilentlyContinue |
+              Where-Object { $_.Extension -in @(".log", ".json", ".jsonl", ".txt", ".stderr", ".stdout") } |
+              ForEach-Object {
+                $relative = [IO.Path]::GetRelativePath($env:ZAPVM_WINDOWS_HOST_INSTALL_EVIDENCE, $_.FullName)
+                $destination = Join-Path $destinationRoot $relative
+                New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($destination)) -Force | Out-Null
+                Copy-Item -LiteralPath $_.FullName -Destination $destination -Force
+              }
+          }
+
+      - name: Package Windows evidence
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $output = Join-Path $env:RUNNER_TEMP "windows-acceptance-evidence.zip"
+          $staging = Join-Path $env:RUNNER_TEMP "windows-evidence-staging"
+          New-Item -ItemType Directory -Path $staging -Force | Out-Null
+          if (-not [string]::IsNullOrWhiteSpace($env:ZAPVM_WINDOWS_EVIDENCE) -and
+              (Test-Path -LiteralPath $env:ZAPVM_WINDOWS_EVIDENCE -PathType Container)) {
+            Get-ChildItem -LiteralPath $env:ZAPVM_WINDOWS_EVIDENCE -Recurse -File |
+              Where-Object { $_.Extension -in @(".log", ".json", ".jsonl", ".txt", ".stderr", ".stdout") } |
+              ForEach-Object {
+                $relative = [IO.Path]::GetRelativePath($env:ZAPVM_WINDOWS_EVIDENCE, $_.FullName)
+                $destination = Join-Path $staging $relative
+                New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($destination)) -Force | Out-Null
+                Copy-Item -LiteralPath $_.FullName -Destination $destination
+              }
+          }
+          if (-not (Get-ChildItem -LiteralPath $staging -Recurse -File)) {
+            "No text evidence was created before the failure." |
+              Set-Content -LiteralPath (Join-Path $staging "no-evidence.txt")
+          }
+          Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $output -Force
+
+      - name: Upload Windows evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-hcs-acceptance-evidence
+          path: ${{ runner.temp }}\windows-acceptance-evidence.zip
+          if-no-files-found: error
+          retention-days: 14

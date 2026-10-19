@@ -1,0 +1,129 @@
+name: VM module
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  merge_group:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vm-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source:
+    name: VM source and security
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: zapvm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: zapvm/go.mod
+          cache-dependency-path: zapvm/go.sum
+      - name: Repository baseline
+        run: ./scripts/verify-repository.sh
+      - name: Active root workflow syntax
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 ../.github/workflows/*.yml
+      - name: Tests and race detector
+        run: go test -race -timeout 10m ./...
+      - name: Vet
+        run: go vet ./...
+      - name: Vulnerability scan
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+
+  rootfs-packages:
+    name: VM package closure (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+          - arch: amd64
+            runner: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Install and verify the exact Alpine dependency closure
+        working-directory: zapvm
+        shell: bash
+        env:
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          source packaging/guest/rootfs-lock.env
+          case "$TARGET_ARCH" in
+            arm64) expected_hash=$APK_INSTALLED_ARM64_SHA256; expected_count=$APK_INSTALLED_ARM64_PACKAGES ;;
+            amd64) expected_hash=$APK_INSTALLED_AMD64_SHA256; expected_count=$APK_INSTALLED_AMD64_PACKAGES ;;
+            *) exit 2 ;;
+          esac
+          docker run --rm --platform "linux/$TARGET_ARCH" \
+            -e TARGET_ARCH -e EXPECTED_HASH="$expected_hash" -e EXPECTED_COUNT="$expected_count" \
+            -v "$PWD/packaging/guest:/locks:ro" \
+            -v "$PWD/scripts/install-rootfs-packages.sh:/install.sh:ro" \
+            "$ALPINE_BASE_IMAGE" sh -ec '
+              sh /install.sh /locks "$TARGET_ARCH"
+              printf "%s  /lib/apk/db/installed\n" "$EXPECTED_HASH" | sha256sum -c -
+              test "$(grep -c "^P:" /lib/apk/db/installed)" = "$EXPECTED_COUNT"
+            '
+
+  platform:
+    name: VM platform (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, macos-latest, windows-2025]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: zapvm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: zapvm/go.mod
+          cache-dependency-path: zapvm/go.sum
+      - name: Unix tests and Host package validation
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          go test -timeout 10m ./...
+          ./scripts/package-host-release.sh 0.0.0-ci "$RUNNER_TEMP/release"
+          ./scripts/verify-host-release.sh "$RUNNER_TEMP/release"/*.tar.gz 0.0.0-ci
+      - name: Windows compile and Host package validation
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          go test -run '^$' ./...
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\scripts\package-host-release.ps1 -Version 0.0.0-ci -OutputDirectory "$env:RUNNER_TEMP\release"
+          .\scripts\verify-host-release.ps1 -Archive (Get-ChildItem "$env:RUNNER_TEMP\release\*.zip").FullName -Version 0.0.0-ci
+
+  web:
+    name: VM optional web client
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: zapvm/web/client/react
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: zapvm/web/client/react/package-lock.json
+      - run: npm ci
+      - run: npm audit --audit-level=high
+      - run: npm test
+      - run: npm run check
+      - run: npm run build

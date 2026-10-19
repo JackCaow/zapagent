@@ -1,0 +1,9 @@
+.git
+.cache
+bin
+dist
+*.log
+*.sock
+node_modules
+test-results
+playwright-report

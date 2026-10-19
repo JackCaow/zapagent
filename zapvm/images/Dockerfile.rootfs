@@ -1,0 +1,46 @@
+ARG ZAPVM_ALPINE_BASE_IMAGE=alpine:3.23.5@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40
+FROM ${ZAPVM_ALPINE_BASE_IMAGE}
+
+ARG ZAPVM_CONTEXT_ARCH
+ARG ZAPVM_IMAGE_PROFILE=host-runtime
+ARG ZAPVM_RESIDENT_AGENT_AVAILABLE=false
+ARG ZAPVM_ZAP_VERSION=unavailable
+
+COPY packaging/guest/rootfs-lock.env packaging/guest/rootfs-packages-${ZAPVM_CONTEXT_ARCH}.lock /tmp/zapvm-package-lock/
+COPY scripts/install-rootfs-packages.sh /tmp/zapvm-package-lock/install.sh
+RUN sh /tmp/zapvm-package-lock/install.sh /tmp/zapvm-package-lock "$ZAPVM_CONTEXT_ARCH" \
+    && rm -rf /tmp/zapvm-package-lock \
+    && addgroup -S -g 998 zapvm-vsock \
+    && adduser -S -D -H -u 998 -G zapvm-vsock -h /nonexistent -s /sbin/nologin zapvm-proxy \
+    && addgroup -S -g 1000 zapvm \
+    && adduser -S -D -H -u 1000 -G zapvm -h /home/zapvm -s /bin/sh zapvm \
+    && install -d -m 0700 /run/zapvm \
+    && install -d -o zapvm -g zapvm -m 0750 /home/zapvm /workspace /var/lib/zapvm \
+	&& install -d -m 0755 /usr/libexec/zapvm /nix /opt/zapvm-agent \
+	&& mv /sbin/apk /usr/libexec/zapvm/apk-query
+
+COPY .build/image-context-${ZAPVM_CONTEXT_ARCH}/zapvm-agent /usr/local/sbin/zapvm-agent
+COPY .build/image-context-${ZAPVM_CONTEXT_ARCH}/zapvm-launcher /usr/local/sbin/zapvm-launcher
+COPY .build/image-context-${ZAPVM_CONTEXT_ARCH}/zapvm-proxy-bridge /usr/local/sbin/zapvm-proxy-bridge
+COPY .build/image-context-${ZAPVM_CONTEXT_ARCH}/zapvm-plan9-mount /usr/local/sbin/zapvm-plan9-mount
+COPY .build/image-context-${ZAPVM_CONTEXT_ARCH}/zapvm-resident-agent /usr/local/sbin/zapvm-resident-agent
+COPY images/rootfs/ /
+COPY .build/image-context-${ZAPVM_CONTEXT_ARCH}/zap /tmp/zapvm-optional/zap
+
+RUN chmod 0755 /sbin/apk /usr/local/bin/zap-pkg /usr/local/sbin/zapvm-agent /usr/local/sbin/zapvm-launcher /usr/local/sbin/zapvm-proxy-bridge /usr/local/sbin/zapvm-plan9-mount /usr/local/sbin/zapvm-resident-agent /usr/local/sbin/zapvm-state-migrate /usr/local/sbin/zapvm-network-guard /usr/local/sbin/zapvm-getty /etc/init.d/zapvm-state /etc/init.d/zapvm-agent-layer /etc/init.d/zapvm-agent /etc/init.d/zapvm-proxy-bridge \
+    && case "$ZAPVM_IMAGE_PROFILE" in \
+        host-runtime) \
+            jq '.image_profile = "host-runtime" | del(.resident_agent) | .protected_workspace_paths -= [".zapcode"]' \
+                /etc/zapvm/capabilities.json >/etc/zapvm/capabilities.json.tmp ;; \
+        agent-computer) \
+            jq --argjson available "$ZAPVM_RESIDENT_AGENT_AVAILABLE" --arg version "$ZAPVM_ZAP_VERSION" \
+                '.image_profile = "agent-computer" | .resident_agent.available = $available | .resident_agent.version = $version' \
+                /etc/zapvm/capabilities.json >/etc/zapvm/capabilities.json.tmp ;; \
+        *) echo "unsupported image profile: $ZAPVM_IMAGE_PROFILE" >&2; exit 2 ;; \
+    esac \
+    && mv /etc/zapvm/capabilities.json.tmp /etc/zapvm/capabilities.json \
+	&& rm -rf /tmp/zapvm-optional \
+	&& rc-update add zapvm-state default \
+	&& rc-update add zapvm-agent-layer default \
+    && rc-update add zapvm-agent default \
+    && rc-update add zapvm-proxy-bridge default

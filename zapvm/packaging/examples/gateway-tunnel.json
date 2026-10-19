@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "mode": "tunnel",
+  "tunnel": {
+    "remote": "host-a.example.internal:9443",
+    "server_ca": "/absolute/path/to/node-ca.pem",
+    "certificate": "/absolute/path/to/client.pem",
+    "private_key": "/absolute/path/to/client.key",
+    "node_uri": "spiffe://example.internal/node/host-a"
+  }
+}

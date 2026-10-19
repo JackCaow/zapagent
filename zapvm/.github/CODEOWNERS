@@ -1,0 +1,15 @@
+* @JackCaow
+
+/.github/ @JackCaow
+/cmd/ @JackCaow
+/images/ @JackCaow
+/internal/agent/ @JackCaow
+/internal/credential/ @JackCaow
+/internal/egress/ @JackCaow
+/internal/image/ @JackCaow
+/internal/platform/ @JackCaow
+/internal/protocol/ @JackCaow
+/internal/vmpool/ @JackCaow
+/packaging/ @JackCaow
+/scripts/ @JackCaow
+/SECURITY.md @JackCaow

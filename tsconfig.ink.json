@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "jsxImportSource": "react",
+    "moduleResolution": "bundler"
+  },
+  "include": ["src/ink-index.tsx", "src/ink-app/**/*"],
+  "exclude": ["src/index.tsx", "src/App.tsx", "src/ui/**", "tests/**", "zapsdk/**"]
+}

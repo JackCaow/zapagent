@@ -1,0 +1,8 @@
+.git
+.cache
+.build
+bin
+dist
+dist-resident
+*.log
+*.sock

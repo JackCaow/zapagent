@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "control_url": "https://control.example.internal:9444",
+  "trust_domain": "example.internal",
+  "control_id": "primary",
+  "node_id": "host-a",
+  "server_ca": "/absolute/path/to/control-ca.pem",
+  "certificate": "/absolute/path/to/host-a.pem",
+  "private_key": "/absolute/path/to/host-a.key",
+  "daemon_endpoint": "/absolute/path/to/zapvm-daemon.sock",
+  "workspace_root": "/absolute/path/to/zapvm-workspaces",
+  "poll_ms": 250,
+  "max_concurrent": 4,
+  "relay_mode": "required"
+}

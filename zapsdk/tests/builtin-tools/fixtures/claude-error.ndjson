@@ -1,0 +1,3 @@
+{"type":"system","subtype":"init","cwd":"/tmp","session_id":"deadbeef-d15a-4b35-98e0-6481b744de01"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Trying."}]}}
+{"type":"result","subtype":"error_max_turns","error":"Max turns reached","duration_ms":5000,"num_turns":10}

@@ -1,0 +1,95 @@
+#!/sbin/openrc-run
+
+name="zapvm state disk recovery gate"
+description="Repair, mount, and validate the optional zapvm state disk"
+
+depend() {
+    after modules
+    before zapvm-agent
+}
+
+start() {
+    state_device=
+    for candidate in /dev/vdb /dev/sdb; do
+        if [ -b "$candidate" ]; then
+            state_device=$candidate
+            break
+        fi
+    done
+    if [ -z "$state_device" ]; then
+        ebegin "No zapvm state disk attached"
+        eend 0
+        return 0
+    fi
+
+    ebegin "Checking zapvm state disk"
+    state_identity=$(blkid "$state_device" 2>/dev/null || true)
+    case "$state_identity" in
+        *'LABEL="zapvm-state"'*)
+            ;;
+        *)
+            eend 1 "refusing state disk with unexpected label"
+            return 1
+            ;;
+    esac
+    case "$state_identity" in
+        *'TYPE="ext4"'*)
+            ;;
+        *)
+            eend 1 "refusing non-ext4 state disk"
+            return 1
+            ;;
+    esac
+    fsck_status=0
+    e2fsck -p "$state_device" >/dev/null 2>&1 || fsck_status=$?
+    case "$fsck_status" in
+        0|1)
+            ;;
+        *)
+            eend "$fsck_status" "state disk fsck failed"
+            return 1
+            ;;
+    esac
+    state_name=${state_device##*/}
+    device_sectors=$(cat "/sys/class/block/$state_name/size" 2>/dev/null || true)
+    filesystem_blocks=$(dumpe2fs -h "$state_device" 2>/dev/null | awk -F: '/^Block count:/ { gsub(/[[:space:]]/, "", $2); print $2; exit }')
+    filesystem_block_size=$(dumpe2fs -h "$state_device" 2>/dev/null | awk -F: '/^Block size:/ { gsub(/[[:space:]]/, "", $2); print $2; exit }')
+    case "$device_sectors:$filesystem_blocks:$filesystem_block_size" in
+        *[!0-9:]*|:*|*::*|*:)
+            eend 1 "state disk capacity could not be verified"
+            return 1
+            ;;
+    esac
+    device_bytes=$((device_sectors * 512))
+    filesystem_bytes=$((filesystem_blocks * filesystem_block_size))
+    if [ "$filesystem_bytes" -lt "$device_bytes" ]; then
+        if ! resize2fs "$state_device" >/dev/null 2>&1; then
+            eend 1 "state disk filesystem expansion failed"
+            return 1
+        fi
+    elif [ "$filesystem_bytes" -gt "$device_bytes" ]; then
+        eend 1 "state filesystem exceeds its backing disk"
+        return 1
+    fi
+    if [ ! -d /var/lib/zapvm ]; then
+        eend 1 "state mount point is missing from the signed root filesystem"
+        return 1
+    fi
+    if ! mount -t ext4 -o rw,nosuid,nodev,noexec "$state_device" /var/lib/zapvm; then
+        eend 1 "state disk mount failed"
+        return 1
+    fi
+    if ! /usr/local/sbin/zapvm-state-migrate /var/lib/zapvm; then
+		umount /var/lib/zapvm || true
+		eend 1 "state schema migration failed"
+		return 1
+	fi
+    eend 0
+}
+
+stop() {
+    if mountpoint -q /var/lib/zapvm; then
+        sync
+        umount /var/lib/zapvm
+    fi
+}

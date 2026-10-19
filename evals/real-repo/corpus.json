@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "zapcode-real-repo-smoke-v1",
+  "maxConcurrency": 1,
+  "thresholds": {
+    "minPassRate": 1,
+    "maxPassRateDrop": 0,
+    "maxMedianDurationIncreaseRatio": 0.25,
+    "maxMedianTokensIncreaseRatio": 0.25
+  },
+  "tasks": [
+    {
+      "manifestPath": "tasks/document-runtime-contract.json",
+      "sourcePath": "../..",
+      "attempts": 1,
+      "cachePhase": "warm"
+    }
+  ]
+}

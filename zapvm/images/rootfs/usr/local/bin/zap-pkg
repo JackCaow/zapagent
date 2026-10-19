@@ -1,0 +1,75 @@
+#!/bin/sh
+set -eu
+
+profile=/nix/var/nix/profiles/zap-computer
+lock=/nix/var/nix/zap-pkg.lock
+NIX_CONFIG='experimental-features = nix-command flakes
+sandbox = false'
+NIX_REMOTE=local
+NIX_USER_PROFILE_DIR=$profile
+XDG_CACHE_HOME=/nix/var/nix/zap-cache
+XDG_STATE_HOME=/nix/var/nix/zap-state
+export NIX_CONFIG NIX_REMOTE NIX_USER_PROFILE_DIR XDG_CACHE_HOME XDG_STATE_HOME
+
+usage() {
+    echo "usage: zap-pkg install <package>... | list | upgrade | gc" >&2
+    exit 2
+}
+
+if [ ! -d /nix ] || [ ! -w /nix ]; then
+    echo "zap-pkg: persistent Computer tool storage is unavailable" >&2
+    exit 1
+fi
+
+umask 077
+mkdir -p /nix/var/nix/profiles /nix/var/nix/zap-cache /nix/var/nix/zap-state
+
+command=${1:-}
+[ -n "$command" ] || usage
+shift
+
+exec 9>"$lock"
+acquired=
+attempt=0
+while [ "$attempt" -lt 600 ]; do
+    if flock -n 9; then
+        acquired=1
+        break
+    fi
+    attempt=$((attempt + 1))
+    sleep 0.1
+done
+if [ -z "$acquired" ]; then
+    echo "zap-pkg: timed out waiting for the Computer package lock" >&2
+    exit 1
+fi
+
+case "$command" in
+    install)
+        [ "$#" -gt 0 ] || usage
+        for package in "$@"; do
+            case "$package" in
+                ''|*[!A-Za-z0-9._+-]*)
+                    echo "zap-pkg: invalid package name: $package" >&2
+                    exit 2
+                    ;;
+            esac
+            nix profile add --profile "$profile" "nixpkgs#$package"
+        done
+        ;;
+    list)
+        [ "$#" -eq 0 ] || usage
+        nix profile list --profile "$profile"
+        ;;
+    upgrade)
+        [ "$#" -eq 0 ] || usage
+        nix profile upgrade --all --profile "$profile"
+        ;;
+    gc)
+        [ "$#" -eq 0 ] || usage
+        nix store gc
+        ;;
+    *)
+        usage
+        ;;
+esac

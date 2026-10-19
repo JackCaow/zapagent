@@ -1,0 +1,1050 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>⚡ ZapCode DevTools</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font: 13px/1.5 "SF Mono", "JetBrains Mono", ui-monospace, monospace;
+    background: #0e1217;
+    color: #c9d1d9;
+  }
+  header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 8px 14px;
+    background: #161b22;
+    border-bottom: 1px solid #232934;
+    position: sticky; top: 0; z-index: 10;
+  }
+  header h1 {
+    font-size: 14px; margin: 0;
+    letter-spacing: 0.3px;
+  }
+  .status {
+    font-size: 11px; padding: 2px 8px; border-radius: 10px;
+    background: #2c1e1e; color: #ff7b72;
+  }
+  .status.ok { background: #1d2f21; color: #7ee787; }
+  button {
+    background: #21262d; color: #c9d1d9;
+    border: 1px solid #30363d; border-radius: 4px;
+    padding: 3px 10px; font: inherit; cursor: pointer;
+  }
+  button:hover { background: #30363d; }
+  input[type=text] {
+    background: #0d1117; color: #c9d1d9;
+    border: 1px solid #30363d; border-radius: 4px;
+    padding: 3px 8px; font: inherit;
+    min-width: 160px;
+  }
+  nav { display: flex; gap: 2px; margin-left: auto; }
+  nav .tab {
+    padding: 4px 12px; cursor: pointer;
+    border: 1px solid transparent; border-radius: 4px;
+    color: #8b949e;
+  }
+  nav .tab.active { color: #c9d1d9; background: #21262d; border-color: #30363d; }
+
+  main { padding: 10px 14px; }
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  /* Events tab */
+  .event {
+    display: grid; grid-template-columns: 90px 160px 1fr; gap: 8px;
+    padding: 4px 8px; border-bottom: 1px dashed #232934;
+    font-size: 12px;
+  }
+  .event:hover { background: #151a22; }
+  .event .ts { color: #6e7681; }
+  .event .type { font-weight: 600; }
+  .event .type.content_final { color: #7ee787; }
+  .event .type.run_started,
+  .event .type.run_ended    { color: #ffa657; }
+  .event .type.sub_agent_started,
+  .event .type.sub_agent_finished { color: #d2a8ff; }
+  .event .type.error         { color: #ff7b72; }
+  .event .type.observation   { color: #79c0ff; }
+  .event .type.run_usage     { color: #8b949e; }
+  .event .summary { color: #c9d1d9; white-space: pre-wrap; word-break: break-word; }
+  .event details > summary { cursor: pointer; color: #6e7681; }
+  .event pre {
+    margin: 4px 0 0; padding: 6px 8px;
+    background: #0d1117; border: 1px solid #232934; border-radius: 4px;
+    max-height: 320px; overflow: auto;
+    font-size: 11px;
+  }
+  .pathBadge {
+    display: inline-block; margin-left: 6px; padding: 0 6px;
+    font-size: 10px; color: #d2a8ff; border: 1px solid #3d2b55;
+    border-radius: 8px;
+  }
+
+  /* Conversation tab */
+  .msg { padding: 8px 10px; margin-bottom: 6px; border-radius: 6px; }
+  .msg.user       { background: #132233; border-left: 3px solid #388bfd; }
+  .msg.assistant  { background: #102020; border-left: 3px solid #7ee787; }
+  .msg.system     { background: #221a1a; border-left: 3px solid #ff7b72; }
+  .msg.tool_result{ background: #1a1922; border-left: 3px solid #d2a8ff; }
+  .msg .role { font-weight: 600; font-size: 11px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; }
+  .msg .content { margin-top: 4px; white-space: pre-wrap; word-break: break-word; }
+  .toolcall { margin-top: 6px; padding: 6px 8px; background: #0d1117; border: 1px solid #232934; border-radius: 4px; font-size: 11px; }
+  .toolcall .name { color: #ffa657; font-weight: 600; }
+
+  /* Prompt / Config tabs */
+  pre.blob {
+    padding: 10px 12px; background: #0d1117; border: 1px solid #232934;
+    border-radius: 6px; overflow: auto; font-size: 12px;
+    white-space: pre-wrap; word-break: break-word;
+  }
+
+  /* Tokens tab */
+  .tokBar { display: flex; gap: 14px; margin-bottom: 10px; flex-wrap: wrap; }
+  .tokCell { padding: 6px 10px; background: #161b22; border: 1px solid #232934; border-radius: 4px; min-width: 140px; }
+  .tokCell .label { font-size: 10px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; }
+  .tokCell .value { font-size: 18px; color: #c9d1d9; margin-top: 2px; overflow-wrap: anywhere; }
+  .historyTitle { margin: 12px 0 4px; color: #8b949e; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+
+  .muted { color: #6e7681; }
+  .empty { padding: 30px; text-align: center; color: #6e7681; }
+
+  /* Network tab */
+  .req {
+    margin-bottom: 8px; padding: 6px 10px;
+    background: #161b22; border: 1px solid #232934; border-radius: 6px;
+  }
+  .req > summary {
+    list-style: none; cursor: pointer;
+    display: block; /* full-row clickable */
+  }
+  .req > summary::-webkit-details-marker { display: none; } /* hide default triangle */
+  .req > summary::before {
+    content: "▸ "; color: #6e7681; font-size: 10px;
+    margin-right: 2px;
+  }
+  .req[open] > summary::before { content: "▾ "; }
+  .req .line1 { display: flex; gap: 10px; align-items: center; font-size: 12px; }
+  .req .method { color: #79c0ff; font-weight: 600; }
+  .req .model { color: #ffa657; }
+  .req .status { margin-left: auto; padding: 1px 8px; border-radius: 10px; font-size: 10px; }
+  .req .status.ok       { background: #1d2f21; color: #7ee787; }
+  .req .status.error    { background: #2c1e1e; color: #ff7b72; }
+  .req .status.compact  { background: #2a2520; color: #ffa657; }
+  .req .status.fallback { background: #2a2420; color: #ffa657; }
+  .req .status.pending  { background: #1c232e; color: #79c0ff; }
+  .req .meta { color: #6e7681; font-size: 11px; margin-top: 2px; }
+  .req .params {
+    display: flex; flex-wrap: wrap; gap: 4px 6px;
+    margin-top: 4px; font-size: 11px;
+  }
+  .req .params .pill {
+    padding: 1px 7px; border-radius: 10px;
+    background: #0d1117; border: 1px solid #232934;
+    color: #c9d1d9;
+  }
+  .req .params .pill .k { color: #8b949e; margin-right: 4px; }
+  .req .params .pill.model    { background: #241b10; border-color: #3a2a14; color: #ffa657; }
+  .req .params .pill.in       { background: #132233; border-color: #1e3a55; color: #79c0ff; }
+  .req .params .pill.max      { background: #221a1a; border-color: #3a2323; color: #ff9b8c; }
+  .req .params .pill.out      { background: #102020; border-color: #1e3a3a; color: #7ee787; }
+  .req .params .pill.effort   { background: #1a1922; border-color: #2e2845; color: #d2a8ff; }
+  .req .params .pill.finish   { background: #1a1a22; border-color: #2a2a3a; color: #8b949e; }
+  .req .params .pill.warn     { background: #2c1e1e; border-color: #5c2e2e; color: #ff7b72; }
+  .req .params .pill.overflow { background: #2c1e1e; border-color: #5c2e2e; color: #ff7b72; font-weight: 600; }
+  .req details { margin-top: 4px; }
+  .req details > summary { cursor: pointer; color: #8b949e; font-size: 11px; }
+  .req pre {
+    margin: 4px 0 0; padding: 6px 8px;
+    background: #0d1117; border: 1px solid #232934; border-radius: 4px;
+    max-height: 400px; overflow: auto;
+    font-size: 11px;
+    white-space: pre-wrap; word-break: break-word;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>⚡ ZapCode DevTools</h1>
+  <span id="status" class="status">connecting…</span>
+  <input id="filter" type="text" placeholder="filter events (type or text)…">
+  <button id="clearBtn">clear</button>
+  <button id="pauseBtn">pause</button>
+  <button id="refreshBtn">refresh</button>
+  <nav>
+    <div class="tab active" data-tab="events">Events</div>
+    <div class="tab" data-tab="network">Network</div>
+    <div class="tab" data-tab="messages">Conversation</div>
+    <div class="tab" data-tab="tokens">Tokens</div>
+    <div class="tab" data-tab="prompt">Prompt</div>
+    <div class="tab" data-tab="config">Config</div>
+  </nav>
+</header>
+
+<main>
+  <section id="panel-events" class="panel active">
+    <div id="events"></div>
+    <div id="events-empty" class="empty">waiting for events…</div>
+  </section>
+  <section id="panel-network" class="panel">
+    <div id="network"></div>
+    <div id="network-empty" class="empty">no LLM requests yet — send a message in the terminal.</div>
+  </section>
+  <section id="panel-messages" class="panel">
+    <div id="messages"></div>
+    <div id="messages-empty" class="empty">no conversation yet</div>
+  </section>
+  <section id="panel-tokens" class="panel">
+    <div id="tokens-bar" class="tokBar"></div>
+    <div id="tokens-history"></div>
+  </section>
+  <section id="panel-prompt" class="panel">
+    <pre id="prompt-blob" class="blob"></pre>
+  </section>
+  <section id="panel-config" class="panel">
+    <pre id="config-blob" class="blob"></pre>
+  </section>
+</main>
+
+<script>
+(() => {
+  const statusEl = document.getElementById("status")
+  const filterEl = document.getElementById("filter")
+  const eventsEl = document.getElementById("events")
+  const eventsEmpty = document.getElementById("events-empty")
+  const messagesEl = document.getElementById("messages")
+  const messagesEmpty = document.getElementById("messages-empty")
+  const promptEl = document.getElementById("prompt-blob")
+  const configEl = document.getElementById("config-blob")
+  const tokensBar = document.getElementById("tokens-bar")
+  const tokensHistory = document.getElementById("tokens-history")
+  const clearBtn = document.getElementById("clearBtn")
+  const pauseBtn = document.getElementById("pauseBtn")
+  const refreshBtn = document.getElementById("refreshBtn")
+
+  // ── State ──────────────────────────────────────────────────────────────
+  let ws = null
+  let paused = false
+  let filterText = ""
+  const events = []           // {ts, event}
+  const tokenHistory = []     // {ts, step, inputTokens, cacheReadInputTokens, cacheCreationInputTokens, outputTokens}
+  const contextHistory = []   // {ts, step, messageCount, totalChars, estimatedTokens, hash, segments, conversationCache}
+  // Raw HTTP requests captured by the fetch interceptor, keyed by id.
+  // (phase=request → phase=response/error merges into the same record.)
+  const httpById = new Map()
+  const httpOrder = []
+  // FIFO queue of HTTP ids whose response has arrived but no run_usage event
+  // has been paired yet. The agent emits exactly one run_usage per LLM call
+  // shortly after the SSE stream ends, so order-based pairing is reliable
+  // enough for debugging without any server-side correlation.
+  const httpAwaitingUsage = []
+  const totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cacheReported: false, usageReported: null }
+  let conversation = []
+  let systemPrompt = ""
+  let config = {}
+
+  // ── Tabs ───────────────────────────────────────────────────────────────
+  document.querySelectorAll("nav .tab").forEach(t => {
+    t.addEventListener("click", () => {
+      document.querySelectorAll("nav .tab").forEach(x => x.classList.remove("active"))
+      document.querySelectorAll(".panel").forEach(x => x.classList.remove("active"))
+      t.classList.add("active")
+      document.getElementById("panel-" + t.dataset.tab).classList.add("active")
+    })
+  })
+
+  // ── Filter / clear / pause ─────────────────────────────────────────────
+  filterEl.addEventListener("input", () => {
+    filterText = filterEl.value.toLowerCase()
+    renderEvents()
+  })
+  clearBtn.addEventListener("click", () => {
+    if (!confirm("Clear all DevTools data?\n\nThis removes: events, network requests, token history & totals.\n\n(Conversation / prompt / config will repopulate from the server on the next activity.)")) return
+    // Clear everything we accumulate on the client. Server-push-driven panels
+    // (conversation/prompt/config) are left alone in memory but get blanked
+    // visually — the next server push will refill them.
+    events.length = 0
+    httpById.clear()
+    httpOrder.length = 0
+    httpAwaitingUsage.length = 0
+    resetTokenState()
+    conversation = []
+    renderAll()
+  })
+  pauseBtn.addEventListener("click", () => {
+    paused = !paused
+    pauseBtn.textContent = paused ? "resume" : "pause"
+  })
+  refreshBtn.addEventListener("click", () => {
+    if (ws && ws.readyState === 1) ws.send(JSON.stringify({ topic: "refresh" }))
+  })
+
+  // ── WebSocket ──────────────────────────────────────────────────────────
+  function connect() {
+    statusEl.textContent = "connecting…"
+    statusEl.className = "status"
+    const proto = location.protocol === "https:" ? "wss" : "ws"
+    const token = new URLSearchParams(location.search).get("token")
+    const auth = token ? `?token=${encodeURIComponent(token)}` : ""
+    ws = new WebSocket(`${proto}://${location.host}/ws${auth}`)
+    ws.addEventListener("open", () => {
+      statusEl.textContent = "connected"
+      statusEl.className = "status ok"
+    })
+    ws.addEventListener("close", () => {
+      statusEl.textContent = "disconnected — retrying…"
+      statusEl.className = "status"
+      setTimeout(connect, 1500)
+    })
+    ws.addEventListener("error", () => {
+      try { ws.close() } catch {}
+    })
+    ws.addEventListener("message", (m) => {
+      if (paused) return
+      let frame
+      try { frame = JSON.parse(m.data) } catch { return }
+      handleFrame(frame)
+    })
+  }
+
+  function handleFrame(frame) {
+    if (frame.topic === "snapshot") {
+      const p = frame.payload
+      conversation = p.conversation || []
+      systemPrompt = p.systemPrompt || ""
+      config = p.config || {}
+      events.length = 0
+      for (const e of p.recentEvents || []) events.push(e)
+      rebuildTokenStateFromEvents()
+      renderAll()
+    } else if (frame.topic === "event") {
+      events.push({ ts: frame.ts, event: frame.payload })
+      if (events.length > 2000) events.splice(0, events.length - 2000)
+      maybeRecordTokens(frame.payload, frame.ts)
+      renderEvents()
+      renderTokens()
+    } else if (frame.topic === "conversation") {
+      conversation = frame.payload.conversation || []
+      renderMessages()
+    } else if (frame.topic === "prompt") {
+      systemPrompt = frame.payload.systemPrompt || ""
+      renderPrompt()
+    } else if (frame.topic === "config") {
+      config = frame.payload.config || {}
+      renderConfig()
+    } else if (frame.topic === "http") {
+      recordHttp(frame.payload)
+      renderNetwork()
+    }
+  }
+
+  // ── Token tracking ─────────────────────────────────────────────────────
+  function resetTokenState() {
+    tokenHistory.length = 0
+    contextHistory.length = 0
+    totals.input = 0
+    totals.output = 0
+    totals.cacheRead = 0
+    totals.cacheWrite = 0
+    totals.cacheReported = false
+    totals.usageReported = null
+  }
+
+  function rebuildTokenStateFromEvents() {
+    resetTokenState()
+    for (const { ts, event } of events) {
+      maybeRecordTokens(event, ts, { pairHttp: false })
+    }
+  }
+
+  function setTotalsFromUsage(usage) {
+    totals.usageReported = usage?.providerUsageReported === false ? false : true
+    totals.input = usage.inputTokens || 0
+    totals.output = usage.outputTokens || 0
+    const cacheUsage = cacheUsageFields(usage)
+    totals.cacheRead = cacheUsage.read
+    totals.cacheWrite = cacheUsage.write
+    totals.cacheReported = cacheUsage.reported
+  }
+
+  function maybeRecordTokens(e, ts = Date.now(), opts = {}) {
+    if (e.type === "run_step" && e.context) {
+      contextHistory.push({
+        ts,
+        step: e.step,
+        messageCount: e.messageCount,
+        totalChars: e.context.totalChars || 0,
+        estimatedTokens: e.context.estimatedTokens || 0,
+        hash: e.context.hash || "",
+        segments: Array.isArray(e.context.segments) ? e.context.segments.map(s => ({
+          name: s?.name || "",
+          chars: s?.chars || 0,
+          estimatedTokens: s?.estimatedTokens || 0,
+          hash: s?.hash || "",
+          ...(s?.meta && typeof s.meta === "object" && !Array.isArray(s.meta) ? { meta: s.meta } : {}),
+        })) : [],
+        conversationCache: normalizeConversationCache(e.context.conversationCache),
+      })
+      if (contextHistory.length > 100) contextHistory.splice(0, contextHistory.length - 100)
+    }
+    if (e.type === "run_usage") {
+      const usage = usageWithOptionalCache(e)
+      tokenHistory.push({
+        ts, step: e.step,
+        ...usage,
+      })
+      setTotalsFromUsage(usage)
+      // Attach usage to the oldest HTTP row that hasn't been paired yet.
+      // Streaming responses log phase=response when the SSE stream ends,
+      // and run_usage fires right after — so FIFO pairing lines up.
+      if (opts.pairHttp !== false) {
+        const id = httpAwaitingUsage.shift()
+        if (id) {
+          const rec = httpById.get(id)
+          if (rec) {
+            rec.usage = {
+              ...usage,
+              finishReason: e.finishReason,
+              step: e.step,
+            }
+            renderNetwork()
+          }
+        }
+      }
+    }
+    if (e.type === "run_ended" && e.usage) {
+      setTotalsFromUsage(e.usage)
+    }
+  }
+
+  // ── HTTP capture (real wire requests from patched fetch) ──────────────
+  function recordHttp(r) {
+    const prev = httpById.get(r.id) || {}
+    const merged = { ...prev, ...r }
+    // Lazily parse + cache extracted request params so rendering is cheap.
+    // Only LLM-style JSON bodies yield params; non-chat calls (e.g. /models)
+    // return an empty object and render without a param row.
+    if (r.phase === "request" && r.requestBody) {
+      merged.params = extractParams(r.requestBody)
+    }
+    httpById.set(r.id, merged)
+    if (!httpOrder.includes(r.id)) httpOrder.push(r.id)
+    if (httpOrder.length > 200) {
+      const dropped = httpOrder.shift()
+      if (dropped) {
+        httpById.delete(dropped)
+        const qIdx = httpAwaitingUsage.indexOf(dropped)
+        if (qIdx >= 0) httpAwaitingUsage.splice(qIdx, 1)
+      }
+    }
+    // Queue for run_usage pairing once we've seen the response. Errors and
+    // non-LLM endpoints (e.g. /models) never get paired — that's fine, they
+    // simply stay unpaired and drop off when httpOrder hits its 200 cap.
+    if ((r.phase === "response" || r.phase === "error") && merged.params?.isLLM && !merged.usage) {
+      if (!httpAwaitingUsage.includes(r.id)) httpAwaitingUsage.push(r.id)
+    }
+  }
+
+  // Pull core debug params out of an LLM request body: model, max_tokens,
+  // reasoning_effort, message count, char estimate of input, tool count.
+  // Covers OpenAI chat.completions + Anthropic messages + anything that
+  // follows the OpenAI-compat convention. Unknown shapes → returns {}.
+  //
+  // Input size estimate uses total request-body length ÷ 4 (rough universal
+  // bytes-per-token for English + code). That includes tool schemas, tool
+  // call arguments, tool result payloads, and envelope overhead — all of
+  // which the server tokenizes. Counting only message.content text grossly
+  // under-reports (observed ~2.5× low on tool-heavy turns). Once the stream
+  // ends we overlay server-reported prompt/fresh/cache token counts.
+  function extractParams(bodyStr) {
+    let b
+    try { b = JSON.parse(bodyStr) } catch { return {} }
+    if (!b || typeof b !== "object") return {}
+    const hasMessages = Array.isArray(b.messages)
+    const hasAnthropicMsg = Array.isArray(b.messages) && typeof b.max_tokens === "number"
+    if (!hasMessages) return {}
+    const msgs = b.messages || []
+    return {
+      isLLM: true,
+      model: b.model || "",
+      maxTokens: b.max_tokens ?? b.max_completion_tokens ?? null,
+      maxTokensKey: b.max_completion_tokens != null ? "max_completion_tokens" : "max_tokens",
+      effort: b.reasoning_effort ?? null,
+      temperature: b.temperature ?? null,
+      stream: b.stream === true,
+      messageCount: msgs.length,
+      bodyChars: bodyStr.length,
+      toolCount: Array.isArray(b.tools) ? b.tools.length : 0,
+      thinking: b.thinking ?? null,
+      family: hasAnthropicMsg ? "anthropic" : "openai",
+    }
+  }
+
+  function fmtNum(n) {
+    if (n == null) return "—"
+    if (n >= 1000) return (n / 1000).toFixed(n >= 10000 ? 0 : 1) + "k"
+    return String(n)
+  }
+
+  // Quote a shell argument for curl — wraps in single quotes and escapes
+  // any embedded single quotes by closing/escaping/reopening.
+  function shQuote(s) {
+    if (s === null || s === undefined) return "''"
+    return "'" + String(s).replace(/'/g, "'\\''") + "'"
+  }
+
+  function buildCurl(r) {
+    const parts = ["curl", "-sS", "-X", r.method || "POST", shQuote(r.url)]
+    const hdrs = r.requestHeaders || {}
+    for (const k of Object.keys(hdrs).sort()) {
+      // Skip hop-by-hop + host (curl sets these automatically)
+      const lk = k.toLowerCase()
+      if (lk === "host" || lk === "content-length" || lk === "connection") continue
+      parts.push("-H", shQuote(`${k}: ${hdrs[k]}`))
+    }
+    if (r.requestBody) {
+      parts.push("--data-raw", shQuote(r.requestBody))
+    }
+    return parts.join(" ")
+  }
+
+  async function copyToClipboard(text) {
+    try {
+      await navigator.clipboard.writeText(text)
+    } catch {
+      // Fallback: textarea trick
+      const ta = document.createElement("textarea")
+      ta.value = text; ta.style.position = "fixed"; ta.style.left = "-9999px"
+      document.body.appendChild(ta); ta.select()
+      try { document.execCommand("copy") } catch {}
+      document.body.removeChild(ta)
+    }
+  }
+
+  // ── Render ─────────────────────────────────────────────────────────────
+  function renderAll() {
+    renderEvents()
+    renderMessages()
+    renderPrompt()
+    renderConfig()
+    renderTokens()
+    renderNetwork()
+  }
+
+  function fmtTs(ts) {
+    const d = new Date(ts)
+    return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}.${String(d.getMilliseconds()).padStart(3,'0')}`
+  }
+
+  function renderEvents() {
+    const frag = document.createDocumentFragment()
+    const list = filterText
+      ? events.filter(x => {
+          const t = (x.event.type || "").toLowerCase()
+          const json = JSON.stringify(x.event).toLowerCase()
+          return t.includes(filterText) || json.includes(filterText)
+        })
+      : events
+    for (const { ts, event } of list) {
+      const row = document.createElement("div")
+      row.className = "event"
+      const tsEl = document.createElement("div")
+      tsEl.className = "ts"
+      tsEl.textContent = fmtTs(ts)
+      row.appendChild(tsEl)
+
+      const typeEl = document.createElement("div")
+      typeEl.className = "type " + (event.type || "unknown")
+      typeEl.textContent = event.type || "unknown"
+      if (event.path && event.path.length > 0) {
+        const badge = document.createElement("span")
+        badge.className = "pathBadge"
+        badge.textContent = event.path.join(" › ")
+        typeEl.appendChild(badge)
+      }
+      row.appendChild(typeEl)
+
+      const summary = document.createElement("div")
+      summary.className = "summary"
+      summary.textContent = summarize(event)
+      const det = document.createElement("details")
+      const sum = document.createElement("summary")
+      sum.textContent = "details"
+      det.appendChild(sum)
+      const pre = document.createElement("pre")
+      pre.textContent = JSON.stringify(event, null, 2)
+      det.appendChild(pre)
+      const wrap = document.createElement("div")
+      wrap.appendChild(summary)
+      wrap.appendChild(det)
+      row.appendChild(wrap)
+
+      frag.appendChild(row)
+    }
+    eventsEl.replaceChildren(frag)
+    eventsEmpty.style.display = list.length ? "none" : "block"
+    // Autoscroll to bottom
+    window.scrollTo(0, document.body.scrollHeight)
+  }
+
+  function summarize(e) {
+    switch (e.type) {
+      case "run_started":  return `input: ${trunc(e.input, 140)}`
+      case "run_step": {
+        const ctx = e.context ? ` · ctx ${e.context.estimatedTokens}t ${e.context.hash}` : ""
+        const prefix = e.context?.conversationCache?.prefix
+          ? ` · prefix ${e.context.conversationCache.prefix.messageCount || 0}m/${e.context.conversationCache.prefix.estimatedTokens || 0}t`
+          : ""
+        return `step ${e.step} · messages: ${e.messageCount}${ctx}${prefix}`
+      }
+      case "run_usage": {
+        if (e.providerUsageReported === false) return `step ${e.step} · usage not reported by provider · ${e.finishReason || ""}`
+        const { read, write, reported } = cacheUsageFields(e)
+        const cache = cacheStats(e.inputTokens || 0, read, write)
+        const hit = reported && cache.total > 0 ? ` · cache reuse ${pct(cache.reuse)} / effective ${pct(cache.effective)} / write ${pct(cache.writeRatio)}` : ""
+        const cacheNote = reported ? "" : " · cache not reported"
+        return `step ${e.step} · ${fmtNum(cache.total)} prompt (${fmtNum(e.inputTokens || 0)} fresh) / ${fmtNum(e.outputTokens || 0)} out${hit}${cacheNote} · ${e.finishReason || ""}`
+      }
+      case "run_ended": {
+        const u = e.usage || {}
+        if (u.providerUsageReported === false) return `steps: ${e.steps} · usage not reported by provider`
+        const { read, write, reported } = cacheUsageFields(u)
+        const cache = cacheStats(u.inputTokens || 0, read, write)
+        const hit = reported && cache.total > 0 ? ` · cache reuse ${pct(cache.reuse)} / effective ${pct(cache.effective)} / write ${pct(cache.writeRatio)}` : ""
+        const cacheNote = reported ? "" : " · cache not reported"
+        return `steps: ${e.steps} · total: ${fmtNum(cache.total)} prompt (${fmtNum(u.inputTokens || 0)} fresh) / ${fmtNum(u.outputTokens || 0)} out${hit}${cacheNote}`
+      }
+      case "content_final":
+        if (e.kind === "text")        return trunc(e.text, 180)
+        if (e.kind === "tool_call")   return `${e.toolName}(${Object.keys(e.arguments || {}).join(", ")})`
+        if (e.kind === "tool_result") return `${e.toolName} → ${e.result?.success ? "ok" : "fail"}`
+        if (e.kind === "thinking")    return trunc(e.text, 180)
+        return e.kind || ""
+      case "content_delta": return `${e.kind} +${(e.text||'').length}ch`
+      case "sub_agent_started":  return `${e.subagentId}: ${trunc(e.task, 120)}`
+      case "sub_agent_finished": return `${e.subagentId} · ${e.usage?.inputTokens}/${e.usage?.outputTokens} tokens`
+      case "observation":  return `${e.kind}: ${trunc(JSON.stringify(e.detail), 120)}`
+      case "error":        return `${e.message || ""}`
+      case "tool_call_pending": return `${e.toolName} awaiting approval`
+      case "status":       return `${e.status}`
+      default: return ""
+    }
+  }
+
+  function trunc(s, n) { s = s || ""; return s.length > n ? s.slice(0, n) + "…" : s }
+
+  function renderMessages() {
+    const frag = document.createDocumentFragment()
+    for (const m of conversation) {
+      const row = document.createElement("div")
+      row.className = "msg " + (m.role || "")
+      const r = document.createElement("div")
+      r.className = "role"
+      r.textContent = m.role + (m.toolCallId ? ` · ${m.toolCallId}` : "")
+      row.appendChild(r)
+      if (m.content) {
+        const c = document.createElement("div")
+        c.className = "content"
+        c.textContent = m.content
+        row.appendChild(c)
+      }
+      if (m.toolCalls && m.toolCalls.length) {
+        for (const tc of m.toolCalls) {
+          const tcEl = document.createElement("div")
+          tcEl.className = "toolcall"
+          const n = document.createElement("span")
+          n.className = "name"
+          n.textContent = tc.name
+          tcEl.appendChild(n)
+          const pre = document.createElement("pre")
+          pre.style.margin = "4px 0 0"
+          pre.textContent = JSON.stringify(tc.arguments, null, 2)
+          tcEl.appendChild(pre)
+          row.appendChild(tcEl)
+        }
+      }
+      frag.appendChild(row)
+    }
+    messagesEl.replaceChildren(frag)
+    messagesEmpty.style.display = conversation.length ? "none" : "block"
+  }
+
+  function renderPrompt() {
+    promptEl.textContent = systemPrompt || "(empty)"
+  }
+
+  function renderConfig() {
+    configEl.textContent = JSON.stringify(config, null, 2)
+  }
+
+  function renderNetwork() {
+    const root = document.getElementById("network")
+    const empty = document.getElementById("network-empty")
+    const frag = document.createDocumentFragment()
+
+    // ── Real HTTP requests (wire-level, from fetch interceptor) ──
+    const httpItems = httpOrder.slice().reverse().map(id => httpById.get(id)).filter(Boolean)
+    for (const h of httpItems) {
+      // Whole row is a <details> — collapsed by default to keep the list
+      // scannable. The <summary> holds method/url/status + the params pills
+      // so the most-useful signals stay visible even when collapsed.
+      const row = document.createElement("details")
+      row.className = "req"
+      const summaryEl = document.createElement("summary")
+      const line1 = document.createElement("div")
+      line1.className = "line1"
+      const statusClass = h.error ? "error" : (h.status ? "ok" : "pending")
+      const statusLabel = h.error ? "error" : (h.status ? String(h.status) : "pending")
+      line1.innerHTML =
+        `<span class="method">${escape(h.method || "GET")}</span>` +
+        `<span class="model">${escape(shortUrl(h.url))}</span>` +
+        `<span class="muted">${fmtTs(h.startedAt)}${h.durationMs != null ? ` · ${h.durationMs}ms` : ""}</span>` +
+        `<span class="status ${statusClass}">${statusLabel}</span>`
+      summaryEl.appendChild(line1)
+
+      // Per-request core params (model, input size, max_tokens, reasoning_effort,
+      // actual output + finish_reason once paired with the next run_usage event).
+      // Only shown for recognized LLM-shaped bodies; other calls skip the row.
+      if (h.params?.isLLM) {
+        const p = h.params
+        const u = h.usage
+        const pills = document.createElement("div")
+        pills.className = "params"
+        const add = (cls, k, v, title) => {
+          const el = document.createElement("span")
+          el.className = "pill " + cls
+          el.innerHTML = `<span class="k">${escape(k)}</span>${escape(String(v))}`
+          if (title) el.title = title
+          pills.appendChild(el)
+        }
+        if (p.model) add("model", "model", p.model)
+        add("in", "est-in", `${p.messageCount} msgs · ~${fmtNum(Math.round(p.bodyChars / 4))} tok`, `${p.bodyChars.toLocaleString()} body chars ÷ 4 ≈ rough token estimate (includes tool schemas + results). Server-side counts appear as "prompt-in" / "fresh-in" after response.`)
+        if (p.maxTokens != null) {
+          add("max", p.maxTokensKey, fmtNum(p.maxTokens), `Field: ${p.maxTokensKey}=${p.maxTokens}`)
+        } else {
+          add("warn", "max", "omitted", "No max_tokens sent — server default applies (Anthropic will 400)")
+        }
+        if (p.effort) add("effort", "effort", p.effort)
+        if (p.temperature != null) add("effort", "temp", p.temperature)
+        if (p.thinking && typeof p.thinking === "object" && p.thinking.type) add("effort", "thinking", p.thinking.type)
+        if (p.toolCount > 0) add("finish", "tools", p.toolCount)
+        if (p.stream) add("finish", "stream", "on")
+        if (u) {
+          if (u.providerUsageReported === false) {
+            add("finish", "usage", "not reported", "Provider did not include token usage. Token and cache ratios are unknown.")
+          } else {
+            const { read: cacheRead, write: cacheWrite, reported: cacheReported } = cacheUsageFields(u)
+            const cache = cacheStats(u.inputTokens || 0, cacheRead, cacheWrite)
+            add("in", "prompt-in", fmtNum(cache.total), `Total prompt tokens reported by server or derived from fresh + cache read/write (step ${u.step})`)
+            add("in", "fresh-in", fmtNum(u.inputTokens), "Fresh/miss prompt tokens billed as normal input; cache read/write shown separately.")
+            if (cacheReported && cache.total > 0) {
+              add(
+                "in",
+                "cache",
+                `${pct(cache.reuse)} reuse`,
+                `Effective hit ${pct(cache.effective)}; cache write ${pct(cache.writeRatio)}; read ${fmtNum(cacheRead)}, write ${fmtNum(cacheWrite)}.`,
+              )
+            }
+            if (cacheRead > 0) add("in", "cache-read", fmtNum(cacheRead))
+            if (cacheWrite > 0) add("in", "cache-write", fmtNum(cacheWrite))
+            if (!cacheReported) add("finish", "cache", "not reported", "Provider did not include prompt cache accounting in usage.")
+            add("out", "out", fmtNum(u.outputTokens))
+            if (u.finishReason) {
+              const cls = (u.finishReason === "length" || u.finishReason === "max_tokens") ? "overflow" : "finish"
+              add(cls, "finish", u.finishReason, cls === "overflow" ? "Hit max_tokens — output was truncated" : "")
+            }
+          }
+        } else if (h.status || h.error) {
+          add("finish", "out", "…", "Awaiting run_usage event")
+        }
+        summaryEl.appendChild(pills)
+      }
+      row.appendChild(summaryEl)
+
+      const actions = document.createElement("div")
+      actions.className = "meta"
+      actions.style.display = "flex"; actions.style.gap = "8px"; actions.style.alignItems = "center"
+      const copyBtn = document.createElement("button")
+      copyBtn.textContent = "Copy as cURL"
+      copyBtn.style.padding = "1px 8px"; copyBtn.style.fontSize = "11px"
+      copyBtn.addEventListener("click", async (ev) => {
+        ev.stopPropagation()
+        await copyToClipboard(buildCurl(h))
+        copyBtn.textContent = "Copied!"
+        setTimeout(() => { copyBtn.textContent = "Copy as cURL" }, 1200)
+      })
+      actions.appendChild(copyBtn)
+      const urlSpan = document.createElement("span")
+      urlSpan.style.color = "#6e7681"
+      urlSpan.textContent = h.url
+      actions.appendChild(urlSpan)
+      row.appendChild(actions)
+
+      if (h.error) {
+        const err = document.createElement("div")
+        err.className = "meta"
+        err.style.color = "#ff7b72"
+        err.textContent = h.error
+        row.appendChild(err)
+      }
+
+      if (h.requestHeaders && Object.keys(h.requestHeaders).length) {
+        const det = document.createElement("details")
+        const sum = document.createElement("summary")
+        sum.textContent = "request headers"
+        det.appendChild(sum)
+        const pre = document.createElement("pre")
+        pre.textContent = Object.entries(h.requestHeaders).map(([k,v]) => `${k}: ${v}`).join("\n")
+        det.appendChild(pre)
+        row.appendChild(det)
+      }
+      if (h.requestBody) {
+        const det = document.createElement("details")
+        const sum = document.createElement("summary")
+        sum.textContent = `request body (${h.requestBody.length} chars)`
+        det.appendChild(sum)
+        const pre = document.createElement("pre")
+        pre.textContent = prettyJson(h.requestBody)
+        det.appendChild(pre)
+        row.appendChild(det)
+      }
+      if (h.responseHeaders && Object.keys(h.responseHeaders).length) {
+        const det = document.createElement("details")
+        const sum = document.createElement("summary")
+        sum.textContent = "response headers"
+        det.appendChild(sum)
+        const pre = document.createElement("pre")
+        pre.textContent = Object.entries(h.responseHeaders).map(([k,v]) => `${k}: ${v}`).join("\n")
+        det.appendChild(pre)
+        row.appendChild(det)
+      }
+      frag.appendChild(row)
+    }
+
+    root.replaceChildren(frag)
+    empty.style.display = httpItems.length ? "none" : "block"
+  }
+
+  function shortUrl(u) {
+    try {
+      const p = new URL(u)
+      return `${p.host}${p.pathname}`
+    } catch { return u }
+  }
+  function prettyJson(s) {
+    try { return JSON.stringify(JSON.parse(s), null, 2) } catch { return s }
+  }
+
+  function escape(s) {
+    return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))
+  }
+
+  function numericUsageField(value) {
+    return typeof value === "number" && Number.isFinite(value) ? value : undefined
+  }
+
+  function cacheUsageFields(usage) {
+    const read = numericUsageField(usage?.cacheReadInputTokens)
+    const write = numericUsageField(usage?.cacheCreationInputTokens)
+    return {
+      read: read ?? 0,
+      write: write ?? 0,
+      reported: read !== undefined || write !== undefined,
+    }
+  }
+
+  function usageWithOptionalCache(e) {
+    const out = {
+      inputTokens: e.inputTokens,
+      outputTokens: e.outputTokens,
+    }
+    if (typeof e.providerUsageReported === "boolean") out.providerUsageReported = e.providerUsageReported
+    const read = numericUsageField(e.cacheReadInputTokens)
+    const write = numericUsageField(e.cacheCreationInputTokens)
+    if (read !== undefined) out.cacheReadInputTokens = read
+    if (write !== undefined) out.cacheCreationInputTokens = write
+    return out
+  }
+
+  function cacheStats(input, read, write) {
+    const fresh = Math.max(0, input || 0)
+    const cacheRead = Math.max(0, read || 0)
+    const cacheWrite = Math.max(0, write || 0)
+    const total = fresh + cacheRead + cacheWrite
+    const reusable = fresh + cacheRead
+    return {
+      total,
+      reuse: reusable > 0 ? cacheRead / reusable : null,
+      effective: total > 0 ? cacheRead / total : null,
+      writeRatio: total > 0 ? cacheWrite / total : null,
+    }
+  }
+
+  function pct(value) {
+    return value == null ? "n/a" : `${Math.round(value * 100)}%`
+  }
+
+  function contextSegmentSummary(ctx) {
+    if (!ctx?.segments?.length) return "none"
+    return ctx.segments
+      .map(s => {
+        const meta = contextSegmentMetaSummary(s.meta)
+        return `${s.name || "segment"}:${fmtNum(s.estimatedTokens)}t/${fmtNum(s.chars)}ch${meta ? ` ${meta}` : ""}`
+      })
+      .join(", ")
+  }
+
+  function normalizeConversationCache(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null
+    const slice = (candidate, includeMessageHashes) => {
+      if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return null
+      const out = {
+        messageCount: finiteNonNegative(candidate.messageCount),
+        chars: finiteNonNegative(candidate.chars),
+        estimatedTokens: finiteNonNegative(candidate.estimatedTokens),
+        hash: typeof candidate.hash === "string" ? candidate.hash : "",
+      }
+      if (includeMessageHashes) {
+        out.messageHashes = Array.isArray(candidate.messageHashes)
+          ? candidate.messageHashes.filter(hash => typeof hash === "string").slice(0, 128)
+          : []
+      }
+      return out
+    }
+    const prefix = slice(value.prefix, true)
+    const tail = slice(value.tail, false)
+    return prefix && tail ? { prefix, tail } : null
+  }
+
+  function finiteNonNegative(value) {
+    return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : 0
+  }
+
+  function contextSegmentMetaSummary(meta) {
+    if (!meta || typeof meta !== "object" || Array.isArray(meta)) return ""
+    const parts = []
+    if (Array.isArray(meta.included)) {
+      const included = meta.included.filter(v => typeof v === "string")
+      if (included.length) parts.push(`included ${included.length}${shortList(included)}`)
+    }
+    const skipped = skippedSummary(meta.skipped)
+    if (skipped) parts.push(`skipped ${skipped}`)
+    if (typeof meta.todoCount === "number" && Number.isFinite(meta.todoCount)) {
+      parts.push(`todos ${fmtNum(Math.max(0, meta.todoCount))}`)
+    }
+    if (typeof meta.inProgressCount === "number" && Number.isFinite(meta.inProgressCount)) {
+      parts.push(`in_progress ${fmtNum(Math.max(0, meta.inProgressCount))}`)
+    }
+    return parts.length ? `(${parts.join("; ")})` : ""
+  }
+
+  function shortList(values, maxItems = 3) {
+    if (!values.length) return ""
+    const shown = values.slice(0, maxItems).map(v => oneLine(v).slice(0, 40))
+    const suffix = values.length > maxItems ? `, +${values.length - maxItems} more` : ""
+    return ` [${shown.join(", ")}${suffix}]`
+  }
+
+  function skippedSummary(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return ""
+    return Object.entries(value)
+      .filter(([, count]) => typeof count === "number" && count > 0)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([reason, count]) => `${oneLine(reason)} ${fmtNum(Math.max(0, count))}`)
+      .join(", ")
+  }
+
+  function oneLine(value) {
+    return String(value).replace(/\s+/g, " ").trim()
+  }
+
+  function appendHistoryTitle(parent, text) {
+    const title = document.createElement("div")
+    title.className = "historyTitle"
+    title.textContent = text
+    parent.appendChild(title)
+  }
+
+  function renderTokens() {
+    tokensBar.replaceChildren()
+    const cache = cacheStats(totals.input, totals.cacheRead, totals.cacheWrite)
+    const usageKnown = totals.usageReported !== false
+    const latestContext = contextHistory[contextHistory.length - 1]
+    const cells = [
+      ["Usage",             totals.usageReported === false ? "not reported" : (totals.usageReported === true ? "reported" : "pending")],
+      ["Prompt input total", usageKnown ? cache.total : "not reported"],
+      ["Fresh input (last run)", usageKnown ? totals.input : "not reported"],
+      ["Output (last run)", usageKnown ? totals.output : "not reported"],
+      ["Cache read",        usageKnown && totals.cacheReported ? totals.cacheRead : "not reported"],
+      ["Cache write",       usageKnown && totals.cacheReported ? totals.cacheWrite : "not reported"],
+      ["Cache reuse",       usageKnown && totals.cacheReported ? pct(cache.reuse) : "n/a"],
+      ["Cache effective",   usageKnown && totals.cacheReported ? pct(cache.effective) : "n/a"],
+      ["Cache write ratio", usageKnown && totals.cacheReported ? pct(cache.writeRatio) : "n/a"],
+      ["Context attach",    latestContext ? `${fmtNum(latestContext.estimatedTokens)} tok / ${fmtNum(latestContext.totalChars)} chars` : "pending"],
+      ["Context hash",      latestContext?.hash || "pending"],
+      ["Context segments",  latestContext ? latestContext.segments.length : "pending"],
+      ["Conversation prefix", latestContext?.conversationCache
+        ? `${fmtNum(latestContext.conversationCache.prefix.estimatedTokens)} tok / ${fmtNum(latestContext.conversationCache.prefix.messageCount)} msgs`
+        : "pending"],
+      ["Conversation tail", latestContext?.conversationCache
+        ? `${fmtNum(latestContext.conversationCache.tail.estimatedTokens)} tok / ${fmtNum(latestContext.conversationCache.tail.messageCount)} msgs`
+        : "pending"],
+    ]
+    for (const [label, value] of cells) {
+      const c = document.createElement("div")
+      c.className = "tokCell"
+      const rendered = typeof value === "number" ? Number(value).toLocaleString() : value
+      const labelEl = document.createElement("div")
+      labelEl.className = "label"
+      labelEl.textContent = label
+      const valueEl = document.createElement("div")
+      valueEl.className = "value"
+      valueEl.textContent = String(rendered)
+      c.appendChild(labelEl)
+      c.appendChild(valueEl)
+      tokensBar.appendChild(c)
+    }
+    tokensHistory.replaceChildren()
+    appendHistoryTitle(tokensHistory, "Token history")
+    const h = document.createElement("table")
+    h.style.width = "100%"
+    h.innerHTML = "<thead><tr><th style='text-align:left;color:#8b949e'>ts</th><th style='text-align:left;color:#8b949e'>step</th><th style='text-align:right;color:#8b949e'>prompt</th><th style='text-align:right;color:#8b949e'>fresh</th><th style='text-align:right;color:#8b949e'>out</th></tr></thead>"
+    const tb = document.createElement("tbody")
+    const last = tokenHistory.slice(-50).reverse()
+    for (const r of last) {
+      const tr = document.createElement("tr")
+      const cache = cacheStats(r.inputTokens, r.cacheReadInputTokens, r.cacheCreationInputTokens)
+      const usageKnown = r.providerUsageReported !== false
+      tr.innerHTML = `<td class='muted'>${fmtTs(r.ts)}</td><td>${r.step ?? ""}</td><td style='text-align:right'>${usageKnown ? cache.total : "n/a"}</td><td style='text-align:right'>${usageKnown ? r.inputTokens : "n/a"}</td><td style='text-align:right'>${usageKnown ? r.outputTokens : "n/a"}</td>`
+      tb.appendChild(tr)
+    }
+    h.appendChild(tb)
+    tokensHistory.appendChild(h)
+
+    appendHistoryTitle(tokensHistory, "Context attach history")
+    const ch = document.createElement("table")
+    ch.style.width = "100%"
+    ch.innerHTML = "<thead><tr><th style='text-align:left;color:#8b949e'>ts</th><th style='text-align:left;color:#8b949e'>step</th><th style='text-align:right;color:#8b949e'>messages</th><th style='text-align:right;color:#8b949e'>tokens</th><th style='text-align:right;color:#8b949e'>chars</th><th style='text-align:left;color:#8b949e'>hash</th><th style='text-align:left;color:#8b949e'>prefix</th><th style='text-align:left;color:#8b949e'>tail</th><th style='text-align:left;color:#8b949e'>segments</th></tr></thead>"
+    const ctb = document.createElement("tbody")
+    const contexts = contextHistory.slice(-50).reverse()
+    for (const r of contexts) {
+      const tr = document.createElement("tr")
+      const prefix = r.conversationCache?.prefix
+      const tail = r.conversationCache?.tail
+      const prefixText = prefix ? `${fmtNum(prefix.messageCount)}m/${fmtNum(prefix.estimatedTokens)}t ${prefix.hash}` : "n/a"
+      const tailText = tail ? `${fmtNum(tail.messageCount)}m/${fmtNum(tail.estimatedTokens)}t ${tail.hash}` : "n/a"
+      tr.innerHTML = `<td class='muted'>${fmtTs(r.ts)}</td><td>${r.step ?? ""}</td><td style='text-align:right'>${r.messageCount ?? ""}</td><td style='text-align:right'>${fmtNum(r.estimatedTokens)}</td><td style='text-align:right'>${fmtNum(r.totalChars)}</td><td>${escape(r.hash || "")}</td><td>${escape(prefixText)}</td><td>${escape(tailText)}</td><td>${escape(contextSegmentSummary(r))}</td>`
+      ctb.appendChild(tr)
+    }
+    ch.appendChild(ctb)
+    tokensHistory.appendChild(ch)
+  }
+
+  connect()
+})()
+</script>
+
+</body>
+</html>

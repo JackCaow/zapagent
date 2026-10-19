@@ -1,0 +1,48 @@
+#!/sbin/openrc-run
+
+name="zapvm signed Agent layer"
+description="Mount the optional independently versioned Agent disk read-only"
+
+depend() {
+	need localmount
+	before zapvm-agent
+}
+
+start() {
+	local agent_device=
+	local candidate=
+	for candidate in /dev/vd? /dev/sd?; do
+		[ -b "$candidate" ] || continue
+		case "$(blkid "$candidate" 2>/dev/null || true)" in
+			*'LABEL="zapvm-agent"'*) agent_device=$candidate; break ;;
+		esac
+	done
+	if [ -z "$agent_device" ]; then
+		ebegin "No separate zapvm Agent layer attached; using compatible rootfs Agent"
+		eend 0
+		return 0
+	fi
+	if [ ! -d /opt/zapvm-agent ] || [ -L /opt/zapvm-agent ]; then
+		eerror "signed Agent mount point is invalid"
+		return 1
+	fi
+	ebegin "Mounting signed zapvm Agent layer"
+	if ! mount -t ext4 -o ro,nosuid,nodev "$agent_device" /opt/zapvm-agent; then
+		eend 1 "signed Agent layer mount failed"
+		return 1
+	fi
+	if [ ! -x /opt/zapvm-agent/bin/agent ] || [ -L /opt/zapvm-agent/bin/agent ]; then
+		umount /opt/zapvm-agent || true
+		eend 1 "signed Agent layer does not contain a regular ACP Agent entrypoint"
+		return 1
+	fi
+	eend 0
+}
+
+stop() {
+	if mountpoint -q /opt/zapvm-agent; then
+		ebegin "Unmounting signed zapvm Agent layer"
+		umount /opt/zapvm-agent
+		eend $?
+	fi
+}

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "mode": "serve",
+  "serve": {
+    "listen": "0.0.0.0:9443",
+    "daemon_endpoint": "/absolute/path/to/zapvm-daemon.sock",
+    "client_ca": "/absolute/path/to/client-ca.pem",
+    "certificate": "/absolute/path/to/node.pem",
+    "private_key": "/absolute/path/to/node.key",
+    "policy": "/absolute/path/to/gateway-policy.json",
+    "audit_log": "/absolute/path/to/remote-audit.jsonl"
+  }
+}

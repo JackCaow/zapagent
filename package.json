@@ -1,0 +1,130 @@
+{
+  "name": "zapagent",
+  "private": true,
+  "version": "1.14.6",
+  "packageManager": "bun@1.3.14",
+  "author": "",
+  "main": "src/index.tsx",
+  "types": "zapsdk/index.ts",
+  "exports": {
+    ".": {
+      "types": "./zapsdk/index.ts",
+      "import": "./zapsdk/index.ts",
+      "default": "./zapsdk/index.ts"
+    },
+    "./zapsdk/*.js": {
+      "types": "./zapsdk/*.ts",
+      "import": "./zapsdk/*.ts",
+      "default": "./zapsdk/*.ts"
+    },
+    "./zapsdk/*": {
+      "types": "./zapsdk/*",
+      "import": "./zapsdk/*",
+      "default": "./zapsdk/*"
+    },
+    "./testing": {
+      "types": "./zapsdk/testing/index.ts",
+      "import": "./zapsdk/testing/index.ts",
+      "default": "./zapsdk/testing/index.ts"
+    },
+    "./cli": "./src/index.tsx",
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "1.5.1",
+    "@anthropic-ai/sdk": "^0.91.1",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@mozilla/readability": "^0.6.0",
+    "@resvg/resvg-js": "^2.6.2",
+    "@types/diff": "^8.0.0",
+    "@types/node": "^25.6.0",
+    "@types/react": "^19.2.2",
+    "@vscode/ripgrep": "^1.17.1",
+    "croner": "^10.0.1",
+    "diff": "^9.0.0",
+    "ink": "7.1.1",
+    "ink-spinner": "^5.0.0",
+    "ink-text-input": "^6.0.0",
+    "linkedom": "^0.18.12",
+    "mammoth": "^1.12.0",
+    "openai": "^6.34.0",
+    "pdf-parse": "^2.4.5",
+    "react": "^19.2.5",
+    "react-devtools-core": "^7.0.1",
+    "shiki": "^4.0.2",
+    "typescript": "^5.9.3",
+    "zod": "^4.3.6"
+  },
+  "overrides": {
+    "@hono/node-server": "1.19.15",
+    "@xmldom/xmldom": "0.8.15",
+    "fast-uri": "3.1.8",
+    "hono": "4.13.13",
+    "ip-address": "10.7.3",
+    "proxy-addr": "2.0.8",
+    "qs": "6.16.0",
+    "shell-quote": "1.11.0"
+  },
+  "bin": {
+    "zapagent": "src/index.tsx",
+    "zapcode": "src/index.tsx",
+    "zap": "src/index.tsx",
+    "zapdev": "src/index.tsx"
+  },
+  "description": "Terminal-based AI coding agent for fast, agentic software development.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JackCaow/zapagent.git"
+  },
+  "homepage": "https://github.com/JackCaow/zapagent#readme",
+  "bugs": {
+    "url": "https://github.com/JackCaow/zapagent/issues"
+  },
+  "files": [
+    "src",
+    "zapsdk",
+    "patches",
+    "third_party/yoga-layout/LICENSE",
+    "third_party/yoga-layout/README.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "SECURITY.md",
+    "!zapsdk/tests",
+    "!zapsdk/tests/**"
+  ],
+  "keywords": ["ai", "cli", "coding", "assistant", "terminal"],
+  "license": "ISC",
+  "engines": {
+    "bun": ">=1.3.0"
+  },
+  "patchedDependencies": {
+    "ink@7.1.1": "patches/ink@7.1.1.patch"
+  },
+  "scripts": {
+    "dev": "bun run src/index.tsx",
+    "dev:no-jit": "BUN_JSC_useJIT=0 bun run src/index.tsx",
+    "dev:sentinel": "ZAPCODE_RENDER_SENTINEL=1 bun run src/index.tsx",
+    "dev:diagnose": "BUN_JSC_useJIT=0 ZAPCODE_RENDER_SENTINEL=1 bun run src/index.tsx",
+    "start": "bun run src/index.tsx",
+    "preview:watch": "bun scripts/watch-preview.ts",
+    "build:watch": "bun scripts/build-watch.ts",
+    "check:watch": "bun scripts/build-watch.ts --check",
+    "build": "bun run build:watch && bun build --compile src/index.tsx --outfile dist/zap",
+    "pack:npm": "bun scripts/pack-npm.ts",
+    "verify:npm": "bun scripts/verify-npm-package.ts",
+    "typecheck:npm": "tsc --noEmit -p scripts/tsconfig.npm.json",
+    "build:vm": "bun scripts/build-zapvm-host.ts",
+    "build:all": "bun run build && bun run build:vm",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "bun test",
+    "test:vm": "go -C zapvm test ./...",
+    "check:vm": "cd zapvm && ./scripts/verify-repository.sh && go test ./... && go vet ./...",
+    "check:all": "bun run check && bun run check:vm",
+    "benchmark:real-repo": "bun run scripts/run-real-repo-benchmark.ts",
+    "check": "bun run typecheck && bun test && bun run build"
+  },
+  "type": "module",
+  "devDependencies": {
+    "motion": "14.3.0"
+  }
+}

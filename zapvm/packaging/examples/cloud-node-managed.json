@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "control_url": "https://control.example.internal:9444",
+  "trust_domain": "example.internal",
+  "control_id": "primary",
+  "node_id": "host-a",
+  "server_ca": "/absolute/path/to/control-ca.pem",
+  "enrollment_token_file": "/absolute/protected/path/enrollment.token",
+  "identity_directory": "/absolute/protected/path/node-identity",
+  "renew_before_seconds": 1800,
+  "daemon_endpoint": "/absolute/path/to/zapvm-daemon.sock",
+  "workspace_root": "/absolute/path/to/zapvm-workspaces",
+  "poll_ms": 250,
+  "max_concurrent": 4,
+  "relay_mode": "required"
+}

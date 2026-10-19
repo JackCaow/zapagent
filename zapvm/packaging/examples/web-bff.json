@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "listen": "127.0.0.1:8080",
+  "public_origin": "https://agent.example.com",
+  "signing_key_file": "/etc/zapvm/web-cookie-signing.key",
+  "session_seconds": 43200,
+  "projects": [
+    {
+      "id": "acme-default",
+      "user_id": "operator",
+      "display_name": "Acme Default",
+      "access_token_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "control_url": "https://control.example.com:9444",
+      "server_ca": "/etc/zapvm/control-ca.pem",
+      "certificate": "/etc/zapvm/acme-default-client.pem",
+      "private_key": "/etc/zapvm/acme-default-client.key",
+      "client_uri": "spiffe://example.com/tenant/acme/project/default/client/web",
+      "control_uri": "spiffe://example.com/control/cloud",
+      "runtime_profile": {
+        "id": "default",
+        "display_name": "Default Agent",
+        "provider_base_url": "https://api.example.com/v1",
+        "model": "model-1",
+        "model_credential_id": "model-api-key",
+        "max_turns": 80,
+        "timeout_seconds": 7200
+      }
+    }
+  ]
+}

@@ -1,0 +1,154 @@
+name: Linux KVM acceptance phase
+description: Run one zapVM boot phase on a fresh GitHub-hosted nested-KVM runner
+
+inputs:
+  phase:
+    description: acceptance-linux.sh phase
+    required: true
+  snapshot-input-artifact:
+    description: optional prior state/workspace snapshot artifact
+    required: false
+    default: ""
+  snapshot-output-artifact:
+    description: optional name used to publish the resulting snapshot
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Go
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version-file: go.mod
+        cache: true
+
+    - name: Download signed image
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        name: zapvm-signed-image-amd64
+        path: ${{ runner.temp }}/zapvm-image
+
+    - name: Download prior Linux state snapshot
+      if: inputs.snapshot-input-artifact != ''
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        name: ${{ inputs.snapshot-input-artifact }}
+        path: ${{ runner.temp }}/zapvm-snapshot-in
+
+    - name: Assert Linux host capabilities
+      shell: bash
+      run: |
+        set -euo pipefail
+        test "$(id -u)" -ne 0
+        test "$(systemd --version | awk 'NR == 1 { print $2 }')" -ge 254
+        test "$(stat -fc %T /sys/fs/cgroup)" = cgroup2fs
+        test -c /dev/kvm
+        if [[ -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]] &&
+           [[ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1 ]]; then
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        fi
+        if [[ -r /proc/sys/kernel/unprivileged_userns_clone ]] &&
+           [[ "$(cat /proc/sys/kernel/unprivileged_userns_clone)" = 0 ]]; then
+          sudo sysctl -w kernel.unprivileged_userns_clone=1
+        fi
+        test "$(cat /proc/sys/user/max_user_namespaces)" -gt 0
+        if ! [[ -r /dev/kvm && -w /dev/kvm ]]; then
+          sudo setfacl -m "u:${USER}:rw" /dev/kvm
+        fi
+        python3 - <<'PY'
+        import fcntl
+        import os
+
+        fd = os.open("/dev/kvm", os.O_RDWR | os.O_CLOEXEC)
+        try:
+            version = fcntl.ioctl(fd, 0xAE00, 0)
+        finally:
+            os.close(fd)
+        if version != 12:
+            raise SystemExit(f"unexpected KVM API version: {version}")
+        print(f"KVM_GET_API_VERSION={version}")
+        PY
+        uid="$(id -u)"
+        echo "XDG_RUNTIME_DIR=/run/user/$uid" >> "$GITHUB_ENV"
+        export XDG_RUNTIME_DIR="/run/user/$uid"
+        if ! systemctl --user show-environment >/dev/null 2>&1; then
+          sudo loginctl enable-linger "$USER"
+          sudo systemctl start "user@${uid}.service"
+        fi
+        systemctl --user show-environment >/dev/null
+        systemd-run --user --scope --quiet true
+
+    - name: Verify downloaded image identity
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd "$RUNNER_TEMP/zapvm-image"
+        sha256sum -c SHA256SUMS
+
+    - name: Run Linux KVM phase
+      shell: bash
+      env:
+        ZAPVM_PHASE: ${{ inputs.phase }}
+        ZAPVM_SNAPSHOT_INPUT_ARTIFACT: ${{ inputs.snapshot-input-artifact }}
+      run: |
+        set -euo pipefail
+        evidence="$GITHUB_WORKSPACE/.cache/acceptance/github-linux-${ZAPVM_PHASE}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+        snapshot_in=
+        if [[ -n "$ZAPVM_SNAPSHOT_INPUT_ARTIFACT" ]]; then
+          snapshot_in="$RUNNER_TEMP/zapvm-snapshot-in/zapvm-snapshot-out.tar.gz"
+          test -f "$snapshot_in"
+        fi
+        snapshot_out="$RUNNER_TEMP/zapvm-snapshot-out.tar.gz"
+        echo "ZAPVM_LINUX_EVIDENCE=$evidence" >> "$GITHUB_ENV"
+        ZAPVM_ACCEPTANCE_PHASE="$ZAPVM_PHASE" \
+        ZAPVM_ACCEPTANCE_SNAPSHOT_IN="$snapshot_in" \
+        ZAPVM_ACCEPTANCE_SNAPSHOT_OUT="$snapshot_out" \
+        ZAPVM_ACCEPTANCE_IMAGE_BUNDLE="$RUNNER_TEMP/zapvm-image/zapvm-image-amd64.bundle.tar.zst" \
+        ZAPVM_ACCEPTANCE_IMAGE_PUBLIC_KEY="$RUNNER_TEMP/zapvm-image/zapvm-image-public.pem" \
+          ./scripts/acceptance-linux.sh "$evidence"
+
+    - name: Collect Linux KVM diagnostics
+      if: always()
+      shell: bash
+      run: |
+        set +e
+        if [[ -n "${ZAPVM_LINUX_EVIDENCE:-}" ]]; then
+          mkdir -p "$ZAPVM_LINUX_EVIDENCE"
+          sudo dmesg --ctime | tail -n 500 > "$ZAPVM_LINUX_EVIDENCE/kvm-dmesg.txt"
+        fi
+
+    - name: Package Linux phase evidence
+      if: always()
+      shell: bash
+      env:
+        ZAPVM_PHASE: ${{ inputs.phase }}
+      run: |
+        set -euo pipefail
+        output="$RUNNER_TEMP/linux-${ZAPVM_PHASE}-evidence.tar.gz"
+        if [[ -n "${ZAPVM_LINUX_EVIDENCE:-}" && -d "$ZAPVM_LINUX_EVIDENCE" ]]; then
+          cd "$ZAPVM_LINUX_EVIDENCE"
+          find . -type f \( -name '*.log' -o -name '*.json' -o -name '*.jsonl' -o -name '*.txt' \) -print0 |
+            tar --null -czf "$output" --files-from=-
+        else
+          tar -czf "$output" --files-from=/dev/null
+        fi
+
+    - name: Upload Linux phase evidence
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: linux-kvm-${{ inputs.phase }}-evidence
+        path: ${{ runner.temp }}/linux-${{ inputs.phase }}-evidence.tar.gz
+        if-no-files-found: error
+        retention-days: 14
+
+    - name: Upload Linux state snapshot
+      if: inputs.snapshot-output-artifact != ''
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: ${{ inputs.snapshot-output-artifact }}
+        path: ${{ runner.temp }}/zapvm-snapshot-out.tar.gz
+        if-no-files-found: error
+        compression-level: 0
+        retention-days: 7

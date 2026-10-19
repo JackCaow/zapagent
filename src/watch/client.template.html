@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark"><title>Zap Watch</title>
+<style nonce="__WATCH_NONCE__">/* WATCH_STYLES */</style>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="#" aria-label="Zap Watch"><span class="brand-mark">ϟ</span><strong>zap<span>/ watch</span></strong></a>
+  <span class="readonly">LOCAL · READ ONLY</span>
+  <div class="connection-wrap"><span id="connection" role="status" aria-live="polite">正在连接</span><span id="freshness"></span></div>
+</header>
+<main>
+  <section class="intro"><div><div class="eyebrow">RUNTIME OBSERVATORY</div><h1>运行现场<span class="live-dot"></span></h1><p>从 Agent 到每一次工具调用，让执行过程清晰可见。</p></div><div class="session-control"><label for="session">当前会话</label><select id="session" aria-label="会话"><option>等待会话</option></select></div></section>
+  <section class="metrics" aria-label="运行概览">
+    <div class="metric"><span>活动 Agent</span><strong id="metric-agents">0</strong><small>主 Agent 与子 Agent</small></div>
+    <div class="metric"><span>活动工具</span><strong id="metric-tools">0</strong><small>当前未结束的调用</small></div>
+    <div class="metric"><span>等待中的节点</span><strong id="metric-waiting">0</strong><small>审批、输入或执行条件</small></div>
+    <div class="metric"><span>已观测节点</span><strong id="metric-total">0</strong><small id="counts">等待运行时事件</small></div>
+  </section>
+  <div class="workspace">
+    <section class="graph panel" aria-label="实时运行状态图">
+      <div class="panelhead"><div><span class="eyebrow">LIVE TOPOLOGY</span><h2>运行状态图</h2></div><div class="graph-actions"><button id="view" type="button">列表视图</button><button id="motion" type="button" aria-pressed="false">关闭动效</button></div></div>
+      <div class="graph-meta"><div class="legend"><span><i class="active"></i>执行中</span><span><i class="waiting"></i>等待</span><span><i class="error"></i>异常</span><span><i class="neutral"></i>已结束</span></div><span id="sequence">SEQ 0</span></div>
+      <div id="canvas" tabindex="0" aria-label="运行图画布，可滚动查看"><div id="stage"><svg id="wires" aria-hidden="true"></svg></div><div id="empty"><span class="empty-glyph">◎</span><h3>等待 Agent 开始运行</h3><p>在终端发起任务，运行关系会在这里实时展开。</p></div></div>
+      <div id="tree" aria-label="可访问状态列表"></div>
+      <div class="graph-footer"><span id="graph-hint">点击节点查看详情 · 滚动画布探索关系</span><div class="zoom-controls"><button id="zoom-out" aria-label="缩小">−</button><output id="zoom">100%</output><button id="zoom-in" aria-label="放大">+</button><button id="fit">适配</button></div></div>
+    </section>
+    <aside class="panel" aria-label="节点详情"><div class="inspector-head"><span class="eyebrow">INSPECTOR</span><span id="detail-kind">节点详情</span></div><h2 id="detail-title">选择一个节点</h2><div id="detail-id"></div><dl id="details"></dl><p id="detail-note">点击状态图中的 Agent 或工具，查看生命周期、执行尝试与运行来源。</p></aside>
+  </div>
+  <section class="timeline-panel panel" aria-label="实时事件时间线"><div class="panelhead"><div><span class="eyebrow">EVENT STREAM</span><h2>实时事件</h2></div><span class="muted">最近 30 条 · 最新在前</span></div><div id="timeline"><p class="timeline-empty">运行时事件将在这里出现</p></div><div id="outcome"></div></section>
+  <div id="coverage" role="status"></div><footer class="page-footer"><span>ZAP WATCH</span><span>实时观测 · 操作与审批仍在终端完成</span></footer>
+</main>
+<script nonce="__WATCH_NONCE__">/* WATCH_SCRIPT */</script>
+</body></html>

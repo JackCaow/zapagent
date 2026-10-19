@@ -1,0 +1,65 @@
+#!/bin/sh
+set -eu
+
+dim=/opt/zapvm-agent/bin/dim
+loader=/opt/zapvm-agent/lib/ld-linux-aarch64.so.1
+library_path=/opt/zapvm-agent/lib
+provider=zapvm-task
+
+run_dim() {
+	"$loader" --library-path "$library_path" "$dim" "$@"
+}
+
+case "${1:-}" in
+	--version)
+	run_dim --version
+	printf 'agent-package %s\n' "$(cat /opt/zapvm-agent/version)"
+	exit 0
+	;;
+	acp)
+	;;
+	*)
+	echo "usage: agent acp | agent --version" >&2
+	exit 2
+	;;
+esac
+
+: "${ZAPVM_AGENT_PROVIDER_BASE_URL:?missing provider base URL}"
+: "${ZAPVM_AGENT_MODEL:?missing provider model}"
+: "${ZAPVM_AGENT_API_KEY:?missing provider credential}"
+: "${HOME:?missing private session home}"
+
+export DIMCODE_HOME="$HOME/.dimcode"
+export DIMCODE_DISABLE_AUTOUPDATE=1
+mkdir -p "$DIMCODE_HOME"
+chmod 700 "$DIMCODE_HOME"
+
+cleanup() {
+	run_dim provider disconnect "$provider" >&2 2>&1 || true
+}
+trap cleanup EXIT INT TERM
+
+if run_dim provider get "$provider" >/dev/null 2>&1; then
+	run_dim provider update "$provider" \
+		--api-key "$ZAPVM_AGENT_API_KEY" \
+		--base-url "$ZAPVM_AGENT_PROVIDER_BASE_URL" \
+		--model "$ZAPVM_AGENT_MODEL" >&2
+else
+	run_dim provider add "$provider" \
+		--adapter openai \
+		--api-key "$ZAPVM_AGENT_API_KEY" \
+		--base-url "$ZAPVM_AGENT_PROVIDER_BASE_URL" \
+		--model "$ZAPVM_AGENT_MODEL" >&2
+fi
+run_dim provider switch "$provider" --model "$ZAPVM_AGENT_MODEL" >&2
+
+if [ -n "${ZAPVM_AGENT_SEARCH_KEY:-}" ]; then
+	export SERPER_KEY=$ZAPVM_AGENT_SEARCH_KEY
+fi
+unset ZAPVM_AGENT_API_KEY ZAPVM_AGENT_SEARCH_KEY
+
+set +e
+run_dim acp
+status=$?
+set -e
+exit "$status"

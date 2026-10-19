@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "endpoint": "/absolute/path/to/zapvm/daemon.sock",
+  "image_root": "/absolute/path/to/zapvm/images",
+  "image_public_key": "/absolute/path/to/zapvm/image-public.pem",
+  "agent_root": "/absolute/path/to/zapvm/agents",
+  "agent_public_key": "/absolute/path/to/zapvm/agent-public.pem",
+  "state_root": "/absolute/path/to/zapvm/daemon-state",
+  "max_workers": 4,
+  "max_per_workspace": 2,
+  "idle_timeout_ms": 3600000,
+  "stop_timeout_ms": 15000,
+  "task_retention_ms": 2592000000,
+  "task_gc_interval_ms": 3600000,
+  "cpus": 2,
+  "memory_mib": 2048,
+  "credentials": [
+    {"id": "model-api-key", "path": "/absolute/path/to/model-api-key"},
+    {"id": "search-api-key", "path": "/absolute/path/to/search-api-key"}
+  ]
+}

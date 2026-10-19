@@ -1,0 +1,86 @@
+:root {
+  color-scheme: dark;
+
+  /* Brand */
+  --z-brand-volt-300: #ccff8a;
+  --z-brand-volt-400: #b8f85b;
+  --z-brand-volt-500: #96db3f;
+  --z-brand-cyan-400: #69d7ff;
+  --z-brand-ink: #0a0d0f;
+
+  /* Semantic color */
+  --z-color-canvas: #080b0e;
+  --z-color-canvas-raised: #0b0f13;
+  --z-color-surface-1: #0f1419;
+  --z-color-surface-2: #141a20;
+  --z-color-surface-3: #1a2128;
+  --z-color-surface-hover: #202830;
+  --z-color-surface-selected: #1b2428;
+  --z-color-border-subtle: #202830;
+  --z-color-border-default: #2a343e;
+  --z-color-border-strong: #3b4854;
+  --z-color-text-primary: #f2f5f7;
+  --z-color-text-secondary: #a7b0b9;
+  --z-color-text-tertiary: #77838e;
+  --z-color-text-inverse: #10150c;
+  --z-color-accent: var(--z-brand-volt-400);
+  --z-color-accent-hover: var(--z-brand-volt-300);
+  --z-color-accent-muted: rgba(184, 248, 91, 0.1);
+  --z-color-info: var(--z-brand-cyan-400);
+  --z-color-info-muted: rgba(105, 215, 255, 0.1);
+  --z-color-success: #82dc58;
+  --z-color-success-muted: rgba(130, 220, 88, 0.1);
+  --z-color-danger: #ff7c8d;
+  --z-color-danger-muted: rgba(255, 124, 141, 0.1);
+  --z-color-warning: #f8c665;
+
+  /* Typography */
+  --z-font-sans: Inter, "SF Pro Display", "SF Pro Text", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --z-font-mono: "SFMono-Regular", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  --z-text-xs: 0.6875rem;
+  --z-text-sm: 0.75rem;
+  --z-text-md: 0.875rem;
+  --z-text-lg: 1rem;
+  --z-text-xl: 1.25rem;
+  --z-text-display: clamp(2.75rem, 6vw, 5rem);
+  --z-leading-tight: 1.2;
+  --z-leading-body: 1.7;
+  --z-tracking-tight: -0.025em;
+
+  /* Space: 4px base grid */
+  --z-space-1: 0.25rem;
+  --z-space-2: 0.5rem;
+  --z-space-3: 0.75rem;
+  --z-space-4: 1rem;
+  --z-space-5: 1.25rem;
+  --z-space-6: 1.5rem;
+  --z-space-8: 2rem;
+  --z-space-10: 2.5rem;
+  --z-space-12: 3rem;
+
+  /* Shape */
+  --z-radius-xs: 0.375rem;
+  --z-radius-sm: 0.625rem;
+  --z-radius-md: 0.875rem;
+  --z-radius-lg: 1.125rem;
+  --z-radius-xl: 1.5rem;
+  --z-radius-pill: 999px;
+
+  /* Elevation */
+  --z-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.24), 0 0 0 1px rgba(255, 255, 255, 0.015);
+  --z-shadow-md: 0 16px 48px rgba(0, 0, 0, 0.28), 0 1px 0 rgba(255, 255, 255, 0.025) inset;
+  --z-shadow-lg: 0 30px 90px rgba(0, 0, 0, 0.42), 0 1px 0 rgba(255, 255, 255, 0.035) inset;
+  --z-focus-ring: 0 0 0 3px rgba(184, 248, 91, 0.16);
+
+  /* Motion */
+  --z-duration-fast: 120ms;
+  --z-duration-normal: 200ms;
+  --z-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+
+  /* Layout */
+  --z-sidebar-width: 288px;
+  --z-topbar-height: 72px;
+  --z-content-width: 880px;
+  --z-outcome-width: 390px;
+  --z-icon-stroke: 1.75;
+}

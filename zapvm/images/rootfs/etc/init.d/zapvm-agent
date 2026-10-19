@@ -1,0 +1,159 @@
+#!/sbin/openrc-run
+
+name="zapvm guest agent"
+command="/usr/local/sbin/zapvm-agent"
+command_args="--transport=vsock --port=19090 --workspace-root=/workspace --secret-file=/run/zapvm/rpc-secret --identity-file=/run/zapvm/identity.json"
+supervisor=supervise-daemon
+pidfile="/run/zapvm/agent.pid"
+respawn_delay=1
+respawn_max=5
+respawn_period=60
+output_log="/dev/console"
+error_log="/dev/console"
+
+depend() {
+	need localmount zapvm-state zapvm-agent-layer zapvm-proxy-bridge
+    before getty
+}
+
+start_pre() {
+    checkpath --directory --mode 0700 /run/zapvm
+    checkpath --directory --owner zapvm:zapvm --mode 0750 /workspace
+	if ! mountpoint -q /sys/fs/cgroup; then
+		mount -t cgroup2 -o nosuid,nodev,noexec none /sys/fs/cgroup
+	fi
+	if [ ! -f /sys/fs/cgroup/cgroup.controllers ]; then
+		eerror "cgroup v2 is unavailable"
+		return 1
+	fi
+	modprobe vsock
+	modprobe vmw_vsock_virtio_transport || true
+	modprobe hv_sock || true
+	if [ ! -c /dev/vsock ]; then
+		eerror "virtio-vsock device is unavailable"
+		return 1
+	fi
+	if [ ! -f /run/zapvm/rpc-secret ] || [ ! -f /run/zapvm/identity.json ]; then
+		checkpath --directory --mode 0700 /run/zapvm/bootstrap
+		if ! mount -t virtiofs -o ro zapvm_boot /run/zapvm/bootstrap; then
+			if ! /usr/local/sbin/zapvm-plan9-mount --readonly --port=564 --share=zapvm_boot --target=/run/zapvm/bootstrap; then
+				eerror "missing per-boot RPC secret and zapvm_boot share"
+				return 1
+			fi
+		fi
+		if ! cp /run/zapvm/bootstrap/rpc-secret /run/zapvm/rpc-secret; then
+			umount /run/zapvm/bootstrap || true
+			eerror "failed to copy per-boot RPC secret"
+			return 1
+		fi
+		if ! cp /run/zapvm/bootstrap/identity.json /run/zapvm/identity.json; then
+			umount /run/zapvm/bootstrap || true
+			eerror "failed to copy workload identity"
+			return 1
+		fi
+		umount /run/zapvm/bootstrap
+    fi
+    chmod 0600 /run/zapvm/rpc-secret
+	chmod 0600 /run/zapvm/identity.json
+	workspace_mount_options=nosuid,nodev
+	workspace_plan9_readonly=
+	workspace_plan9_executable=--executable
+	if grep -Eq '"workspace_read_only"[[:space:]]*:[[:space:]]*true' /run/zapvm/identity.json; then
+		workspace_mount_options=ro,nosuid,nodev,noexec
+		workspace_plan9_readonly=--readonly
+		workspace_plan9_executable=
+	fi
+	if ! mount -t virtiofs -o "$workspace_mount_options" zapvm_workspace /workspace; then
+		if ! /usr/local/sbin/zapvm-plan9-mount $workspace_plan9_readonly $workspace_plan9_executable --port=564 --share=zapvm_workspace --target=/workspace; then
+			eerror "authorized zapvm_workspace share is unavailable"
+			return 1
+		fi
+	fi
+	network_mode=$(sed -n 's/.*"network_mode"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' /run/zapvm/identity.json)
+	case "$network_mode" in
+		off|restricted)
+			for interface_path in /sys/class/net/*; do
+				interface_name=${interface_path##*/}
+				if [ "$interface_name" != lo ]; then
+					eerror "network policy $network_mode received unexpected interface $interface_name"
+					return 1
+				fi
+			done
+			ip link set lo up
+			;;
+		unrestricted)
+			modprobe hv_netvsc || true
+			modprobe virtio_net || true
+			interface_name=
+			attempt=0
+			while [ "$attempt" -lt 100 ] && [ -z "$interface_name" ]; do
+				for interface_path in /sys/class/net/*; do
+					candidate=${interface_path##*/}
+					if [ "$candidate" != lo ]; then
+						interface_name=$candidate
+						break
+					fi
+				done
+				if [ -z "$interface_name" ]; then
+					sleep 0.1
+				fi
+				attempt=$((attempt + 1))
+			done
+			if [ -z "$interface_name" ]; then
+				eerror "unrestricted network requested but no VM NIC appeared"
+				return 1
+			fi
+			ip link set "$interface_name" up
+			network_ip=
+			network_prefix=
+			network_gateway=
+			for option in $(cat /proc/cmdline); do
+				case "$option" in
+					zapvm.network_ip=*) network_ip=${option#*=} ;;
+					zapvm.network_prefix=*) network_prefix=${option#*=} ;;
+					zapvm.network_gateway=*) network_gateway=${option#*=} ;;
+				esac
+			done
+			if [ -n "$network_ip" ] || [ -n "$network_prefix" ] || [ -n "$network_gateway" ]; then
+				if [ -z "$network_ip" ] || [ -z "$network_prefix" ] || [ -z "$network_gateway" ]; then
+					eerror "incomplete static unrestricted network configuration"
+					return 1
+				fi
+				if ! ip -4 address add "$network_ip/$network_prefix" dev "$interface_name" ||
+					! ip -4 route replace default via "$network_gateway" dev "$interface_name"; then
+					eerror "failed to apply static unrestricted network configuration"
+					return 1
+				fi
+				if ! printf '%s\n' 'nameserver 1.1.1.1' 'nameserver 8.8.8.8' >/run/zapvm/resolv.conf; then
+					eerror "failed to write static unrestricted network DNS configuration"
+					return 1
+				fi
+			elif ! udhcpc -q -n -t 10 -T 1 -i "$interface_name"; then
+				eerror "DHCP failed for unrestricted network interface $interface_name"
+				return 1
+			fi
+			resolv_conf=/run/zapvm/resolv.conf
+			if [ ! -s "$resolv_conf" ]; then
+				dns_gateway=$(ip -4 route show default dev "$interface_name" | awk 'NR == 1 { print $3 }')
+				if [ -z "$dns_gateway" ] || ! printf 'nameserver %s\n' "$dns_gateway" >"$resolv_conf"; then
+					eerror "DHCP did not provide an unrestricted network DNS server"
+					return 1
+				fi
+			fi
+			if ! chmod 0444 "$resolv_conf" ||
+				{ ! mountpoint -q /etc/resolv.conf && ! mount --bind "$resolv_conf" /etc/resolv.conf; } ||
+				! mount -o remount,bind,ro /etc/resolv.conf; then
+				eerror "failed to install unrestricted network DNS configuration"
+				return 1
+			fi
+			if ! /usr/local/sbin/zapvm-network-guard; then
+				eerror "failed to install fail-closed guest ingress policy"
+				return 1
+			fi
+			;;
+		*)
+			eerror "missing or invalid bootstrap network policy"
+			return 1
+			;;
+	esac
+}

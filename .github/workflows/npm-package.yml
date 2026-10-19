@@ -1,0 +1,54 @@
+name: npm package
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  consumers:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install frozen development dependencies
+        run: bun install --frozen-lockfile
+      - name: Check npm tooling
+        run: bun run typecheck:npm
+      - name: Pack candidate
+        run: bun run pack:npm
+      - name: Verify npm and Bun local/global consumers
+        shell: bash
+        env:
+          TMPDIR: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: |
+          candidate=$(find dist/npm -maxdepth 1 -name 'zapagent-*.tgz' -type f)
+          test -n "$candidate"
+          bun run verify:npm "$candidate"
+      - name: Keep verification logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-verification-${{ matrix.os }}
+          retention-days: 7
+          if-no-files-found: ignore
+          path: |
+            ${{ runner.temp }}/zapagent-npm-verification-*/*.log
+            ${{ runner.temp }}/zapagent-npm-verification-*/result.json

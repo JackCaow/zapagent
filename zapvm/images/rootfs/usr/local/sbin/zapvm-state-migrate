@@ -1,0 +1,96 @@
+#!/bin/sh
+set -eu
+
+if [ "$#" -ne 1 ] || [ "${1#/}" = "$1" ]; then
+    echo "usage: zapvm-state-migrate /absolute/state-root" >&2
+    exit 2
+fi
+
+state_root=$1
+schema_path=$state_root/schema-version
+migration_root=$state_root/.schema-migrations
+marker_path=$migration_root/2
+temporary_schema=$state_root/.schema-version.$$
+temporary_marker=$migration_root/.2.$$
+temporary_marker3=$migration_root/.3.$$
+
+cleanup() {
+    rm -f "$temporary_schema" "$temporary_marker" "$temporary_marker3"
+}
+trap cleanup EXIT HUP INT TERM
+
+if [ ! -d "$state_root" ] || [ -L "$state_root" ] || [ ! -f "$schema_path" ] || [ -L "$schema_path" ]; then
+    echo "state root/schema must be real filesystem objects" >&2
+    exit 1
+fi
+
+schema_version=$(tr -d '[:space:]' <"$schema_path")
+if [ "$schema_version" = 1 ]; then
+    for path in "$state_root/data" "$state_root/sessions" "$migration_root"; do
+        if [ -L "$path" ]; then
+            echo "state migration refuses symlink $path" >&2
+            exit 1
+        fi
+        mkdir -p "$path"
+        if [ ! -d "$path" ]; then
+            echo "state migration expected directory $path" >&2
+            exit 1
+        fi
+    done
+    chmod 0755 "$state_root/data"
+    chmod 0711 "$state_root/sessions"
+    chmod 0700 "$migration_root"
+    umask 077
+    printf '2\n' >"$temporary_marker"
+    mv -f "$temporary_marker" "$marker_path"
+    printf '2\n' >"$temporary_schema"
+    chmod 0644 "$temporary_schema"
+    sync
+    mv -f "$temporary_schema" "$schema_path"
+    sync
+    schema_version=2
+fi
+
+if [ "$schema_version" = 2 ]; then
+    computer_root=$state_root/computer
+    nix_root=$computer_root/nix
+    marker3=$migration_root/3
+    for path in "$computer_root" "$nix_root"; do
+        if [ -L "$path" ]; then
+            echo "state migration refuses symlink $path" >&2
+            exit 1
+        fi
+        mkdir -p "$path"
+        [ -d "$path" ] || exit 1
+    done
+    chown 0:0 "$computer_root"
+    chmod 0711 "$computer_root"
+    chown 501:20 "$nix_root"
+    chmod 0700 "$nix_root"
+    umask 077
+    printf '3\n' >"$temporary_marker3"
+    mv -f "$temporary_marker3" "$marker3"
+    printf '3\n' >"$temporary_schema"
+    chmod 0644 "$temporary_schema"
+    sync
+    mv -f "$temporary_schema" "$schema_path"
+    sync
+    schema_version=3
+fi
+
+if [ "$schema_version" != 3 ]; then
+    echo "unsupported state schema $schema_version" >&2
+    exit 1
+fi
+
+if [ -L "$migration_root" ] || [ ! -d "$migration_root" ] || \
+   [ -L "$state_root/sessions" ] || [ ! -d "$state_root/sessions" ] || \
+   [ -L "$marker_path" ] || [ ! -f "$marker_path" ] || \
+   [ "$(tr -d '[:space:]' <"$marker_path")" != 2 ] || \
+   [ -L "$state_root/computer" ] || [ ! -d "$state_root/computer" ] || \
+   [ -L "$state_root/computer/nix" ] || [ ! -d "$state_root/computer/nix" ] || \
+   [ -L "$migration_root/3" ] || [ ! -f "$migration_root/3" ] || \
+   [ "$(tr -d '[:space:]' <"$migration_root/3")" != 3 ]; then
+    echo "state schema 3 invariants are incomplete" >&2
+    exit 1
+fi

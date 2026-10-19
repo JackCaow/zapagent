@@ -1,0 +1,30 @@
+name: Bug report
+description: Report a reproducible problem (not a vulnerability)
+body:
+  - type: markdown
+    attributes:
+      value: "For vulnerabilities, follow SECURITY.md and report privately. Do not attach API keys, provider config, raw session journals, or private repository content."
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: "OS, terminal, Bun version, model/provider name (no key), execution backend and permission mode."
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps, expected behavior, and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Redacted evidence
+      description: "Minimal logs or screenshots; review them for secrets first."

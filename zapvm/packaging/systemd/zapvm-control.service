@@ -1,0 +1,32 @@
+[Unit]
+Description=zapVM multi-tenant cloud Agent control plane
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=zapvm-control
+Group=zapvm-control
+ExecStart=/usr/local/bin/zapvm-control --config=/etc/zapvm/cloud-control.json
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+UMask=0077
+StateDirectory=zapvm-control
+StateDirectoryMode=0700
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6
+ReadWritePaths=/var/lib/zapvm-control
+
+[Install]
+WantedBy=multi-user.target

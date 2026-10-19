@@ -1,0 +1,700 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "zapVM Resident Agent Session API",
+    "version": "1.0.0",
+    "description": "Versioned, mTLS-authenticated Web/BFF contract for running Zap inside Remote Agent Computer VMs.",
+    "license": {"name": "Apache-2.0", "identifier": "Apache-2.0"}
+  },
+  "servers": [{"url": "/", "description": "Same-origin control API behind the Web BFF"}],
+  "security": [{"mutualTLS": []}],
+  "paths": {
+    "/v1/agent/sessions": {
+      "get": {
+        "summary": "List Resident Agent turns in creation order",
+        "operationId": "listAgentSessionTurns",
+        "parameters": [
+          {"name": "after", "in": "query", "schema": {"type": "integer", "minimum": 0, "format": "uint64", "default": 0}},
+          {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 100}}
+        ],
+        "responses": {
+          "200": {
+            "description": "Creation-ordered page of redacted Agent turns",
+            "headers": {"X-ZapVM-API-Version": {"$ref": "#/components/headers/APIVersion"}},
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AgentSessionList"}}}
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "503": {"$ref": "#/components/responses/Unavailable"}
+        }
+      },
+      "post": {
+        "summary": "Create an idempotent Resident Agent turn",
+        "operationId": "createAgentSessionTurn",
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CreateAgentSession"}}}
+        },
+        "responses": {
+          "200": {"description": "Existing idempotent turn", "$ref": "#/components/responses/AgentSession"},
+          "201": {"description": "Created turn", "$ref": "#/components/responses/AgentSession"},
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "503": {"$ref": "#/components/responses/Unavailable"}
+        }
+      }
+    },
+    "/v1/agent/sessions/{id}": {
+      "parameters": [{"$ref": "#/components/parameters/AgentSessionID"}],
+      "get": {
+        "summary": "Inspect a redacted Resident Agent turn",
+        "operationId": "getAgentSessionTurn",
+        "responses": {
+          "200": {"$ref": "#/components/responses/AgentSession"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "503": {"$ref": "#/components/responses/Unavailable"}
+        }
+      },
+      "delete": {
+        "summary": "Cancel a Resident Agent turn",
+        "operationId": "cancelAgentSessionTurn",
+        "responses": {
+          "200": {"$ref": "#/components/responses/AgentSession"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "503": {"$ref": "#/components/responses/Unavailable"}
+        }
+      }
+    },
+    "/v1/agent/sessions/{id}/events": {
+      "parameters": [{"$ref": "#/components/parameters/AgentSessionID"}],
+      "get": {
+        "summary": "Replay Resident Agent events after a cursor",
+        "operationId": "listAgentSessionEvents",
+        "parameters": [
+          {"name": "after", "in": "query", "schema": {"type": "integer", "minimum": 0, "format": "uint64", "default": 0}},
+          {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 100}}
+        ],
+        "responses": {
+          "200": {
+            "description": "Events with cursor greater than after",
+            "headers": {"X-ZapVM-API-Version": {"$ref": "#/components/headers/APIVersion"}},
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AgentSessionEvents"}}}
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "503": {"$ref": "#/components/responses/Unavailable"}
+        }
+      }
+    },
+    "/v1/agent/sessions/{id}/retry": {
+      "parameters": [{"$ref": "#/components/parameters/AgentSessionID"}],
+      "post": {
+        "summary": "Explicitly retry a failed or canceled Resident Agent turn",
+        "operationId": "retryAgentSessionTurn",
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/RetryAgentSession"}}}
+        },
+        "responses": {
+          "200": {"description": "Existing idempotent retry", "$ref": "#/components/responses/AgentSession"},
+          "201": {"description": "Created retry", "$ref": "#/components/responses/AgentSession"},
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "503": {"$ref": "#/components/responses/Unavailable"}
+        }
+      }
+    },
+    "/v1/agent/sessions/{id}/stream": {
+      "parameters": [{"$ref": "#/components/parameters/AgentSessionID"}],
+      "get": {
+        "summary": "Stream bounded Resident Agent events with cursor recovery",
+        "operationId": "streamAgentSessionEvents",
+        "parameters": [
+          {"name": "after", "in": "query", "description": "Cursor override. When omitted, Last-Event-ID is used.", "schema": {"type": "integer", "minimum": 0, "format": "uint64", "default": 0}},
+          {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 100}},
+          {"name": "Last-Event-ID", "in": "header", "description": "Greatest processed Task event cursor.", "schema": {"type": "string", "pattern": "^[0-9]+$"}}
+        ],
+        "responses": {
+          "200": {
+            "description": "SSE session snapshots and Task events. The connection closes after 25 seconds, a terminal state, or the event limit.",
+            "headers": {"X-ZapVM-API-Version": {"$ref": "#/components/headers/APIVersion"}},
+            "content": {"text/event-stream": {"schema": {"type": "string"}}}
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "503": {"$ref": "#/components/responses/Unavailable"}
+        }
+      }
+    },
+    "/v1/agent/sessions/{id}/artifacts": {
+      "parameters": [{"$ref": "#/components/parameters/AgentSessionID"}],
+      "get": {
+        "summary": "List immutable output metadata registered for one Resident Agent turn",
+        "operationId": "listAgentSessionArtifacts",
+        "parameters": [
+          {"name": "after", "in": "query", "schema": {"type": "integer", "minimum": 0, "format": "uint64", "default": 0}},
+          {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 100}}
+        ],
+        "responses": {
+          "200": {
+            "description": "Creation-ordered page of tenant-scoped Artifact metadata",
+            "headers": {"X-ZapVM-API-Version": {"$ref": "#/components/headers/APIVersion"}},
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AgentArtifactList"}}}
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "503": {"$ref": "#/components/responses/Unavailable"}
+        }
+      }
+    },
+    "/v1/agent/artifacts/{artifact_id}": {
+      "parameters": [{"$ref": "#/components/parameters/ArtifactID"}],
+      "get": {
+        "summary": "Inspect tenant-scoped Artifact metadata",
+        "operationId": "getAgentArtifact",
+        "responses": {
+          "200": {"$ref": "#/components/responses/AgentArtifact"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "503": {"$ref": "#/components/responses/Unavailable"}
+        }
+      }
+    },
+    "/v1/agent/artifacts/{artifact_id}/download": {
+      "parameters": [{"$ref": "#/components/parameters/ArtifactID"}],
+      "get": {
+        "summary": "Create a short-lived download URL for an available tenant-scoped Artifact",
+        "operationId": "downloadAgentArtifact",
+        "responses": {
+          "200": {
+            "description": "Five-minute HTTPS GET URL for the private object",
+            "headers": {"X-ZapVM-API-Version": {"$ref": "#/components/headers/APIVersion"}},
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AgentArtifactDownload"}}}
+          },
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "503": {"$ref": "#/components/responses/Unavailable"}
+        }
+      }
+    },
+    "/v1/agent/computers": {
+      "get": {
+        "summary": "List explicitly provisioned Agent Computers",
+        "operationId": "listAgentComputers",
+        "responses": {
+          "200": {
+            "description": "Tenant/project-scoped Agent Computer catalog",
+            "headers": {"X-ZapVM-API-Version": {"$ref": "#/components/headers/APIVersion"}},
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AgentComputerList"}}}
+          },
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "503": {"$ref": "#/components/responses/Unavailable"}
+        }
+      }
+    },
+    "/v1/agent/computers/{computer_id}/lifecycle": {
+      "parameters": [{"$ref": "#/components/parameters/ComputerID"}],
+      "post": {
+        "summary": "Wake or release an on-demand Agent Computer",
+        "description": "Tenant-scoped runtime lifecycle control. Browser callers reach this operation only through the Workspace administrator BFF route; Computer provisioning and resource specifications remain declarative Control configuration.",
+        "operationId": "changeAgentComputerLifecycle",
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChangeComputerLifecycle"}}}
+        },
+        "responses": {
+          "200": {"description": "Computer already satisfies the requested lifecycle state", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AgentComputerLifecycle"}}}},
+          "202": {"description": "Lifecycle operation accepted", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AgentComputerLifecycle"}}}},
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "503": {"$ref": "#/components/responses/Unavailable"}
+        }
+      }
+    },
+    "/v1/agent/git/providers": {
+      "get": {
+        "summary": "List tenant-scoped Git repository providers",
+        "operationId": "listAgentGitProviders",
+        "responses": {
+          "200": {
+            "description": "Non-secret repository descriptors available to the caller's tenant/project",
+            "headers": {"X-ZapVM-API-Version": {"$ref": "#/components/headers/APIVersion"}},
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AgentGitProviderList"}}}
+          },
+          "403": {"$ref": "#/components/responses/Forbidden"}
+        }
+      }
+    },
+    "/v1/agent/computers/{computer_id}/workspace/operations": {
+      "parameters": [{"$ref": "#/components/parameters/ComputerID"}],
+      "post": {
+        "summary": "Create a bounded read-only workspace operation",
+        "operationId": "createAgentWorkspaceOperation",
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CreateWorkspaceOperation"}}}
+        },
+        "responses": {
+          "200": {"$ref": "#/components/responses/WorkspaceOperation"},
+          "202": {"$ref": "#/components/responses/WorkspaceOperation"},
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "503": {"$ref": "#/components/responses/Unavailable"}
+        }
+      }
+    },
+    "/v1/agent/computers/{computer_id}/workspace/operations/{operation_id}": {
+      "parameters": [
+        {"$ref": "#/components/parameters/ComputerID"},
+        {"$ref": "#/components/parameters/OperationID"}
+      ],
+      "get": {
+        "summary": "Inspect a tenant-scoped workspace operation",
+        "operationId": "getAgentWorkspaceOperation",
+        "responses": {
+          "200": {"$ref": "#/components/responses/WorkspaceOperation"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "503": {"$ref": "#/components/responses/Unavailable"}
+        }
+      },
+      "delete": {
+        "summary": "Delete a terminal workspace operation after consuming its result",
+        "operationId": "deleteAgentWorkspaceOperation",
+        "responses": {
+          "200": {"$ref": "#/components/responses/WorkspaceOperation"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "503": {"$ref": "#/components/responses/Unavailable"}
+        }
+      }
+    },
+    "/v1/agent/computers/{computer_id}/git/operations": {
+      "parameters": [{"$ref": "#/components/parameters/ComputerID"}],
+      "post": {
+        "summary": "Commit a succeeded Agent Task's workspace changes, push a server-generated branch, and reconcile its pull request",
+        "operationId": "createAgentGitOperation",
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CreateGitOperation"}}}
+        },
+        "responses": {
+          "200": {"$ref": "#/components/responses/GitOperation"},
+          "202": {"$ref": "#/components/responses/GitOperation"},
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "503": {"$ref": "#/components/responses/Unavailable"}
+        }
+      }
+    },
+    "/v1/agent/computers/{computer_id}/git/operations/{operation_id}": {
+      "parameters": [
+        {"$ref": "#/components/parameters/ComputerID"},
+        {"$ref": "#/components/parameters/OperationID"}
+      ],
+      "get": {
+        "summary": "Inspect a tenant-scoped Git delivery operation",
+        "operationId": "getAgentGitOperation",
+        "responses": {
+          "200": {"$ref": "#/components/responses/GitOperation"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "503": {"$ref": "#/components/responses/Unavailable"}
+        }
+      },
+      "delete": {
+        "summary": "Delete a terminal Git operation after consuming its result",
+        "operationId": "deleteAgentGitOperation",
+        "responses": {
+          "200": {"$ref": "#/components/responses/GitOperation"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "503": {"$ref": "#/components/responses/Unavailable"}
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "mutualTLS": {"type": "mutualTLS", "description": "Verified SPIFFE client identity supplies tenant and project scope."}
+    },
+    "parameters": {
+      "AgentSessionID": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {"$ref": "#/components/schemas/CanonicalID"}
+      },
+      "ComputerID": {"name": "computer_id", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/CanonicalID"}},
+      "ArtifactID": {"name": "artifact_id", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/CanonicalID"}},
+      "OperationID": {"name": "operation_id", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/CanonicalID"}}
+    },
+    "headers": {
+      "APIVersion": {"schema": {"type": "string", "const": "1"}}
+    },
+    "responses": {
+      "AgentSession": {
+        "description": "Redacted Resident Agent turn",
+        "headers": {"X-ZapVM-API-Version": {"$ref": "#/components/headers/APIVersion"}},
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AgentSession"}}}
+      },
+      "AgentArtifact": {
+        "description": "Tenant-scoped Artifact metadata. Pending, failed, and expired records are not downloadable; object-store authority is never returned by this metadata API.",
+        "headers": {"X-ZapVM-API-Version": {"$ref": "#/components/headers/APIVersion"}},
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AgentArtifact"}}}
+      },
+      "WorkspaceOperation": {
+        "description": "Redacted Agent Computer workspace operation",
+        "headers": {"X-ZapVM-API-Version": {"$ref": "#/components/headers/APIVersion"}},
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AgentWorkspaceOperation"}}}
+      },
+      "GitOperation": {
+        "description": "Redacted tenant-scoped Git operation; no repository credential or Host path is returned.",
+        "headers": {"X-ZapVM-API-Version": {"$ref": "#/components/headers/APIVersion"}},
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AgentGitOperation"}}}
+      },
+      "BadRequest": {"description": "Invalid or oversized request", "$ref": "#/components/responses/Error"},
+      "Forbidden": {"description": "Verified identity lacks scope", "$ref": "#/components/responses/Error"},
+      "NotFound": {"description": "Object is absent or outside caller scope", "$ref": "#/components/responses/Error"},
+      "Conflict": {"description": "Idempotency or terminal-state conflict", "$ref": "#/components/responses/Error"},
+      "Unavailable": {"description": "Control, node, or capacity unavailable", "$ref": "#/components/responses/Error"},
+      "Error": {
+        "description": "Stable redacted error",
+        "headers": {"X-ZapVM-API-Version": {"$ref": "#/components/headers/APIVersion"}},
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+      }
+    },
+    "schemas": {
+      "CanonicalID": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,128}$"},
+      "CreateAgentSession": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "computer_id", "session_id", "prompt", "provider_base_url", "model", "model_credential_id"],
+        "properties": {
+          "id": {"$ref": "#/components/schemas/CanonicalID"},
+          "computer_id": {"$ref": "#/components/schemas/CanonicalID"},
+          "session_id": {"$ref": "#/components/schemas/CanonicalID"},
+          "title": {"type": "string", "maxLength": 80, "description": "Optional bounded display title. It is stored separately from the private prompt."},
+          "prompt": {"type": "string", "minLength": 1, "maxLength": 131072},
+          "provider_base_url": {"type": "string", "format": "uri", "pattern": "^https://"},
+          "model": {"type": "string", "minLength": 1, "maxLength": 256},
+          "model_credential_id": {"$ref": "#/components/schemas/CanonicalID"},
+          "search_credential_id": {"$ref": "#/components/schemas/CanonicalID"},
+          "continue": {"type": "boolean", "default": false, "description": "False for the first turn. Later turns require true, the original computer_id, and terminal prior turns."},
+          "max_turns": {"type": "integer", "minimum": 1, "maximum": 200, "default": 80},
+          "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 86400000, "default": 7200000}
+        }
+      },
+      "RetryAgentSession": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id"],
+        "properties": {"id": {"$ref": "#/components/schemas/CanonicalID"}}
+      },
+      "AgentSession": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "computer_id", "session_id", "title", "state", "attempt", "created_at", "updated_at"],
+        "properties": {
+          "id": {"$ref": "#/components/schemas/CanonicalID"},
+          "computer_id": {"$ref": "#/components/schemas/CanonicalID"},
+          "session_id": {"$ref": "#/components/schemas/CanonicalID"},
+          "title": {"type": "string", "minLength": 1, "maxLength": 80, "description": "Bounded session metadata visible to authorized Workspace members; never derived from the private prompt by Control."},
+          "retry_of": {"$ref": "#/components/schemas/CanonicalID"},
+          "state": {"type": "string", "enum": ["pending", "leased", "running", "canceling", "succeeded", "failed", "canceled"]},
+          "attempt": {"type": "integer", "minimum": 0, "maximum": 10},
+          "created_at": {"type": "string", "format": "date-time"},
+          "updated_at": {"type": "string", "format": "date-time"},
+          "result_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "failure_code": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"}
+        }
+      },
+      "AgentSessionList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sessions", "next_cursor"],
+        "properties": {
+          "sessions": {"type": "array", "items": {"$ref": "#/components/schemas/AgentSession"}},
+          "next_cursor": {"type": "integer", "minimum": 0, "format": "uint64"}
+        }
+      },
+      "AgentSessionEvents": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["events"],
+        "properties": {"events": {"type": "array", "items": {"$ref": "#/components/schemas/TaskEvent"}}}
+      },
+      "AgentArtifact": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "computer_id", "session_id", "task_id", "path", "name", "content_type", "size", "sha256", "state", "retention_seconds", "created_at", "updated_at", "expires_at"],
+        "properties": {
+          "id": {"$ref": "#/components/schemas/CanonicalID"},
+          "computer_id": {"$ref": "#/components/schemas/CanonicalID"},
+          "session_id": {"$ref": "#/components/schemas/CanonicalID"},
+          "task_id": {"$ref": "#/components/schemas/CanonicalID"},
+          "path": {"type": "string", "minLength": 1, "maxLength": 4096, "description": "Canonical workspace-relative output path; .git and .zapcode are forbidden."},
+          "name": {"type": "string", "minLength": 1, "maxLength": 255},
+          "content_type": {"type": "string", "minLength": 1, "maxLength": 255},
+          "size": {"type": "integer", "minimum": 1, "maximum": 5368709120, "format": "uint64"},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "state": {"type": "string", "enum": ["pending", "available", "failed", "expired"]},
+          "retention_seconds": {"type": "integer", "minimum": 3600, "maximum": 2592000, "format": "uint64"},
+          "created_at": {"type": "string", "format": "date-time"},
+          "updated_at": {"type": "string", "format": "date-time"},
+          "expires_at": {"type": "string", "format": "date-time"},
+          "available_at": {"type": "string", "format": "date-time"},
+          "failure_code": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"}
+        }
+      },
+      "AgentArtifactDownload": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["artifact_id", "url", "expires_at"],
+        "properties": {
+          "artifact_id": {"$ref": "#/components/schemas/CanonicalID"},
+          "url": {"type": "string", "format": "uri", "pattern": "^https://"},
+          "expires_at": {"type": "string", "format": "date-time"}
+        }
+      },
+      "AgentArtifactList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["artifacts", "next_cursor"],
+        "properties": {
+          "artifacts": {"type": "array", "items": {"$ref": "#/components/schemas/AgentArtifact"}},
+          "next_cursor": {"type": "integer", "minimum": 0, "format": "uint64"}
+        }
+      },
+      "AgentComputer": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "state", "desired_state", "observed_state"],
+        "properties": {
+          "id": {"$ref": "#/components/schemas/CanonicalID"},
+          "state": {"type": "string", "enum": ["offline", "online", "draining"]},
+          "desired_state": {"type": "string", "enum": ["running", "stopped"]},
+          "observed_state": {"type": "string", "enum": ["unavailable", "ready", "busy", "degraded"]},
+          "assigned_node_id": {"$ref": "#/components/schemas/CanonicalID"},
+          "placement_epoch": {"type": "integer", "minimum": 1, "format": "uint64"},
+          "last_activity_at": {"type": "string", "format": "date-time"},
+          "failure_code": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"}
+        }
+      },
+      "AgentComputerList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["computers"],
+        "properties": {"computers": {"type": "array", "items": {"$ref": "#/components/schemas/AgentComputer"}}}
+      },
+      "ChangeComputerLifecycle": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["action"],
+        "properties": {"action": {"type": "string", "enum": ["wake", "release"]}}
+      },
+      "AgentComputerLifecycle": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["action", "accepted"],
+        "properties": {
+          "action": {"type": "string", "enum": ["wake", "release"]},
+          "accepted": {"type": "boolean"},
+          "operation_id": {"$ref": "#/components/schemas/CanonicalID"}
+        }
+      },
+      "AgentGitProvider": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "owner", "repository", "default_base_branch"],
+        "properties": {
+          "id": {"$ref": "#/components/schemas/CanonicalID"},
+          "owner": {"type": "string", "minLength": 1, "maxLength": 100},
+          "repository": {"type": "string", "minLength": 1, "maxLength": 100},
+          "default_base_branch": {"type": "string", "minLength": 1, "maxLength": 255}
+        }
+      },
+      "AgentGitProviderList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["providers"],
+        "properties": {"providers": {"type": "array", "items": {"$ref": "#/components/schemas/AgentGitProvider"}}}
+      },
+      "CreateGitOperation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "task_id", "provider_id"],
+        "properties": {
+          "id": {"$ref": "#/components/schemas/CanonicalID"},
+          "task_id": {"$ref": "#/components/schemas/CanonicalID"},
+          "provider_id": {"$ref": "#/components/schemas/CanonicalID"}
+        }
+      },
+      "AgentGitOperation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "computer_id", "task_id", "provider_id", "branch", "state", "attempt", "created_at", "updated_at"],
+        "properties": {
+          "id": {"$ref": "#/components/schemas/CanonicalID"},
+          "computer_id": {"$ref": "#/components/schemas/CanonicalID"},
+          "task_id": {"$ref": "#/components/schemas/CanonicalID"},
+          "provider_id": {"$ref": "#/components/schemas/CanonicalID"},
+          "branch": {"type": "string", "pattern": "^zapvm/[A-Za-z0-9._-]{1,128}$"},
+          "state": {"type": "string", "enum": ["pending", "leased", "succeeded", "failed"]},
+          "attempt": {"type": "integer", "minimum": 0, "maximum": 10},
+          "created_at": {"type": "string", "format": "date-time"},
+          "updated_at": {"type": "string", "format": "date-time"},
+          "result": {"$ref": "#/components/schemas/GitPushResult"},
+          "result_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "failure_code": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"}
+        }
+      },
+      "GitPushResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["operation_id", "branch", "commit_sha"],
+        "properties": {
+          "operation_id": {"$ref": "#/components/schemas/CanonicalID"},
+          "branch": {"type": "string", "pattern": "^zapvm/[A-Za-z0-9._-]{1,128}$"},
+          "commit_sha": {"type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"},
+          "pull_request_number": {"type": "integer", "minimum": 1},
+          "pull_request_url": {"type": "string", "format": "uri", "pattern": "^https://"},
+          "pull_request_state": {"type": "string", "enum": ["open", "closed", "merged"]}
+        }
+      },
+      "CreateWorkspaceOperation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind"],
+        "properties": {
+          "id": {"$ref": "#/components/schemas/CanonicalID"},
+          "kind": {"type": "string", "enum": ["list", "read", "diff"]},
+          "path": {"type": "string", "maxLength": 4096, "description": "Canonical portable relative path; .git and .zapcode are forbidden."}
+        }
+      },
+      "AgentWorkspaceOperation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "computer_id", "kind", "state", "attempt", "created_at", "updated_at"],
+        "properties": {
+          "id": {"$ref": "#/components/schemas/CanonicalID"},
+          "computer_id": {"$ref": "#/components/schemas/CanonicalID"},
+          "kind": {"type": "string", "enum": ["list", "read", "diff"]},
+          "path": {"type": "string", "maxLength": 4096},
+          "state": {"type": "string", "enum": ["pending", "leased", "succeeded", "failed"]},
+          "attempt": {"type": "integer", "minimum": 0, "maximum": 10},
+          "created_at": {"type": "string", "format": "date-time"},
+          "updated_at": {"type": "string", "format": "date-time"},
+          "result": {"oneOf": [
+            {"$ref": "#/components/schemas/WorkspaceListing"},
+            {"$ref": "#/components/schemas/WorkspaceFile"},
+            {"$ref": "#/components/schemas/WorkspaceDiff"}
+          ]},
+          "result_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "failure_code": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"}
+        }
+      },
+      "WorkspaceEntry": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "name", "type", "modified_at"],
+        "properties": {
+          "path": {"type": "string", "maxLength": 4096},
+          "name": {"type": "string", "minLength": 1},
+          "type": {"type": "string", "enum": ["file", "directory", "symlink", "other"]},
+          "size": {"type": "integer", "minimum": 0},
+          "modified_at": {"type": "string", "format": "date-time"}
+        }
+      },
+      "WorkspaceListing": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "entries"],
+        "properties": {
+          "path": {"type": "string", "maxLength": 4096},
+          "entries": {"type": "array", "maxItems": 1000, "items": {"$ref": "#/components/schemas/WorkspaceEntry"}},
+          "truncated": {"type": "boolean"}
+        }
+      },
+      "WorkspaceFile": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "size", "sha256", "content_type", "data"],
+        "properties": {
+          "path": {"type": "string", "maxLength": 4096},
+          "size": {"type": "integer", "minimum": 0, "maximum": 524288},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "content_type": {"type": "string", "maxLength": 256},
+          "data": {"type": "string", "contentEncoding": "base64", "maxLength": 699052}
+        }
+      },
+      "WorkspaceDiff": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "size", "sha256", "data"],
+        "properties": {
+          "path": {"type": "string", "maxLength": 4096},
+          "size": {"type": "integer", "minimum": 0, "maximum": 524288},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "data": {"type": "string", "contentEncoding": "base64", "maxLength": 699052}
+        }
+      },
+      "TaskEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["cursor", "attempt", "source_cursor", "timestamp", "task_id", "type"],
+        "properties": {
+          "cursor": {"type": "integer", "minimum": 1, "format": "uint64"},
+          "attempt": {"type": "integer", "minimum": 1, "maximum": 10},
+          "source_cursor": {"type": "integer", "minimum": 0, "format": "uint64"},
+          "timestamp": {"type": "string", "format": "date-time"},
+          "task_id": {"$ref": "#/components/schemas/CanonicalID"},
+          "type": {"type": "string", "minLength": 1, "maxLength": 128},
+          "command_id": {"type": "string"},
+          "stream": {"type": "string", "enum": ["stdout", "stderr"]},
+          "data": {"type": "string", "contentEncoding": "base64"},
+          "pid": {"type": "integer", "minimum": 1},
+          "ok": {"type": "boolean"},
+          "error": {"type": "string"}
+        }
+      },
+      "ErrorEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["error"],
+        "properties": {"error": {"$ref": "#/components/schemas/APIError"}}
+      },
+      "APIError": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code"],
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": ["invalid_request", "mutual_tls_required", "client_identity_required", "forbidden", "not_found", "conflict", "lease_fenced", "unavailable", "store_degraded", "overloaded", "internal_error", "method_not_allowed"]
+          },
+          "category": {"type": "string", "enum": ["authentication", "session", "authorization", "request", "not_found", "conflict", "infrastructure", "rate_limit"]},
+          "action": {"type": "string", "enum": ["login", "refresh", "contact_admin", "fix_request", "retry"]},
+          "retryable": {"type": "boolean", "description": "True only for an explicit user retry or safe read reconnect; clients must not automatically replay mutations."}
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,7 @@
+self-hosted-runner:
+  labels:
+    - zapvm-physical-placeholder
+paths:
+  .github/workflows/platform-acceptance.yml:
+    ignore:
+      - 'constant expression "false" in condition'

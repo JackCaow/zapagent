@@ -1,0 +1,9 @@
+#!/bin/sh
+
+if [ "$#" -eq 1 ] && { [ "$1" = "--version" ] || [ "$1" = "version" ]; }; then
+	echo "zapcode unavailable"
+	exit 0
+fi
+
+echo "zapVM resident Agent runtime is not bundled in this image" >&2
+exit 69

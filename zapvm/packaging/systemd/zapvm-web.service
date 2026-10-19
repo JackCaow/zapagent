@@ -1,0 +1,29 @@
+[Unit]
+Description=zapVM browser BFF
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=zapvm-web
+Group=zapvm-web
+ExecStart=/usr/local/bin/zapvm-web --config=/etc/zapvm/web-bff.json
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

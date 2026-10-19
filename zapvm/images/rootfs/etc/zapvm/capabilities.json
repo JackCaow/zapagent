@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "rootfs_mode": "read-only",
+  "workspace_mode": "read-write-executable",
+  "protected_workspace_paths": [
+    ".git",
+    ".zapcode"
+  ],
+  "temporary_storage_scope": "request",
+  "temporary_storage_executable": true,
+  "runtime_package_management": "persistent-rootless",
+  "agent_adapter": {
+	"contract": "acp-resident-v1",
+    "entrypoint": "/usr/local/sbin/zapvm-resident-agent",
+    "output_format": "stream-json"
+  },
+  "resident_agent": {
+    "available": false,
+    "version": "unavailable",
+    "entrypoint": "/usr/local/sbin/zapvm-resident-agent",
+    "output_format": "stream-json"
+  },
+  "commands": [
+    "bash",
+    "bwrap",
+    "curl",
+    "git",
+    "jq",
+    "node",
+    "npm",
+    "nix",
+    "pip3",
+    "python3",
+    "rg",
+    "unzip",
+    "zip",
+    "zap-pkg"
+  ],
+  "network_modes": [
+    "off",
+    "restricted",
+    "unrestricted"
+  ]
+}

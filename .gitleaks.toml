@@ -1,0 +1,20 @@
+[extend]
+useDefault = true
+
+# v8.24.3 extends default rules/regexes/paths, but does not inherit the default
+# stopwords. Retain its two built-in fixture/encoding exclusions explicitly.
+[allowlist]
+stopwords = ["abcdefghijklmnopqrstuvwxyz", "014df517-39d1-4453-b7b3-9930c563627c"]
+
+# These adjacent literal systemd arguments resemble a password assignment to
+# the generic rule. Both the exact match and the file path must match; real
+# credentials elsewhere (or elsewhere in this file) remain covered.
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "Literal systemd flags, not a password"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(^|/)(zapvm/)?internal/platform/systemd_scope\.go$''']
+regexes = ['''--no-ask-password",\s*"--expand-environment=no"''']

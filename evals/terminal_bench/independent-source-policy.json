@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "tools": ["web_search", "http_fetch", "http_request", "browser_screenshot"],
+  "denyUrlContains": [
+    {"id": "benchmark-corpus-hyphen", "value": "terminal-bench"},
+    {"id": "benchmark-corpus-underscore", "value": "terminal_bench"},
+    {"id": "benchmark-corpus-short-path", "value": "/t-bench/"}
+  ],
+  "maxScanChars": 2097152
+}

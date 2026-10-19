@@ -1,0 +1,232 @@
+name: Host capability probe
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/host-capability-probe.yml
+      - .github/workflows/self-hosted-acceptance.yml
+      - scripts/acceptance-host-power-unix.sh
+      - scripts/preflight-self-hosted-unix.sh
+      - scripts/preflight-self-hosted-windows.ps1
+      - scripts/acceptance-windows-hcs-grant-recovery.ps1
+
+permissions:
+  contents: read
+
+concurrency:
+  group: host-capability-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-hosted:
+    name: Ubuntu 24.04 hosted runner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Validate Unix self-hosted harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/preflight-self-hosted-unix.sh
+          sh -n scripts/acceptance-host-power-unix.sh
+          if grep -nE 'sudo -n (setfacl|sysctl|loginctl enable-linger|systemctl start user@)' \
+            .github/workflows/self-hosted-acceptance.yml; then
+            echo "self-hosted acceptance must not reconfigure Host capabilities" >&2
+            exit 1
+          fi
+
+      - name: Probe KVM and systemd user scopes
+        id: probe
+        shell: bash
+        run: |
+          set -uo pipefail
+          report="$RUNNER_TEMP/linux-host-capabilities.txt"
+          exec > >(tee "$report") 2>&1
+
+          echo "runner_name=$RUNNER_NAME"
+          echo "runner_os=$RUNNER_OS"
+          echo "runner_arch=$RUNNER_ARCH"
+          uname -a
+          id
+
+          eligible=true
+          systemd_version="$(systemd --version | awk 'NR == 1 { print $2 }')"
+          echo "systemd_version=$systemd_version"
+          if (( systemd_version < 254 )); then
+            echo "systemd 254+ is required"
+            eligible=false
+          fi
+
+          cgroup_type="$(stat -fc %T /sys/fs/cgroup 2>/dev/null || true)"
+          echo "cgroup_type=$cgroup_type"
+          if [[ "$cgroup_type" != cgroup2fs ]]; then
+            echo "cgroup v2 is required"
+            eligible=false
+          fi
+
+          if [[ -c /dev/kvm ]]; then
+            ls -l /dev/kvm
+            if ! [[ -r /dev/kvm && -w /dev/kvm ]]; then
+              sudo setfacl -m "u:${USER}:rw" /dev/kvm
+            fi
+            if python3 - <<'PY'
+          import fcntl
+          import os
+
+          kvm_get_api_version = 0xAE00
+          fd = os.open("/dev/kvm", os.O_RDWR | os.O_CLOEXEC)
+          try:
+              version = fcntl.ioctl(fd, kvm_get_api_version, 0)
+          finally:
+              os.close(fd)
+          if version != 12:
+              raise SystemExit(f"unexpected KVM API version: {version}")
+          print(f"kvm_api_version={version}")
+          PY
+            then
+              echo "kvm_ioctl=ok"
+            else
+              echo "KVM device exists but KVM_GET_API_VERSION failed"
+              eligible=false
+            fi
+          else
+            echo "/dev/kvm is absent"
+            eligible=false
+          fi
+
+          uid="$(id -u)"
+          export XDG_RUNTIME_DIR="/run/user/$uid"
+          if ! systemctl --user show-environment >/dev/null 2>&1; then
+            sudo loginctl enable-linger "$USER"
+            sudo systemctl start "user@${uid}.service"
+          fi
+          if systemctl --user show-environment >/dev/null 2>&1; then
+            echo "systemd_user_manager=ok"
+          else
+            echo "systemd user manager is unavailable"
+            eligible=false
+          fi
+
+          if systemd-run --user --scope --quiet true; then
+            echo "systemd_user_scope=ok"
+          else
+            echo "systemd user transient scope failed"
+            eligible=false
+          fi
+
+          echo "eligible=$eligible" | tee -a "$GITHUB_OUTPUT"
+          {
+            echo "### Ubuntu hosted runner"
+            echo
+            echo "Eligible for zapVM Linux acceptance: **$eligible**"
+            echo
+            echo "- systemd: $systemd_version"
+            echo "- cgroup filesystem: $cgroup_type"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Linux capability report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux-host-capabilities
+          path: ${{ runner.temp }}/linux-host-capabilities.txt
+          if-no-files-found: error
+
+  windows-hosted:
+    name: Windows 2025 hosted runner
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Parse Windows self-hosted preflight
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tokens = $null
+          $errors = $null
+          foreach ($path in @(
+            ".\scripts\preflight-self-hosted-windows.ps1",
+            ".\scripts\acceptance-windows-hcs-grant-recovery.ps1"
+          )) {
+            $tokens = $null
+            $errors = $null
+            [Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path), [ref]$tokens, [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -ne 0) {
+              throw "$path PowerShell parser errors: $($errors | Out-String)"
+            }
+          }
+
+      - name: Probe Hyper-V, HCS, and HCN
+        id: probe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $report = Join-Path $env:RUNNER_TEMP "windows-host-capabilities.txt"
+          Start-Transcript -LiteralPath $report -Force
+          try {
+            Write-Host "runner_name=$env:RUNNER_NAME"
+            Write-Host "runner_os=$env:RUNNER_OS"
+            Write-Host "runner_arch=$env:RUNNER_ARCH"
+            whoami.exe /all
+
+            $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+            $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+            $isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+            $build = [Environment]::OSVersion.Version.Build
+            $hypervisorPresent = (Get-CimInstance Win32_ComputerSystem).HypervisorPresent
+            Write-Host "windows_build=$build"
+            Write-Host "administrator=$isAdmin"
+            Write-Host "hypervisor_present=$hypervisorPresent"
+
+            $hyperVState = "Unavailable"
+            try {
+              $hyperVState = (Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All).State.ToString()
+            } catch {
+              Write-Host "hyperv_feature_probe_error=$($_.Exception.Message)"
+            }
+            Write-Host "hyperv_feature=$hyperVState"
+
+            $vmcompute = Get-Service vmcompute -ErrorAction SilentlyContinue
+            $hns = Get-Service hns -ErrorAction SilentlyContinue
+            $vmcomputeState = if ($null -eq $vmcompute) { "Absent" } else { $vmcompute.Status.ToString() }
+            $hnsState = if ($null -eq $hns) { "Absent" } else { $hns.Status.ToString() }
+            Write-Host "vmcompute=$vmcomputeState"
+            Write-Host "hns=$hnsState"
+            Write-Host "hcsdiag_present=$([bool](Get-Command hcsdiag.exe -ErrorAction SilentlyContinue))"
+            Write-Host "vmcompute_dll_present=$(Test-Path "$env:SystemRoot\System32\vmcompute.dll")"
+            Write-Host "computecore_dll_present=$(Test-Path "$env:SystemRoot\System32\computecore.dll")"
+
+            $eligible = $isAdmin -and $build -ge 20348 -and $hypervisorPresent -and
+              $hyperVState -eq "Enabled" -and $vmcomputeState -eq "Running" -and $hnsState -eq "Running"
+            "eligible=$($eligible.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            @"
+          ### Windows hosted runner
+
+          Eligible for zapVM Windows acceptance: **$($eligible.ToString().ToLowerInvariant())**
+
+          - Windows build: $build
+          - Administrator: $isAdmin
+          - Hypervisor present: $hypervisorPresent
+          - Hyper-V feature: $hyperVState
+          - vmcompute: $vmcomputeState
+          - hns: $hnsState
+          "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          } finally {
+            Stop-Transcript
+          }
+
+      - name: Upload Windows capability report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-host-capabilities
+          path: ${{ runner.temp }}\windows-host-capabilities.txt
+          if-no-files-found: error

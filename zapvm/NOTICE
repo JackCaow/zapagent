@@ -1,0 +1,7 @@
+zapVM
+Copyright 2026 zapVM contributors
+
+This product includes third-party software. Distributed VM images include a
+Linux kernel, Alpine Linux packages, Cloud Hypervisor, virtiofsd, and other
+components under their respective licenses. See THIRD_PARTY_NOTICES.md and the
+SPDX SBOM shipped with each image bundle for attribution and license details.

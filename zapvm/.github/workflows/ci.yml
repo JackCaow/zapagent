@@ -1,0 +1,84 @@
+name: Pull request CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  merge_group:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source:
+    name: Source gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify repository baseline
+        run: ./scripts/verify-repository.sh
+
+      - name: Validate GitHub Actions workflows
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+
+      - name: Test
+        run: go test ./...
+
+      - name: Race detector
+        run: go test -race ./...
+
+      - name: Vet
+        run: go vet ./...
+
+  platform:
+    name: Platform build (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, macos-latest, windows-2025]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Unit tests
+        if: ${{ runner.os != 'Windows' }}
+        run: go test ./...
+
+      - name: Windows compile gate
+        if: ${{ runner.os == 'Windows' }}
+        run: go test -run '^$' ./...
+
+      - name: Package and verify Unix Host release
+        if: ${{ runner.os != 'Windows' }}
+        shell: bash
+        run: |
+          ./scripts/package-host-release.sh 0.0.0-ci "$RUNNER_TEMP/release"
+          ./scripts/verify-host-release.sh "$RUNNER_TEMP/release"/*.tar.gz 0.0.0-ci
+
+      - name: Package and verify Windows Host release
+        if: ${{ runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          .\scripts\package-host-release.ps1 -Version 0.0.0-ci -OutputDirectory "$env:RUNNER_TEMP\release"
+          .\scripts\verify-host-release.ps1 -Archive (Get-ChildItem "$env:RUNNER_TEMP\release\*.zip").FullName -Version 0.0.0-ci

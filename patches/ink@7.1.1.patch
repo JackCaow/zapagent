@@ -1,0 +1,240 @@
+diff --git a/build/cursor-helpers.js b/build/cursor-helpers.js
+index be493545f0a22d2972a36ad858d2e4bbc4c9326a..4378f968e324414f063b44c211eea2f436ea3b31 100644
+--- a/build/cursor-helpers.js
++++ b/build/cursor-helpers.js
+@@ -15,9 +15,16 @@ export const buildCursorSuffix = (visibleLineCount, cursorPosition) => {
+         return '';
+     }
+     const moveUp = visibleLineCount - cursorPosition.y;
++    // Apple Terminal auto-mark fix: drop trailing showCursorEscape.
++    // Per-frame `?25h` (cursor show) on every render of a useCursor-tracked
++    // input is the signature Apple Terminal's keyDown:withAutoMarkLine:
++    // matches as "shell prompt redraw" → paints `[…]` mark on every Enter.
++    // Without `?25h`, log-update's startup `?25l` (cursor hide) sticks for
++    // the session. Cursor stays invisible but its position is still moved
++    // by cursorUp/cursorTo, which Apple Terminal IME tracks as the anchor
++    // for CJK preedit / candidate popup.
+     return ((moveUp > 0 ? ansiEscapes.cursorUp(moveUp) : '') +
+-        ansiEscapes.cursorTo(cursorPosition.x) +
+-        showCursorEscape);
++        ansiEscapes.cursorTo(cursorPosition.x));
+ };
+ /**
+ Build escape sequence to move cursor from previousCursorPosition back to the bottom of output.
+@@ -37,10 +44,12 @@ Build the escape sequence for cursor-only updates (output unchanged, cursor move
+ Hides cursor if it was previously shown, returns to bottom, then repositions.
+ */
+ export const buildCursorOnlySequence = (input) => {
+-    const hidePrefix = input.cursorWasShown ? hideCursorEscape : '';
++    // Apple Terminal auto-mark fix: drop hidePrefix — never re-emit `?25l`
++    // per frame. Pairs with the suffix dropping `?25h` so cursor visibility
++    // is set ONCE at log-update startup and never toggled.
+     const returnToBottom = buildReturnToBottom(input.previousLineCount, input.previousCursorPosition);
+     const cursorSuffix = buildCursorSuffix(input.visibleLineCount, input.cursorPosition);
+-    return hidePrefix + returnToBottom + cursorSuffix;
++    return returnToBottom + cursorSuffix;
+ };
+ /**
+ Build the prefix that hides cursor and returns to bottom before erasing or rewriting.
+@@ -50,7 +59,9 @@ export const buildReturnToBottomPrefix = (cursorWasShown, previousLineCount, pre
+     if (!cursorWasShown) {
+         return '';
+     }
+-    return (hideCursorEscape +
+-        buildReturnToBottom(previousLineCount, previousCursorPosition));
++    // Apple Terminal auto-mark fix: drop hideCursorEscape prefix — cursor
++    // stays hidden from log-update's startup `?25l`, no need to re-hide
++    // every frame. Still return-to-bottom because cursor was MOVED.
++    return buildReturnToBottom(previousLineCount, previousCursorPosition);
+ };
+ //# sourceMappingURL=cursor-helpers.js.map
+\ No newline at end of file
+diff --git a/build/ink.js b/build/ink.js
+index 0082666b281ec2db77b875d6b8460bcc19a59ce7..5fe5c0f2a8338e0971af110a9eff9c4cf61fd345 100644
+--- a/build/ink.js
++++ b/build/ink.js
+@@ -9,7 +9,37 @@ import patchConsole from 'patch-console';
+ import { LegacyRoot, ConcurrentRoot } from 'react-reconciler/constants.js';
+ import Yoga from 'yoga-layout';
+ import wrapAnsi from 'wrap-ansi';
++import stringWidth from 'string-width';
++import stripAnsi from 'strip-ansi';
+ import { getWindowSize } from './utils.js';
++// === zapcode patch: visual-row helpers for pre-wrap cursor remap =======
++// Yoga and React produce coordinates in PRE-wrap logical space (one row per
++// `\n`-separated line in Ink's rendered output). Terminals — and therefore
++// log-update's eraseLines/cursorUp/cursorDown — operate in POST-wrap visual
++// rows (after auto-wrap of lines wider than termWidth). renderInteractiveFrame
++// pre-wraps the output before handing it to log-update so logical lines ==
++// visual rows. This helper translates a logical cursor position into the
++// matching visual position so the cursorSuffix lands on the right row.
++const visualRowsForLine = (line, width) => {
++    if (width <= 0)
++        return 1;
++    const w = stringWidth(stripAnsi(line));
++    return w === 0 ? 1 : Math.ceil(w / width);
++};
++const remapCursorForWrap = (preWrapOutput, cursor, width) => {
++    if (!cursor || width <= 0)
++        return cursor;
++    const lines = preWrapOutput.split('\n');
++    let visualY = 0;
++    for (let i = 0; i < cursor.y && i < lines.length; i++) {
++        visualY += visualRowsForLine(lines[i] ?? '', width);
++    }
++    if (cursor.x > 0)
++        visualY += Math.floor(cursor.x / width);
++    const visualX = cursor.x % width;
++    return { x: visualX, y: visualY };
++};
++// =======================================================================
+ import reconciler from './reconciler.js';
+ import render from './renderer.js';
+ import * as dom from './dom.js';
+@@ -278,11 +308,15 @@ export default class Ink {
+     }
+     resized = () => {
+         const currentWidth = getWindowSize(this.options.stdout).columns;
+-        if (currentWidth < this.lastTerminalWidth) {
+-            // We clear the screen when decreasing terminal width to prevent duplicate overlapping re-renders.
++        if (currentWidth !== this.lastTerminalWidth) {
++            // zapcode patch: a pre-wrapped frame changes its logical-row
++            // topology in BOTH resize directions. Clear it atomically before
++            // incremental rendering compares the replacement against stale
++            // rows, otherwise prompt/footer borders remain as resize ghosts.
+             this.log.clear();
+             this.lastOutput = '';
+             this.lastOutputToRender = '';
++            this.lastOutputHeight = 0;
+         }
+         this.calculateLayout();
+         dom.emitLayoutListeners(this.rootNode);
+@@ -313,7 +347,12 @@ export default class Ink {
+         }
+         // Clear() resets log-update's cursor state, so replay the latest cursor intent
+         // before restoring output after external stdout/stderr writes.
+-        this.log.setCursorPosition(this.cursorPosition);
++        // zapcode patch: remap raw cursorPosition into post-wrap visual coords
++        // (lastOutputToRender is the pre-wrapped frame written by the previous
++        // renderInteractiveFrame; the cursor must match its row indexing).
++        const width = getWindowSize(this.options.stdout).columns;
++        const visualCursor = remapCursorForWrap(this.lastOutput, this.cursorPosition, width);
++        this.log.setCursorPosition(visualCursor);
+         this.log(this.lastOutputToRender || this.lastOutput + '\n');
+     };
+     calculateLayout = () => {
+@@ -748,18 +787,46 @@ export default class Ink {
+     renderInteractiveFrame(output, outputHeight, staticOutput) {
+         const hasStaticOutput = staticOutput !== '';
+         const isTty = this.options.stdout.isTTY;
++        // === zapcode patch: pre-wrap output to terminal width ===========
++        // Yoga / React render at terminal width but emit single \n-delimited
++        // rows even for lines that exceed termWidth. Auto-wrap then puts
++        // characters on additional VISUAL rows that log-update has no idea
++        // about (it tracks split('\n').length). Subsequent cursorUp /
++        // eraseLines undershoot, leaving wrap rows as permanent residue
++        // (the "streaming-tail ghost" pattern, especially with CJK).
++        // Mirroring the screen-reader path's pre-wrap (ink.js:391-395) for
++        // the interactive path: hard-wrap every overflowing line at
++        // termWidth so the bytes we hand to log-update have one logical
++        // line per visual row, making the cursor math correct by
++        // construction. Cursor coordinates from React/Yoga (pre-wrap) are
++        // remapped onto the post-wrap row index before log() / log.clear().
++        const terminalWidth = isTty ? getWindowSize(this.options.stdout).columns : 80;
++        const wrappedOutput = wrapAnsi(output, terminalWidth, { trim: false, hard: true });
++        const wrappedStaticOutput = staticOutput
++            ? wrapAnsi(staticOutput, terminalWidth, { trim: false, hard: true })
++            : '';
++        const wrappedHeight = wrappedOutput === '' ? 0 : wrappedOutput.split('\n').length;
++        // =================================================================
+         // Detect fullscreen: output fills or exceeds terminal height.
+         // Only apply when writing to a real TTY — piped output always gets trailing newlines.
+         const viewportRows = isTty ? getWindowSize(this.options.stdout).rows : 24;
+-        const isFullscreen = isTty && outputHeight >= viewportRows;
+-        const outputToRender = isFullscreen ? output : output + '\n';
++        const isFullscreen = isTty && wrappedHeight >= viewportRows;
++        const outputToRender = isFullscreen ? wrappedOutput : wrappedOutput + '\n';
+         const shouldClearTerminal = shouldClearTerminalForFrame({
+             isTty,
+             viewportRows,
+             previousOutputHeight: this.lastOutputHeight,
+-            nextOutputHeight: outputHeight,
++            nextOutputHeight: wrappedHeight,
+             isUnmounting: this.isUnmounting,
+         });
++        // Remap pre-wrap cursor → post-wrap visual coords before any
++        // log() / log.clear() call so cursorSuffix lands on the right
++        // visual row. setCursorPosition propagated the raw pre-wrap value
++        // earlier; this overwrites it with the visual version.
++        if (this.cursorPosition) {
++            const visualPos = remapCursorForWrap(output, this.cursorPosition, terminalWidth);
++            this.log.setCursorPosition(visualPos);
++        }
+         if (shouldClearTerminal) {
+             const sync = this.shouldSync();
+             if (sync) {
+@@ -768,7 +835,7 @@ export default class Ink {
+             this.options.stdout.write(ansiEscapes.clearTerminal + this.fullStaticOutput + outputToRender);
+             this.lastOutput = output;
+             this.lastOutputToRender = outputToRender;
+-            this.lastOutputHeight = outputHeight;
++            this.lastOutputHeight = wrappedHeight;
+             this.log.sync(outputToRender);
+             if (sync) {
+                 this.options.stdout.write(esu);
+@@ -782,7 +849,7 @@ export default class Ink {
+                 this.options.stdout.write(bsu);
+             }
+             this.log.clear();
+-            this.options.stdout.write(staticOutput);
++            this.options.stdout.write(wrappedStaticOutput);
+             this.log(outputToRender);
+             if (sync) {
+                 this.options.stdout.write(esu);
+@@ -794,7 +861,7 @@ export default class Ink {
+         }
+         this.lastOutput = output;
+         this.lastOutputToRender = outputToRender;
+-        this.lastOutputHeight = outputHeight;
++        this.lastOutputHeight = wrappedHeight;
+     }
+     initKittyKeyboard() {
+         // Protocol is opt-in: if kittyKeyboard is not specified, do nothing
+diff --git a/build/log-update.js b/build/log-update.js
+index cdb5fc41f158304c4c4f230a765065ab1fe0a2f7..4ddb3a270d007f0c0d4c379bed789fb874e77045 100644
+--- a/build/log-update.js
++++ b/build/log-update.js
+@@ -156,6 +156,33 @@ const createIncremental = (stream, { showCursor = false } = {}) => {
+             previousLines = nextLines;
+             return true;
+         }
++        // === Pure-append fast path (zapcode patch) =============================
++        // When the new frame is a strict prefix-extension of the previous frame
++        // (str.startsWith(previousOutput) && grew vertically), skip the cursor-up
++        // + line-by-line diff entirely. Just write the appended tail; the
++        // terminal advances via the LFs embedded in the appended bytes, with no
++        // cursor-up jump past the viewport's upper boundary. That cursor-up jump
++        // is what re-engages "scroll-on-output" in most terminals and yanks the
++        // user's scroll position back to the tail during long streamed
++        // responses. With this short-circuit, native terminal scrollback grows
++        // naturally as LF rolls topmost rows out of the viewport, and user-
++        // initiated scroll-up sticks. Mirrors Claude Code's ink fork's
++        // "growing-only" branch (renderFrameSlice via plain CR+LF).
++        if (visibleCount > previousVisible && str.startsWith(previousOutput)) {
++            const cursorSuffix = buildCursorSuffix(visibleCount, activeCursor);
++            // returnPrefix is "" when no cursor was shown — cursor is already
++            // at col 0 of the row below the last visible line (because the
++            // previous render emitted `\n` after every line). When a cursor WAS
++            // shown, returnPrefix moves it back to the bottom-of-prev-frame
++            // before our append.
++            stream.write(returnPrefix + str.slice(previousOutput.length) + cursorSuffix);
++            cursorWasShown = activeCursor !== undefined;
++            previousCursorPosition = activeCursor ? { ...activeCursor } : undefined;
++            previousOutput = str;
++            previousLines = nextLines;
++            return true;
++        }
++        // === end pure-append fast path ========================================
+         const hasTrailingNewline = str.endsWith('\n');
+         // We aggregate all chunks for incremental rendering into a buffer, and then write them to stdout at the end.
+         const buffer = [];

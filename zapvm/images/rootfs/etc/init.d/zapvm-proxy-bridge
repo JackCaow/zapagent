@@ -1,0 +1,43 @@
+#!/sbin/openrc-run
+
+name="zapvm restricted egress bridge"
+command="/usr/local/sbin/zapvm-proxy-bridge"
+command_args="--listen=127.0.0.1:3128 --host-port=19091"
+command_user="zapvm-proxy:zapvm-vsock"
+command_background="yes"
+pidfile="/run/zapvm-proxy/proxy-bridge.pid"
+output_log="/run/zapvm-proxy/proxy-bridge.log"
+error_log="/run/zapvm-proxy/proxy-bridge.log"
+
+depend() {
+    need localmount
+    before zapvm-agent getty
+}
+
+start_pre() {
+    checkpath --directory --owner zapvm-proxy:zapvm-vsock --mode 0750 /run/zapvm-proxy
+    checkpath --file --owner zapvm-proxy:zapvm-vsock --mode 0640 /run/zapvm-proxy/proxy-bridge.log
+    ip link set lo up
+	modprobe vsock
+	modprobe vmw_vsock_virtio_transport || true
+	modprobe hv_sock || true
+    if [ ! -c /dev/vsock ]; then
+        eerror "virtio-vsock device is unavailable"
+        return 1
+    fi
+    chown root:zapvm-vsock /dev/vsock
+    chmod 0660 /dev/vsock
+}
+
+start_post() {
+	attempt=0
+	while [ "$attempt" -lt 100 ]; do
+		if awk '$2 ~ /:0C38$/ && $4 == "0A" { found = 1 } END { exit !found }' /proc/net/tcp; then
+			return 0
+		fi
+		sleep 0.05
+		attempt=$((attempt + 1))
+	done
+	eerror "restricted egress bridge did not listen on 127.0.0.1:3128"
+	return 1
+}
