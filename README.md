@@ -2,6 +2,8 @@
 
 **zapAgent. Code flows.**
 
+Source candidate: publication is pending the [provenance and release checks](docs/open-source-readiness.md).
+
 A terminal-based AI coding assistant powered by Claude, OpenAI, or any OpenAI-compatible provider.
 
 ## Monorepo modules
@@ -195,12 +197,19 @@ The agent has access to the following tools:
 
 ## Environment Variables
 
-Create a `.env` file in the project root to set default configuration:
+Use `/connect` for interactive provider setup. For a new configuration, copy
+[`.env.example`](.env.example) to `.env` and set all three bootstrap values:
 
 ```env
-# Example
-ANTHROPIC_API_KEY=your_key_here
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_API_KEY=your_key_here
+MODEL=your_model_id
 ```
+
+The bootstrap requires `OPENAI_BASE_URL`; setting a key alone does not create a
+provider. These names also apply to compatible endpoints. For Anthropic, use
+`/connect`. Existing saved provider settings take precedence over bootstrap values.
+Never commit `.env`.
 
 | Variable | Purpose |
 |---|---|

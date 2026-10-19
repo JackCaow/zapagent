@@ -36,6 +36,11 @@ Source availability does not imply a release exists. Start with source installs;
 README and installer metadata now target this repository. Do not copy old signed
 assets, credentials or trust roots into it.
 
+- [ ] Resolve or explicitly accept the remaining dependency findings: the actual
+  npm consumer reports four moderate entries from the `sprintf-js` advisory
+  through Mammoth/argparse; the optional VM Web client reports three low entries
+  from KaTeX through Mermaid/Streamdown. Neither audit reports high/critical
+  findings. Do not treat the configured severity threshold as risk acceptance.
 - [ ] Repeat dependency audits and inventory the actual bundled license texts.
 - [ ] Review VM image SPDX records and corresponding-source obligations using
   `zapvm/THIRD_PARTY_NOTICES.md` and `zapvm/docs/release.md`.

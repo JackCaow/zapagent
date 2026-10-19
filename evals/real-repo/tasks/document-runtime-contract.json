@@ -4,7 +4,7 @@
   "title": "Document the public Runtime contract",
   "repository": {
     "url": "https://github.com/JackCaow/zapagent.git",
-    "commit": "7fdc5cc2bd5f1c566a0c5f4a2b1cbaeb221456a7"
+    "commit": "666e085e77ba27a143ca699b2c3713dc22b3b1a8"
   },
   "prompt": "Create docs/benchmark-runtime-contract.md. Explain, using current source paths, how a host calls the exact public symbol createAgentRuntime, runs one turn, subscribes to RuntimeEvent, and closes it. Include a short TypeScript example and explicitly state that RuntimeEvent logs must not be used as mutable recovery state; name RuntimeStateStore as the authoritative mutable recovery-state boundary. Use targeted search/read operations and finish within 12 steps. Do not modify source code or other documentation.",
   "execution": {

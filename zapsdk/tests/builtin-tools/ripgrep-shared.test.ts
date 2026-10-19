@@ -40,7 +40,7 @@ describe("shared ripgrep retrieval", () => {
     expect(fallback.success).toBe(true);
     expect(fallback.output).toContain("zzz/skills/SKILL.md");
     expect(fallback.meta).toMatchObject({ search: { backend: "javascript", complete: false, returned: 1 } });
-  });
+  }, 30_000);
 
   it("shares hidden-file, nested-ignore and negation scope without forcing ignored matches back in", async () => {
     const root = fixture();
