@@ -181,6 +181,51 @@ describe("Responses transport", () => {
     expect(executions).toBe(0);
   });
 
+  test("buffered tool argument progress clears first-output timeout without early execution", async () => {
+    let terminalSent = false;
+    const phases: string[] = [];
+    const provider = new OpenAIResponsesProvider({ model: "fixture", streamIdleMs: 100, client: { responses: { create: async () => ({
+      async *[Symbol.asyncIterator]() {
+        // Some compatible servers omit output_item.added. Actual argument
+        // bytes must also count as progress, even without a text/thinking delta.
+        for (const delta of ['{"value":', '"', 'o', 'k', '"', '}']) {
+          await new Promise(resolve => setTimeout(resolve, 15));
+          yield { type: "response.function_call_arguments.delta", item_id: "fc_call_1", output_index: 0, delta };
+        }
+        terminalSent = true;
+        yield terminal([fn()]);
+      },
+    }) } } as any });
+    const chunks: LLMChunk[] = [];
+    for await (const chunk of provider.stream(messages, [tool], { firstOutputTimeoutMs: 50, onRequestEvent: event => phases.push(event.phase) })) {
+      expect(terminalSent).toBe(true);
+      chunks.push(chunk);
+    }
+    expect(chunks.filter(chunk => chunk.type === "tool_call_start")).toHaveLength(1);
+    expect(phases).toEqual(["requesting", "waiting_output", "streaming", "completed"]);
+  });
+
+  for (const visible of [true, false]) test(`LoopAgent preserves incomplete reasoning and phase on continuation (text=${visible})`, async () => {
+    let turns = 0;
+    let continuation: any[] = [];
+    const { provider } = harness(body => {
+      if (++turns === 1) return [{ type: "response.incomplete", response: {
+        ...completed([reasoning, ...(visible ? [text("Partial", "commentary")] : [])]),
+        status: "incomplete", incomplete_details: { reason: "max_output_tokens" },
+      } }];
+      continuation = body.input;
+      return [terminal([text("Resumed")])];
+    });
+    const registry = new ToolRegistry();
+    const agent = new LoopAgent({ provider, registry, executor: new ToolExecutor(registry),
+      conversation: new ConversationManager({ maxMessages: 100 }), systemPrompt: "fixture", maxSteps: 4 });
+    expect((await agent.run("continue reasoning")).text).toBe("Resumed");
+    expect(continuation.find(item => item.type === "reasoning")).toEqual(reasoning);
+    const assistant = continuation.find(item => item.role === "assistant");
+    expect(assistant).toEqual(visible ? { role: "assistant", content: "Partial", phase: "commentary" } : undefined);
+    expect(turns).toBe(2);
+  });
+
   test("actual SDK streaming drives a complete tool round trip through LoopAgent", async () => {
     let executions = 0;
     const registry = new ToolRegistry();

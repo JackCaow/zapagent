@@ -123,6 +123,25 @@ export class ProviderRequest {
     }
   }
 
+  /** A provider can report real tool-generation progress while withholding
+   * executable arguments until its terminal response has been validated. */
+  bufferedToolCallProgress(): void {
+    if (this.closed) return;
+    if (this.output) this.output.firstToolCallMs ??= Date.now() - this.startedAt;
+    this.markMeaningfulOutput();
+  }
+
+  private markMeaningfulOutput(): void {
+    if (!this.producedOutput) {
+      this.responseReceived();
+      this.producedOutput = true;
+      clearTimeout(this.timer);
+      this.emit("streaming");
+    } else if (Date.now() - this.lastOutputEventAt >= 100) {
+      this.emit("streaming");
+    }
+  }
+
   async *watch(source: AsyncIterable<LLMChunk>): AsyncIterable<LLMChunk> {
     this.output = { thinkingChars: 0, textChars: 0, toolArgumentChars: 0 };
     const iterator = source[Symbol.asyncIterator]();
@@ -131,16 +150,7 @@ export class ProviderRequest {
         const next = await this.wait(iterator.next());
         if (next.done) break;
         this.observeOutput(next.value);
-        if (hasMeaningfulOutput(next.value) && !this.producedOutput) {
-          this.responseReceived();
-          this.producedOutput = true;
-          clearTimeout(this.timer);
-          this.emit("streaming");
-        } else if (hasMeaningfulOutput(next.value) && Date.now() - this.lastOutputEventAt >= 100) {
-          // Bounded progress snapshots include thinking, text and tool args;
-          // consumers can show live throughput without logging model content.
-          this.emit("streaming");
-        }
+        if (hasMeaningfulOutput(next.value)) this.markMeaningfulOutput();
         if (next.value.type === "done") clearTimeout(this.timer);
         yield next.value;
       }

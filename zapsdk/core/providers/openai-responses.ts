@@ -174,7 +174,10 @@ export class OpenAIResponsesProvider implements LLMProvider {
     let emittedText = "";
     try {
       for await (const event of withStreamIdleTimeout(stream, getStreamIdleMs(this.options.streamIdleMs === undefined ? process.env.ZAPCODE_STREAM_IDLE_MS : String(this.options.streamIdleMs)), request.signal)) {
-        if (event.type === "response.output_text.delta" || event.type === "response.refusal.delta") {
+        if ((event.type === "response.output_item.added" && event.item.type === "function_call") ||
+          (event.type === "response.function_call_arguments.delta" && event.delta.length > 0)) {
+          request.bufferedToolCallProgress();
+        } else if (event.type === "response.output_text.delta" || event.type === "response.refusal.delta") {
           emittedText += event.delta;
           yield { type: "text_delta", text: event.delta };
         } else if (event.type === "response.reasoning_summary_text.delta" || event.type === "response.reasoning_text.delta") {
