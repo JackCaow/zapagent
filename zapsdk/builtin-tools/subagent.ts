@@ -7,6 +7,7 @@ import type { ToolRegistry } from "../tools/registry.js";
 import {
   ToolExecutor,
   type ApprovalCallback,
+  type ApprovalLifecycleHandler,
   type ToolExecutorOptions,
 } from "../tools/executor.js";
 import type { PromptProfile } from "../agent/prompt-profile.js";
@@ -757,28 +758,21 @@ function createDirectSubagentTool(options: SubagentToolOptions): Tool {
         : "";
 
       try {
-        const subagentApproval: ApprovalCallback | undefined = options.onApproval
-          ? async (toolName, toolArgs, approvalSignal, approvalContext) => {
-              if (context?.agentRun) {
-                await context.agentRun.reportStatus("waiting_approval", `approval required for ${toolName}`);
-              } else emitRunState("waiting_approval", {
-                statusDetail: `approval required for ${toolName}`,
-                workspaceId: workspaceLease?.workspaceId,
-                workspaceMode: workspaceLease?.mode ?? "shared-readonly",
-              });
-              try {
-                return await options.onApproval!(toolName, toolArgs, approvalSignal, approvalContext);
-              } finally {
-                if (context?.agentRun) {
-                  await context.agentRun.reportStatus("running", `resumed after ${toolName} approval`);
-                } else emitRunState("running", {
-                  statusDetail: `resumed after ${toolName} approval`,
-                  workspaceId: workspaceLease?.workspaceId,
-                  workspaceMode: workspaceLease?.mode ?? "shared-readonly",
-                });
-              }
-            }
-          : undefined;
+        const subagentApprovalLifecycle: ApprovalLifecycleHandler = async (event) => {
+          await options.executorOptions?.onApprovalLifecycle?.(event);
+          if (signal?.aborted || event.status === "cancelled") return;
+          const waiting = event.status === "requested";
+          const status = waiting ? "waiting_approval" : "running";
+          const detail = waiting ? `approval required for ${event.toolName}` : `resumed after ${event.toolName} approval`;
+          // ToolExecutor calls these observers outside the shared approval
+          // queue, so reacquiring capacity cannot block another child's ask.
+          if (context?.agentRun) await context.agentRun.reportStatus(status, detail);
+          else emitRunState(status, {
+            statusDetail: detail,
+            workspaceId: workspaceLease?.workspaceId,
+            workspaceMode: workspaceLease?.mode ?? "shared-readonly",
+          });
+        };
         const isolatedCheckpoint = workspaceLease ? new CheckpointManager({
           sessionId: subagentId,
           cwd: workspaceLease.path,
@@ -797,7 +791,8 @@ function createDirectSubagentTool(options: SubagentToolOptions): Tool {
           onTrackEdit: isolatedCheckpoint
             ? isolatedCheckpoint.createEditTracker()
             : options.executorOptions?.onTrackEdit,
-          onApproval: subagentApproval,
+          onApproval: options.onApproval,
+          onApprovalLifecycle: subagentApprovalLifecycle,
         });
 
         const subagent = new LoopAgent({

@@ -12,6 +12,28 @@ const sandbox = createPlatformSandbox();
 const available = process.platform !== "win32" && sandbox.status().available;
 
 (available ? describe : describe.skip)("sandbox command scratch space (POSIX)", () => {
+  it("supports bare mktemp without granting the host temporary directory", async () => {
+    const fixture = realpathSync(mkdtempSync(join(tmpdir(), "zap-mktemp-test-")));
+    try {
+      const root = join(fixture, "workspace");
+      mkdirSync(root);
+      const registry = new ToolRegistry();
+      registry.register(executeCommandTool({ defaultCwd: root, timeoutMs: 10_000 }));
+      const executor = new ToolExecutor(registry, {
+        cwd: root, onApproval: async () => true,
+        executionBroker: new DefaultExecutionBroker({ sandbox, sandboxMode: "required" }),
+      });
+      const result = await executor.execute("bash", {
+        command: 'set -eu; path=$(mktemp -d); case "$path" in "$TMPDIR"/*) ;; *) exit 1 ;; esac; printf ok > "$path/file"; cat "$path/file"; printf "\\n%s" "$path"',
+      });
+      expect(result.success).toBe(true);
+      expect(result.runtime?.broker?.sandboxEnforced).toBe(true);
+      expect(result.output.split("\n")[0]).toBe("ok");
+      expect(existsSync(result.output.split("\n")[1]!)).toBe(false);
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
   it("allows scratch writes, removes them on exit, and warns on masked outside-write failures", async () => {
     const fixture = realpathSync(mkdtempSync(join(tmpdir(), "zap-scratch-test-")));
     try {

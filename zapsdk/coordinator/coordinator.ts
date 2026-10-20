@@ -21,6 +21,7 @@ interface RunControl {
   controller: AbortController;
   started: boolean;
   occupiesCapacity: boolean;
+  capacityWaiter?: CapacityWaiter;
   settled: boolean;
   waiters: Array<(result: AgentCoordinatorResult) => void>;
   messageWaiters: Array<(message: AgentMailboxMessage) => void>;
@@ -30,7 +31,9 @@ interface CapacityWaiter {
   runId: string;
   status: AgentRunStatus;
   detail?: string;
+  promise: Promise<void>;
   resolve: () => void;
+  reject: (reason: Error) => void;
 }
 
 export interface AgentCoordinatorOptions {
@@ -349,11 +352,23 @@ export class AgentCoordinator {
       const waiter = this.capacityWaiters.shift();
       if (waiter) {
         const control = this.controls.get(waiter.runId);
-        if (!control || control.settled || control.controller.signal.aborted) continue;
-        control.occupiesCapacity = true;
-        this.activeCount++;
-        await this.transition(waiter.runId, waiter.status, waiter.detail);
-        waiter.resolve();
+        if (!control || control.settled || control.controller.signal.aborted
+          || this.requireRun(waiter.runId).status === "cancelling") {
+          waiter.reject(new Error("Agent capacity wait cancelled"));
+          continue;
+        }
+        if (!control.occupiesCapacity) {
+          control.occupiesCapacity = true;
+          this.activeCount++;
+        }
+        try {
+          await this.transition(waiter.runId, waiter.status, waiter.detail);
+          if (control.controller.signal.aborted) waiter.reject(new Error("Agent capacity wait cancelled"));
+          else waiter.resolve();
+        } catch (error) {
+          this.releaseCapacity(control);
+          waiter.reject(error instanceof Error ? error : new Error(String(error)));
+        }
         continue;
       }
       const next = Object.values(this.current().runs)
@@ -467,18 +482,41 @@ export class AgentCoordinator {
   ): Promise<void> {
     const control = this.controls.get(runId);
     if (!control || control.settled) return;
+    if (control.controller.signal.aborted || this.requireRun(runId).status === "cancelling") {
+      throw new Error("Agent capacity wait cancelled");
+    }
     if (waitStatus(status)) {
       this.releaseCapacity(control);
       await this.transition(runId, status, detail);
       this.schedulePump();
       return;
     }
-    if (status === "running" && !control.occupiesCapacity) {
-      await new Promise<void>((resolve) => {
-        this.capacityWaiters.push({ runId, status, detail, resolve });
+    if (status === "running") {
+      // A model batch may approve several tools concurrently. They must share
+      // one admission or a single Agent can consume every capacity slot.
+      if (control.capacityWaiter) return control.capacityWaiter.promise;
+      if (!control.occupiesCapacity) {
+        let resolve!: () => void;
+        let reject!: (reason: Error) => void;
+        const promise = new Promise<void>((res, rej) => { resolve = res; reject = rej; });
+        const cleanup = () => {
+          control.controller.signal.removeEventListener("abort", abort);
+          const index = this.capacityWaiters.indexOf(waiter);
+          if (index >= 0) this.capacityWaiters.splice(index, 1);
+          if (control.capacityWaiter === waiter) control.capacityWaiter = undefined;
+        };
+        const waiter: CapacityWaiter = {
+          runId, status, detail, promise,
+          resolve: () => { cleanup(); resolve(); },
+          reject: (reason) => { cleanup(); reject(reason); },
+        };
+        const abort = () => waiter.reject(new Error("Agent capacity wait cancelled"));
+        control.capacityWaiter = waiter;
+        control.controller.signal.addEventListener("abort", abort, { once: true });
+        this.capacityWaiters.push(waiter);
         this.schedulePump();
-      });
-      return;
+        return promise;
+      }
     }
     await this.transition(runId, status, detail);
   }
@@ -550,6 +588,7 @@ export class AgentCoordinator {
     const firstSettlement = control ? !control.settled : false;
     if (control) {
       control.settled = true;
+      control.capacityWaiter?.reject(new Error("Agent finished while waiting for capacity"));
       control.bindings = undefined;
     }
     await this.persist();

@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { accessSync, closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readSync, realpathSync, statSync, symlinkSync } from "node:fs";
+import { accessSync, closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readSync, realpathSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import type { WorkspaceIdentity } from "../policy/types.js";
 import { isWithin } from "../workspace/context.js";
+import { MACOS_MKTEMP_SHIM } from "./macos-mktemp.js";
 
 /** Only the host may mark a private clone writable. Never follow a .git file
  * or symlink into the parent repository's control directory. */
@@ -85,17 +86,23 @@ function readGitPointer(path: string): string {
 const resolvedTools = new Map<string, string | undefined>();
 let sdkRoot: string | undefined;
 
-/** Replace only Apple command shims selected by the original PATH. Prepending
+/** Adapt only Apple executables selected by the original PATH. Prepending
  * Xcode's entire bin directory silently selects its Python and other tools. */
 export function macToolShimPath(temp: string, originalPath = process.env.PATH ?? ""): string | undefined {
   if (process.platform !== "darwin") return undefined;
   const shims = join(temp, "tool-shims");
   let count = 0;
-  for (const name of ["git", "clang", "clang++", "cc", "c++", "swift", "swiftc"]) {
+  for (const name of ["mktemp", "git", "clang", "clang++", "cc", "c++", "swift", "swiftc"]) {
     const selected = originalPath.split(delimiter).map(dir => join(dir, name)).find(path => {
       try { accessSync(path, constants.X_OK); return statSync(path).isFile(); } catch { return false; }
     });
     if (selected !== `/usr/bin/${name}`) continue;
+    if (name === "mktemp") {
+      mkdirSync(shims, { recursive: true, mode: 0o700 });
+      writeFileSync(join(shims, name), MACOS_MKTEMP_SHIM, { mode: 0o700, flag: "wx" });
+      count++;
+      continue;
+    }
     const key = `${process.env.DEVELOPER_DIR ?? ""}:${name}`;
     if (!resolvedTools.has(key)) {
       let target: string | undefined;
