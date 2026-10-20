@@ -16,14 +16,15 @@ import { localExecutionShell } from "../zapsdk/execution/shell.js"
  *  "Add Provider" wizard with sensible defaults, but never store runtime
  *  state. Once the user connects, a fresh `Provider` instance is created
  *  with a stable id (sp_<ts>) and templates play no further role. */
-/** Wire protocol the provider speaks. Most third-party endpoints implement
+/** Wire protocol the provider speaks. `openai-responses` selects /responses.
+ *  Most third-party endpoints implement
  *  the OpenAI Chat Completions shape; Anthropic's official endpoint and a
  *  growing list of compatible proxies (Z.AI/GLM, Kimi For Coding, LiteLLM,
  *  ccproxy, Bedrock/Vertex Anthropic) speak the Anthropic Messages API.
  *  This field decides which SDK we instantiate in `agent-factory.ts`.
  *  Default (undefined) → "openai" with `api.anthropic.com` substring
  *  fallback so legacy configs without this field keep working. */
-export type ProviderProtocol = "openai" | "anthropic"
+export type ProviderProtocol = "openai" | "openai-responses" | "anthropic"
 export type ContextWindowMode = "auto" | "manual"
 
 export interface ProviderPreset {
@@ -470,7 +471,7 @@ function normalizeProvider(value: unknown, index: number): Provider | null {
     models: Array.isArray(value.models)
       ? value.models.filter((m): m is string => typeof m === "string" && !!m)
       : [],
-    protocol: value.protocol === "anthropic" || value.protocol === "openai" ? value.protocol : undefined,
+    protocol: value.protocol === "anthropic" || value.protocol === "openai" || value.protocol === "openai-responses" ? value.protocol : undefined,
     modelMetadata,
   } as Provider
   provider.contextWindowMode = value.contextWindowMode === "auto" || value.contextWindowMode === "manual"
@@ -814,6 +815,7 @@ export function removeModelFromProvider(config: AppConfig, providerId: string, m
 // compatible chat-completions endpoint (OpenAI o-series, DeepSeek V4, Kimi
 // k2-thinking all follow this). Stored at `provider.extraRequestParams.
 // reasoning_effort`; "unset" = key absent, server uses its own default.
+// The Responses adapter maps this setting to `reasoning.effort`.
 
 /** Values the /model picker cycler offers for this provider. Falls back to
  *  the default set when the preset doesn't constrain the range. `[]` means

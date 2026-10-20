@@ -1322,7 +1322,7 @@ export class LoopAgent {
           break;
         }
 
-        if (toolCalls.length === 0 && this.handleOutputTokenLimit(state, text, finishReason, addMessage)) {
+        if (toolCalls.length === 0 && this.handleOutputTokenLimit(state, text, finishReason, addMessage, streamResult.raw)) {
           recordRoundDuration();
           continue;
         }
@@ -1953,6 +1953,7 @@ export class LoopAgent {
     text: string,
     finishReason: string | undefined,
     addMessage: AddMessage,
+    raw?: Record<string, unknown>,
   ): boolean {
     if (!isOutputTokenLimit(finishReason) || state.maxOutputTokensRecoveryCount >= this.maxOutputTokensRecoveries) {
       return false;
@@ -1960,9 +1961,11 @@ export class LoopAgent {
     // toolCalls.length === 0 is guaranteed by caller
     state.maxOutputTokensRecoveryCount++;
     const hasVisibleText = text.trim().length > 0;
-    // A reasoning-only response has no visible sentence to resume. Do not
-    // manufacture an empty assistant prefix for the next provider request.
-    if (hasVisibleText) addMessage({ role: "assistant", content: text });
+    // Keep provider continuation state even for reasoning-only responses.
+    // The provider serializes this sidecar without inventing visible text.
+    if (hasVisibleText || (raw && Object.keys(raw).length > 0)) {
+      addMessage({ role: "assistant", content: text, ...(raw ? { raw } : {}) });
+    }
     const continuation = hasVisibleText
       ? "[SYSTEM] Your previous response was cut off by the output token limit. " +
       "Continue exactly where you left off. Do NOT repeat anything already written. " +

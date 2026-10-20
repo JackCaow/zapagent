@@ -41,7 +41,7 @@ export interface ModelsDevConnection {
   id: string
   name: string
   api?: string
-  protocol?: "openai" | "anthropic"
+  protocol?: "openai" | "openai-responses" | "anthropic"
 }
 
 /** Adapter IDs describe wire compatibility; this is not a vendor allowlist. */

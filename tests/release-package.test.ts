@@ -41,7 +41,7 @@ describe("zapVM runtime release package", () => {
 
     expect(existsSync(join(output, "zapvm-runtime", "bin", "zapvm"))).toBe(true)
     expect(readFileSync(join(output, "zapvm-runtime", "image-public.pem"), "utf8")).toBe("public-key")
-    expect(readFileSync(join(output, "zapvm-runtime", "licenses", "LICENSE"), "utf8")).toContain("ISC License")
+    expect(readFileSync(join(output, "zapvm-runtime", "licenses", "LICENSE"), "utf8")).toContain("MIT License")
     expect(readFileSync(join(output, "zapvm-runtime", "licenses", "zapvm-LICENSE"), "utf8")).toContain("Apache License")
     expect(readFileSync(join(output, "zapvm-runtime", "licenses", "zapvm-NOTICE"), "utf8")).toContain("zapVM")
     expect(readFileSync(join(output, "zapvm-runtime", "licenses", "THIRD_PARTY_NOTICES.md"), "utf8")).toContain("Modified Ink")

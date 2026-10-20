@@ -2,11 +2,12 @@ import { expect, it } from "bun:test";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { createHash } from "node:crypto";
+import { OpenAIResponsesProvider } from "../../core/providers/openai-responses.js";
 import { OpenAICompatibleProvider } from "../../core/providers/openai-compatible.js";
 import { AnthropicProvider } from "../../core/providers/anthropic.js";
 import type { ProviderRequestEvent } from "../../core/llm.js";
 
-for (const kind of ["openai", "anthropic"] as const) {
+for (const kind of ["openai", "anthropic", "openai-responses"] as const) {
   for (const streaming of [true, false]) {
     it(`matches real SDK wire bytes and enforces the boundary (${kind}, stream=${streaming})`, async () => {
       let calls = 0;
@@ -18,7 +19,9 @@ for (const kind of ["openai", "anthropic"] as const) {
           status: 400, headers: { "content-type": "application/json" },
         });
       }) as typeof globalThis.fetch;
-      const createProvider = (maxRequestBytes?: number) => kind === "openai"
+      const createProvider = (maxRequestBytes?: number) => kind === "openai-responses"
+        ? new OpenAIResponsesProvider({ model: "test", maxRequestBytes, client: new OpenAI({ apiKey: "test", fetch, maxRetries: 0 }) })
+        : kind === "openai"
         ? new OpenAICompatibleProvider({ model: "test", maxRequestBytes, client: new OpenAI({ apiKey: "test", fetch, maxRetries: 0 }) })
         : new AnthropicProvider({ model: "test", maxRequestBytes, client: new Anthropic({ apiKey: "test", fetch, maxRetries: 0 }) });
       const run = async (maxRequestBytes?: number, events: ProviderRequestEvent[] = []) => {
@@ -35,7 +38,7 @@ for (const kind of ["openai", "anthropic"] as const) {
       const measured = events.find(event => event.phase === "failed")!;
       expect(measured.requestBytes).toBe(wireBytes);
       expect(measured.requestFingerprint).toBe(createHash("sha256").update(wireBody).digest("hex"));
-      expect(JSON.parse(wireBody).stream).toBe(streaming ? true : undefined);
+      expect(JSON.parse(wireBody).stream).toBe(streaming ? true : kind === "openai-responses" ? false : undefined);
 
       calls = 0;
       await expect(run(wireBytes - 1)).rejects.toMatchObject({ name: "RequestBodyLimitError", requestBytes: wireBytes });
@@ -47,7 +50,9 @@ for (const kind of ["openai", "anthropic"] as const) {
     it(`checks configured body bytes before transport (${kind}, stream=${streaming})`, async () => {
       let calls = 0;
       const unexpected = () => { calls++; throw new Error("transport must not start"); };
-      const provider = kind === "openai"
+      const provider = kind === "openai-responses"
+        ? new OpenAIResponsesProvider({ model: "test", maxRequestBytes: 100, client: { responses: { create: unexpected } } as any })
+        : kind === "openai"
         ? new OpenAICompatibleProvider({ model: "test", maxRequestBytes: 100, client: { chat: { completions: { create: unexpected } } } as any })
         : new AnthropicProvider({ model: "test", maxRequestBytes: 100, client: { messages: { create: unexpected, stream: unexpected } } as any });
       const run = async () => {
@@ -60,7 +65,9 @@ for (const kind of ["openai", "anthropic"] as const) {
     });
 
     it(`measures final JSON bytes without exposing payload (${kind}, stream=${streaming})`, async () => {
-      const provider = kind === "openai"
+      const provider = kind === "openai-responses"
+        ? new OpenAIResponsesProvider({ model: "test", apiKey: "test" })
+        : kind === "openai"
         ? new OpenAICompatibleProvider({ model: "test", apiKey: "test" })
         : new AnthropicProvider({ model: "test", client: {} as any });
       let expectedBytes = 0;
@@ -68,7 +75,7 @@ for (const kind of ["openai", "anthropic"] as const) {
         expectedBytes = Buffer.byteLength(JSON.stringify(params));
         throw new Error("413 request too large");
       };
-      (provider as any).client = kind === "openai" ? { chat: { completions: { create: stop } } } : { messages: { create: stop, stream: stop } };
+      (provider as any).client = kind === "openai-responses" ? { responses: { create: stop } } : kind === "openai" ? { chat: { completions: { create: stop } } } : { messages: { create: stop, stream: stop } };
       const events: ProviderRequestEvent[] = [];
       const options = { onRequestEvent: (e: ProviderRequestEvent) => events.push(e) };
       const messages = [{ role: "user" as const, content: "private 测试内容" }];

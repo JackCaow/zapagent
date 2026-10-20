@@ -30,7 +30,7 @@ that material; it does not clear current code influenced by it.
 
 ## Attribution already retained
 
-- Root ISC and VM Apache-2.0 license/NOTICE boundaries.
+- Root MIT and VM Apache-2.0 license/NOTICE boundaries.
 - Modified Ink MIT notice in `THIRD_PARTY_NOTICES.md`.
 - Yoga Layout license and its version-specific upstream provenance.
 - Generated Watch page's Motion/Framer Motion/Motion DOM/Motion Utils/tslib notices.

@@ -43,7 +43,7 @@ tests in `zapvm/web/client/react`, not through the root Bun suite.
   acceptance. A build or smoke task does not prove a security boundary.
 - Use scoped Conventional Commit subjects, for example `fix(runtime): ...`.
 
-Contributions to the root project use ISC; contributions under `zapvm/` use
+Contributions to the root project use MIT; contributions under `zapvm/` use
 Apache-2.0. Submit only material you have the right to contribute, and preserve
 third-party licenses and attribution. Report vulnerabilities privately as
 described in [SECURITY.md](SECURITY.md).

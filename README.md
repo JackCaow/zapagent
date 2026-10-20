@@ -1,86 +1,47 @@
-# zapAgent
+<p align="center">
+  <img src="docs/images/readme/hero.png" alt="zapAgent — Code flows. Your terminal. A team of agents." width="100%" />
+</p>
 
-**zapAgent. Code flows.**
+<h1 align="center">One task. A coordinated team of agents.</h1>
 
-Source candidate: publication is pending the [provenance and release checks](docs/open-source-readiness.md).
+<p align="center">
+  Delegate work. Keep edits isolated. Watch every step.<br />
+  A terminal coding agent with a reusable TypeScript runtime.
+</p>
 
-A terminal-based AI coding assistant powered by Claude, OpenAI, or any OpenAI-compatible provider.
+<p align="center">
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#see-the-work-as-it-happens">Live visualization</a> ·
+  <a href="#how-the-agents-work-together">Architecture</a> ·
+  <a href="docs/usage.md">CLI reference</a> ·
+  <a href="README.zh-CN.md">简体中文</a>
+</p>
 
-## Monorepo modules
+zapAgent brings **multi-agent collaboration, isolated workspaces, and live runtime visualization** into your terminal. Ask it to investigate a codebase, split an implementation into independent pieces, or review a change. Writing agents work in private snapshots; you can inspect their progress and approve artifact merges back into your project.
 
-- `src/`: zapAgent CLI and TUI.
-- `zapsdk/`: reusable Agent/Harness, including the execution-backend contract.
-- `zapvm/`: independent Go module for VM Host, Guest, image tooling and cloud services.
-  Its Apache-2.0 license and notices remain under that directory.
+Use Anthropic Messages, OpenAI Chat Completions, or **OpenAI Responses API**, including compatible endpoints. Keep your editor, terminal, and existing toolchain.
 
-The Agent uses the VM through the execution protocol, not its implementation.
-VM source is versioned in the same Git commit, but does not inject prompts,
-force permissions or determine Agent completion. Agent-only builds still use
-`bun run build`; `bun run build:all` also builds the native VM tools.
-Use `bun run check:all` for Bun/TypeScript plus VM source/test/vet gates.
-See [migration and release boundaries](docs/architecture/36-zapvm-monorepo.md).
+## Built for work that needs more than one agent
 
-## Installation
+| Collaborate | Isolate | Observe |
+| :--- | :--- | :--- |
+| Delegate exploration, planning, and implementation to child agents. The coordinator manages dependencies, concurrency, messages, and run state. | Writing agents get private workspaces, including in non-Git projects. Their edits return as artifacts for an explicit merge. | `--watch` opens a live graph of model requests, tools, approvals, and child agents alongside the terminal. |
+| **Independent work can happen together.** | **Child edits reach your project through a merge gate.** | **See what is running, waiting, or finished.** |
 
-The npm package name is `zapagent`, with `zap` as its main command. npm
-distribution is being prepared; use the installation options below until it
-is published. Maintainers build the candidate with `bun run pack:npm`; see the
-[npm publication procedure](docs/npm-publishing.md).
+Try a prompt like this:
 
-### Release installer (not yet available)
+```text
+Investigate how authentication works in this repository.
+Delegate independent parts to agents: map the request flow, review session
+handling, and inspect the tests. Summarize their findings, then propose a fix.
+Ask before merging implementation artifacts into my workspace.
+```
 
-This new repository starts with source only. It has no published binary assets
-or npm release. Use the source installation below. `install.sh` and the release
-workflow are retained for maintainers; the installer becomes usable only after
-a verified signed release is published in this repository.
+Delegation follows the task and model decisions; independent steps can run concurrently, while dependent steps wait for their prerequisites.
 
-The installer verifies the release checksum and installs Zap together with its
-pinned zapVM binary, trusted image public key, and signed Linux Guest image.
-Users still run only `zap`. Commands run under the host OS sandbox by default; the VM is
-opt-in (`executionBackend: "vm"` or `ZAPCODE_EXECUTION=vm`) and starts lazily.
+## Quick start
 
-When a Bash command requests to run outside the OS sandbox, the approval menu
-supports **this command**, **this session**, or **this project**, plus deny.
-Session consent ends on `/new` or session restore. Project consent is bound to
-the canonical working directory and stored under the user data directory at
-`permissions/projects/<directory-hash>/settings.json`; other clones do not inherit
-it. View or revoke `SandboxEscape(*)` in `/permissions`. Project consent also
-applies to headless runs from that directory. Repository settings and ordinary
-`Bash(*)` rules cannot grant sandbox escape. Explicit deny/ask rules, one-time
-approval for dangerous commands, plan mode, and execution-backend restrictions
-continue to apply. Choosing a scope authorizes subsequent outside-sandbox commands
-in that scope, with full access to host files and network.
-
-For ordinary tools, open `/permissions` and press `a` to select multiple tools,
-choose entire tools or a project-relative file glob / Bash command pattern,
-then review and save for this session or project. Press `g` on an ordinary
-approval prompt to customize its scope. Read/edit groups expand into exact
-currently registered tool names; future MCP tools do not inherit the grant.
-All session tool grants expire on `/new` or session restore. New project grants
-use the same host-owned data directory as sandbox consent; existing repository,
-personal and global rules remain readable. Across sources and in both TUI and
-Headless, explicit **deny wins over ask, and ask wins over allow**, including
-`--allowed-tools` and bypass mode. See [authorization design](docs/architecture/57-tool-authorization.md).
-
-Supported targets are macOS (x64 / arm64), Linux (x64), and Windows (x64 via
-Git Bash / MSYS). Linux needs KVM, cgroup v2, and systemd 254 or newer. Windows
-needs an Administrator install terminal and Windows build 20348 or newer with
-Hyper-V/HCS enabled. macOS needs Apple Virtualization.framework support.
-
-The signed Guest image advertises its execution contract to Zap. Current
-images include Python/pip/virtualenv, Node/npm, jq, ripgrep, zip and unzip.
-The Guest root filesystem remains read-only; Zap tells the model to use
-project-local environments such as `.venv` and `node_modules` instead of OS
-package managers or temporary runtime bootstraps. The project workspace is
-executable inside the VM, while `.git` and `.zapcode` remain read-only and
-non-executable for Guest commands.
-
-The release workflow builds independent Host Runtime images (`host-runtime`),
-not images with an embedded Agent. Cloud/Web deployments are a separate delivery
-mode and must supply their own Resident Agent runtime and validate its execution
-contract. The normal local `zap` command remains host-orchestrated.
-
-### From source (requires [Bun](https://bun.sh))
+Requires **Git** and **[Bun](https://bun.sh) 1.3+**. Bun 1.3.14 is the version pinned by this repository.
 
 ```bash
 git clone https://github.com/JackCaow/zapagent.git
@@ -89,143 +50,96 @@ bun install --frozen-lockfile
 bun start
 ```
 
-For a global development command that points at this checkout (Bun required):
+In the terminal UI, run `/connect` to configure a provider, then `/model` to choose a model.
+
+To use this checkout from your own project:
 
 ```bash
+# Run once inside the zapagent checkout.
 bun link
-zapdev
+
+# Then run from the project you want to work on.
+cd /path/to/your-project
+zapdev --watch
 ```
 
-## Usage
+Prefer a compiled CLI? Run `bun run build`, then use `dist/zap` from your checkout. Examples below use `zap`; the development command `zapdev` accepts the same arguments.
 
-```bash
-zap
-```
+> **Source preview:** this repository is being prepared for public release. npm and binary releases are not yet published here; source installation currently requires repository access. See [release readiness](docs/open-source-readiness.md).
 
-Watch the current process in a local, read-only browser view:
+## See the work as it happens
 
 ```bash
 zap --watch
-zap --watch --watch-no-open
-zap --watch -p "Inspect this project" --output-format stream-json --watch-linger 30
 ```
 
-The graph updates live from runtime events: model requests, tool approval and
-execution, internal subagents, external CLI process states, and final outcomes.
-The URL is printed to stderr. It listens on `127.0.0.1` with a per-process access
-token; treat the URL as private. Prompts, arguments and tool output are excluded.
-Refresh and reconnect restore the view without running tools again. Headless
-runs exit normally unless `--watch-linger` is specified (0–300 seconds).
-`--watch-port` selects a local port; Watch cannot be combined with `--dev`, ACP,
-or workflow commands. See the [runtime design and validation record](docs/architecture/57-watch-runtime-observability.md).
+Keep coding in the terminal while a local browser view shows the run unfolding: which agent is active, which tool is running, where approval is needed, and which steps have finished.
 
-## Getting Started
+![Watch UI showing a root agent, a child agent, tool activity, and an approval wait. Synthetic demo events.](docs/images/readme/watch-preview.png)
 
-On first run, use `/connect` to add an AI provider:
+*The actual Watch interface, captured with the repository's synthetic preview events. This is a UI demonstration, not a benchmark or a recorded model run.*
 
-```
-/connect
-```
+- **Follow the agent tree:** root and child runs stay connected to their tools and lifecycle states.
+- **Understand waits:** distinguish model activity, tool execution, approval, and completion.
+- **Keep the terminal in control:** Watch is read-only. Refreshing the page does not replay tools or change the run.
+- **Keep content out of the viewer:** Watch projects runtime metadata; prompts, tool arguments, and tool output are excluded. Its loopback URL contains a private access token.
 
-Supported providers:
-- Anthropic (Claude)
-- OpenAI
-- Any OpenAI-compatible API
+Use `--watch-no-open` to print the viewer URL without opening a browser. See [Watch architecture](docs/architecture/57-watch-runtime-observability.md) for the event flow and current limits.
 
-## Slash Commands
+## How the agents work together
 
-| Command | Description |
-|---------|-------------|
-| `/help` | Show command reference |
-| `/connect` | Set up provider & API key |
-| `/model` | Show or switch model |
-| `/effort` | Set reasoning effort (`off`, `cycle`, or a provider value) |
-| `/mode` | Set permission mode (`default`, `acceptEdits`, `plan`, `bypass`) |
-| `/permissions` | Manage active permission rules |
-| `/sessions` | Browse saved sessions |
-| `/queue` | Manage individual follow-ups: edit, delete, reorder, retry, Steer, or toggle default queuing (also Ctrl+Q) |
-| `/rewind` | Restore code, conversation, or both to a previous turn (empty prompt: Esc twice) |
-| `/mem` | Browse memory (`list`, `show`, `forget`) |
-| `/mcp` | Manage MCP servers |
-| `/serper` | Set Serper web search API key |
-| `/todos` | Show/hide the todo panel or clear todos |
-| `/compact` | Summarize and compact conversation history |
-| `/status` | Show session snapshot: provider, context, cache, MCP |
-| `/new` | Start a new session |
-| `/clear` | Clear the screen |
-| `/copy` | Copy last output to clipboard |
-| `/copy-input` | Copy last user input to clipboard |
-| `/review` | Review code for bugs & security |
-| `/commit` | Stage changes and create a conventional commit |
-| `/init` | Generate AGENTS.md for this project |
-| `/supertask` | Start, resume, abort, status, or watch a long-horizon task |
-| `/exit` | Exit ZapCode (`/quit` and `/q` also work) |
+![Agent architecture: the host drives a root agent and coordinator; read-only agents share a view, writing agents use private snapshots, and artifacts pass conflict and drift checks before merging. Tools run through policy and execution layers; events feed the read-only Watch view.](docs/images/readme/architecture.svg)
 
-The footer shows output speed as `105.4 token/s` for the latest root model request. `~` marks a live estimate (streamed characters ÷ 4); provider-reported output usage calibrates the final rate. Timing starts at first output and excludes tool execution. Missing usage keeps the estimate; non-streaming or very short responses may have no rate.
+1. **The host starts a run.** The terminal, headless CLI, or ACP adapter uses `AgentRuntime`. `LoopAgent` handles the model/tool loop with context management and execution budgets.
+2. **The coordinator delegates.** Child runs have their own identities, lifecycle states, dependencies, and messaging. Independent work can run concurrently within configured limits.
+3. **Writing agents work in isolation.** Git projects use private clones of a working-tree snapshot, including eligible uncommitted changes. Non-Git projects use controlled copy snapshots. Read-only agents can share the parent workspace view.
+4. **Results come back through a merge gate.** Writing agents produce frozen artifacts. Merging checks conflicts and parent-workspace drift before applying changes. Child staging and commits stay private; merging delivers file changes, not child commit history.
+5. **Runtime events make progress visible.** Watch observes the execution lifecycle without controlling it. The runtime distinguishes execution outcomes from acceptance; task acceptance requires an explicit evaluator or human review.
 
-## Keyboard Shortcuts
+The three modules have separate responsibilities:
 
-| Key | Action |
-|-----|--------|
-| `Enter` | Send message |
-| `Shift+Enter` | New line — Ghostty / Kitty / iTerm2 / WezTerm / Warp |
-| `\` + `Enter` | New line — universal (works in Apple Terminal too) |
-| `Ctrl+C` | Cancel running agent / exit |
-| `Ctrl+L` | Clear screen |
-| `Ctrl+Q` | Manage follow-ups without replacing the current draft |
-| `↑ / ↓` (or `Ctrl+P / Ctrl+N`) | Walk prompt history (per-project, prefix-filtered, edge-aware in multi-line buffers) |
+| Module | Responsibility |
+| :--- | :--- |
+| [`src/`](src/) | Terminal UI, provider setup, sessions, headless/ACP hosts, and Watch. |
+| [`zapsdk/`](zapsdk/) | Reusable TypeScript agent runtime: model loop, orchestration, tools, policy, workspaces, merge, context, memory, and events. |
+| [`zapvm/`](zapvm/) | Independent Go execution runtime. Optional VM execution sits behind the SDK's execution protocol; the VM does not own agent prompts, permissions, or completion decisions. |
 
-Messages sent during a task queue as separate subsequent turns. In `/queue`, use
-`e` to edit, `x` to delete, `[`/`]` to reorder, `s` to Steer the active task, and
-`q` to toggle the default between Queue and Steer. Steering waits for a complete
-tool-result boundary and shares the active run's budget. Editing preserves the
-original draft; Esc cancels the edit. Failed or recovered messages stay held for
-transcript review and explicit `r` retry; accepted input is never automatically
-resent after an API failure. Queue storage is private and bound to each session.
+Explore the [architecture guide](docs/architecture/README.md), [multi-agent design](docs/architecture/26-multi-agent-orchestration.md), and [non-Git workspace isolation](docs/architecture/48-non-git-workspace-isolation.md).
 
-## Built-in Tools
+## More of your workflow, in one place
 
-The agent has access to the following tools:
+- **Choose your model.** Connect Anthropic or OpenAI-compatible providers and switch with `/model`; adjust supported reasoning settings with `/effort`.
+- **Keep long tasks moving.** Context compaction, project memory, saved sessions, and a follow-up queue help carry work across turns. Steer the active task or queue the next request with `/queue`.
+- **Control tool access.** Inspect permissions and scoped approvals with `/permissions`. Commands use the host OS sandbox by default; VM execution is opt-in. See the [execution boundary](docs/architecture/39-local-sandbox-default.md) for platform-specific restrictions.
+- **Return to earlier work.** `/rewind` can restore conversation, tracked code changes, or both. Checkpoints have coverage limits; external effects and every filesystem topology change are not fully reversible.
+- **Bring your tools.** Built-in file, search, shell, HTTP, and document tools sit alongside MCP integrations and skills.
+- **Build your own host.** Reuse the SDK, stream structured headless output, or connect an ACP-compatible client.
 
-- **Filesystem** — read, write, edit files
-- **Glob / Search** — find files and search content
-- **Shell commands** — run terminal commands
-- **HTTP** — make web requests
-- **Web search** — search the web
-- **Document reader** — read PDFs, Word docs, and more
-- **MCP** — connect external tools via Model Context Protocol
+### Script it
 
-## Environment Variables
+After configuring a provider:
 
-Use `/connect` for interactive provider setup. For a new configuration, copy
-[`.env.example`](.env.example) to `.env` and set all three bootstrap values:
-
-```env
-OPENAI_BASE_URL=https://api.openai.com/v1
-OPENAI_API_KEY=your_key_here
-MODEL=your_model_id
+```bash
+zap -p "Explain this repository's architecture" --output-format json
+zap --watch -p "Review the latest changes" --output-format stream-json --watch-linger 30
 ```
 
-The bootstrap requires `OPENAI_BASE_URL`; setting a key alone does not create a
-provider. These names also apply to compatible endpoints. For Anthropic, use
-`/connect`. Existing saved provider settings take precedence over bootstrap values.
-Never commit `.env`.
+Use `zap --help-headless` for automation options. See the [CLI reference](docs/usage.md) for all slash commands, keyboard shortcuts, environment variables, approval scopes, and optional VM setup.
 
-| Variable | Purpose |
-|---|---|
-| `ZAPCODE_DATA_DIR` | Override the data directory (default: `~/.zapcode` on macOS, `${XDG_DATA_HOME:-~/.local/share}/zapcode` on Linux, `%APPDATA%\zapcode` on Windows). Affects config, sessions, logs, image cache, memory, monitor outputs, and tool-result storage. Useful for CI, sandboxed runs, and per-environment isolation. |
+## Build with us
+
+Useful contributions include reproducible agent failures, clearer runtime visualization, provider compatibility fixes, and platform-specific sandbox tests. Include the expected behavior and a minimal reproduction; remove credentials and private code from reports.
+
+```bash
+bun run typecheck
+bun test
+bun run build
+```
+
+Working on the independent VM module? Use `bun run check:vm`; `bun run build:all` builds both host components. See [CONTRIBUTING.md](CONTRIBUTING.md) and report vulnerabilities via [SECURITY.md](SECURITY.md).
+
+If this is the workflow you want in your terminal, star the repository and help shape it.
 
 ## License
 
-The CLI and SDK use [ISC](LICENSE). The independent VM module uses
-[Apache-2.0](zapvm/LICENSE); third-party components retain their own licenses.
-See [third-party notices](THIRD_PARTY_NOTICES.md).
-
-## Contributing and security
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development and verification, and
-[SECURITY.md](SECURITY.md) for vulnerability reporting and execution boundaries.
-Maintainers should complete the [open-source checklist](docs/open-source-readiness.md)
-before changing repository visibility or publishing artifacts. Platform builds,
-unit tests, and basic agent smoke tasks are not equivalent to VM/security or
-complex-task acceptance.
+CLI and SDK: [MIT](LICENSE). Independent VM module: [Apache-2.0](zapvm/LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.md) and [visual asset notes](docs/images/readme/README.md).

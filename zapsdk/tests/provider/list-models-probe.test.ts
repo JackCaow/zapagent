@@ -22,6 +22,20 @@ describe("listModels — probe order", () => {
   let restore: () => void = () => {}
   afterEach(() => restore())
 
+  it("uses only Bearer authentication for Responses model discovery", async () => {
+    const original = globalThis.fetch
+    restore = () => { globalThis.fetch = original }
+    let headers: Headers | undefined
+    globalThis.fetch = (async (_input: unknown, options: RequestInit) => {
+      headers = new Headers(options.headers)
+      return Response.json({ data: [{ id: "fixture" }] })
+    }) as typeof fetch
+    expect(await listModels("https://fixture.invalid/v1", "fixture", 1000, undefined, "openai-responses")).toEqual(["fixture"])
+    expect(headers!.get("Authorization")).toBe("Bearer fixture")
+    expect(headers!.has("x-api-key")).toBe(false)
+    expect(headers!.has("anthropic-version")).toBe(false)
+  })
+
   it("sends no credentials to a keyless endpoint", async () => {
     const original = globalThis.fetch
     restore = () => { globalThis.fetch = original }
