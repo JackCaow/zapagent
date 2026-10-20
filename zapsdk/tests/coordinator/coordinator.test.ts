@@ -166,6 +166,70 @@ describe("AgentCoordinator", () => {
     });
   });
 
+  it("coalesces simultaneous capacity resumptions and leaves capacity for later runs", async () => {
+    const resume = deferred(), blocker = deferred();
+    const started: string[] = [];
+    const coordinator = new AgentCoordinator({
+      threadId: "coalesced-capacity", maxConcurrency: 1, idFactory: ids("first", "blocker", "later"),
+      executor: {
+        execute: async ({ run, reportStatus }) => {
+          started.push(run.runId);
+          if (run.runId === "first") {
+            await reportStatus("waiting_approval");
+            await resume.promise;
+            await Promise.all([reportStatus("running"), reportStatus("running")]);
+          } else if (run.runId === "blocker") await blocker.promise;
+          return { success: true, text: "done" };
+        },
+      },
+    });
+    const first = await coordinator.spawn({ task: "first", agentType: "general" });
+    await eventually(async () => { expect((await coordinator.list())[0]?.status).toBe("waiting_approval"); });
+    const second = await coordinator.spawn({ task: "block", agentType: "general" });
+    await eventually(() => { expect(started).toContain("blocker"); });
+    resume.resolve();
+    await new Promise(resolve => setTimeout(resolve, 5));
+    blocker.resolve();
+    await expect(coordinator.wait(second.runId)).resolves.toMatchObject({ success: true });
+    await expect(coordinator.wait(first.runId)).resolves.toMatchObject({ success: true });
+    const later = await coordinator.spawn({ task: "later", agentType: "general" });
+    await expect(coordinator.wait(later.runId)).resolves.toMatchObject({ success: true });
+  });
+
+  it("cancels a child waiting to regain capacity without waiting for the occupying child", async () => {
+    const resume = deferred(), blocker = deferred(), resuming = deferred();
+    const coordinator = new AgentCoordinator({
+      threadId: "cancel-capacity", maxConcurrency: 1, idFactory: ids("first", "blocker", "later"),
+      executor: {
+        execute: async ({ run, reportStatus }) => {
+          if (run.runId === "first") {
+            await reportStatus("waiting_approval");
+            await resume.promise;
+            const pending = Promise.all([reportStatus("running"), reportStatus("running")]);
+            resuming.resolve();
+            await pending;
+          } else if (run.runId === "blocker") await blocker.promise;
+          return { success: true, text: "done" };
+        },
+      },
+    });
+    const first = await coordinator.spawn({ task: "first", agentType: "general" });
+    await eventually(async () => { expect((await coordinator.list())[0]?.status).toBe("waiting_approval"); });
+    const second = await coordinator.spawn({ task: "block", agentType: "general" });
+    await eventually(async () => {
+      expect((await coordinator.list()).find(run => run.runId === second.runId)?.status).toBe("running");
+    });
+    resume.resolve();
+    await resuming.promise;
+    await coordinator.cancel(first.runId);
+    await expect(coordinator.wait(first.runId)).resolves.toMatchObject({ success: false });
+    expect((await coordinator.list()).find(run => run.runId === first.runId)?.status).toBe("cancelled");
+    blocker.resolve();
+    await coordinator.wait(second.runId);
+    const later = await coordinator.spawn({ task: "later", agentType: "general" });
+    await expect(coordinator.wait(later.runId)).resolves.toMatchObject({ success: true });
+  });
+
   it("cancels running work idempotently", async () => {
     const coordinator = new AgentCoordinator({
       threadId: "thread-cancel",

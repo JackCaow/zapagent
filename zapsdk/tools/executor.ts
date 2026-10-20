@@ -849,27 +849,31 @@ export class ToolExecutor {
       await this._onApprovalLifecycle?.(event);
       if (observation) observeRuntime({ kind: "approval", scope: observation.scope, approvalOccurrence, event }, observation);
     };
-    const previousApproval = this.approvalQueue.current.catch(() => undefined);
-    const approval = previousApproval.then(async () => {
-      if (signal?.aborted) throw new ExecutionBoundaryError("aborted", operationFailure("CANCELLED", "approval"));
-      await notify("requested");
-      return onApproval(name, parsedArgs, signal, approvalContext);
-    });
     let abortListener: (() => void) | undefined;
-    const approvalOrAbort = signal
-      ? Promise.race([
-          approval,
-          new Promise<boolean>((_, reject) => {
-            abortListener = () => reject(new ExecutionBoundaryError("aborted", operationFailure("CANCELLED", "approval")));
-            signal.addEventListener("abort", abortListener, { once: true });
-          }),
-        ])
-      : approval;
-    approval.catch(() => undefined);
-    this.approvalQueue.current = previousApproval
-      .then(() => approvalOrAbort)
-      .then(() => undefined, () => undefined);
     try {
+      // Lifecycle observers may release/reacquire Agent capacity. Never hold
+      // the shared approval queue while awaiting them: other Agents need to
+      // reach approval to release their own capacity.
+      await notify("requested");
+      const previousApproval = this.approvalQueue.current.catch(() => undefined);
+      const approval = previousApproval.then(() => {
+        if (signal?.aborted) throw new ExecutionBoundaryError("aborted", operationFailure("CANCELLED", "approval"));
+        return onApproval(name, parsedArgs, signal, approvalContext);
+      });
+      const approvalOrAbort = signal
+        ? Promise.race([
+            approval,
+            new Promise<boolean>((_, reject) => {
+              abortListener = () => reject(new ExecutionBoundaryError("aborted", operationFailure("CANCELLED", "approval")));
+              signal.addEventListener("abort", abortListener, { once: true });
+              if (signal.aborted) abortListener();
+            }),
+          ])
+        : approval;
+      approval.catch(() => undefined);
+      this.approvalQueue.current = previousApproval
+        .then(() => approvalOrAbort)
+        .then(() => undefined, () => undefined);
       const response = await approvalOrAbort;
       const approved = response === true;
       const denial = response && typeof response === "object" && response.approved === false
@@ -882,10 +886,11 @@ export class ToolExecutor {
         failure: operationFailure("POLICY_DENIED", denial?.source ?? "approval", approvalId) };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      const cancelled = err instanceof ExecutionBoundaryError && err.failure.code === "CANCELLED";
-      await notify(cancelled ? "cancelled" : "failed", message);
+      const cancelled = signal?.aborted || (err instanceof ExecutionBoundaryError && err.failure.code === "CANCELLED");
+      // A failed observer must not turn cleanup into an unhandled rejection.
+      try { await notify(cancelled ? "cancelled" : "failed", message); } catch {}
       return cancelled
-        ? executionFailureResult(err, approvalId)
+        ? executionFailureResult(new ExecutionBoundaryError(message, operationFailure("CANCELLED", "approval")), approvalId)
         : { success: false, output: "", error: `Tool "${name}" approval failed: ${message}`,
             failure: operationFailure("EXECUTION_FAILED", "approval", approvalId) };
     } finally {

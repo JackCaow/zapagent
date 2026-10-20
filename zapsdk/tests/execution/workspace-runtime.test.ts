@@ -78,6 +78,39 @@ describe("workspace runtime storage", () => {
 
 const native = process.platform === "darwin" && createPlatformSandbox().status().available;
 (native ? describe : describe.skip)("workspace sandbox workflows (real macOS)", () => {
+  it("keeps native mktemp default and -t templates in private scratch without changing explicit templates", async () => {
+    const shell = executor();
+    const result = await shell.execute("bash", {
+      command: `set -eu
+for mode in file directory prefix clustered long; do
+  case "$mode" in
+    file) path=$(mktemp) ;;
+    directory) path=$(mktemp -d) ;;
+    prefix) path=$(mktemp -d -t "prefix with spaces") ;;
+    clustered) path=$(mktemp -dqtprefix) ;;
+    long) path=$(mktemp --directory) ;;
+  esac
+  case "$path" in "$TMPDIR"/*) ;; *) exit 41 ;; esac
+  test -e "$path"
+done
+relative=$(mktemp -d relative.XXXXXXXX)
+test -d "./$relative"
+case "$relative" in relative.*) ;; *) exit 42 ;; esac
+mkdir -p "explicit tmp"
+explicit=$(mktemp -d -p "$PWD/explicit tmp")
+case "$explicit" in "$PWD/explicit tmp/"*) ;; *) exit 43 ;; esac
+absolute=$(mktemp -d "$PWD/absolute.XXXXXXXX")
+test -d "$absolute"
+printf mktemp-ok`,
+    });
+    expect(result).toMatchObject({ success: true, output: "mktemp-ok" });
+    expect(result.runtime?.broker?.sandboxEnforced).toBe(true);
+
+    const outside = join(fixture, "undeclared.XXXXXXXX");
+    const denied = await shell.execute("bash", { command: `mktemp -d ${quote(outside)}` });
+    expect(denied.success).toBe(false);
+    expect(readdirSync(fixture).some(name => name.startsWith("undeclared."))).toBe(false);
+  });
   it("keeps the workspace scope at nested cwd while denying undeclared siblings", async () => {
     writeFileSync(join(root, "config"), "root-config");
     writeFileSync(join(fixture, "outside"), "outside");
