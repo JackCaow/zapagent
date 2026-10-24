@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 export function verificationEnvironment(evidence: string, inherited = process.env): NodeJS.ProcessEnv {
@@ -33,4 +34,18 @@ export function npmCommand(npmPath: string, node: string, platform = process.pla
   const cli = join(dirname(npmPath), "node_modules", "npm", "bin", "npm-cli.js");
   if (!existsSync(cli)) throw new Error("Cannot locate npm-cli.js");
   return [node, cli];
+}
+
+/** Cleanup must not turn a verified Windows install into a false failure:
+ * Bun/AV can retain directory handles until the verifier itself exits. */
+export async function cleanupVerificationDirectory(
+  path: string,
+  platform = process.platform,
+  remove: (path: string) => Promise<void> = path => rm(path, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }),
+): Promise<{ path: string; code: string } | undefined> {
+  try { await remove(path); } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (platform === "win32" && code && ["EBUSY", "EPERM", "ENOTEMPTY"].includes(code)) return { path, code };
+    throw error;
+  }
 }

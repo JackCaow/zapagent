@@ -1,12 +1,11 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { bundledUiPackages } from "./pack-npm.js";
-import { consumerRuntimeEnvironment, npmCommand, verificationEnvironment } from "./npm-consumer-process.js";
+import { cleanupVerificationDirectory, consumerRuntimeEnvironment, npmCommand, verificationEnvironment } from "./npm-consumer-process.js";
 
 declare const Bun: { which(command: string): string | null };
 
@@ -56,8 +55,16 @@ const fixtureUrl = await new Promise<string>((accept, reject) => {
 const nodeOnly = join(evidence, "node-only"); mkdirSync(nodeOnly);
 copyFileSync(node, join(nodeOnly, process.platform === "win32" ? "node.exe" : "node"));
 const cases: Array<Record<string, unknown>> = [];
+const cleanupWarnings: Array<{ path: string; code: string }> = [];
+async function cleanup(path: string): Promise<void> {
+  const warning = await cleanupVerificationDirectory(path);
+  if (warning) {
+    cleanupWarnings.push(warning);
+    console.warn(`Verified installation retained for runner cleanup (${warning.code}): ${path}`);
+  }
+}
 const summary = { artifactSha256: createHash("sha256").update(readFileSync(artifact)).digest("hex"),
-  name: pkg.name, version: pkg.version, platform: process.platform, arch: process.arch, hashes, cases,
+  name: pkg.name, version: pkg.version, platform: process.platform, arch: process.arch, hashes, cases, cleanupWarnings,
   status: "running", error: undefined as string | undefined };
 try {
   for (const manager of ["npm", "bun"] as const) for (const global of [false, true]) {
@@ -115,10 +122,10 @@ try {
     cases.push({ nativeToolCall: "passed", manager, global, status: "passed", version, binShimVerified: process.platform !== "win32" || manager === "npm", bunOnPath: false, ...(audit ? { audit } : {}) });
     // Reclaim only successful installs. Windows may retain a transient executable/AV
     // handle after process exit; retry cleanup without skipping acceptance checks.
-    await rm(location, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    await cleanup(location);
   }
-  for (const manager of ["npm", "bun"]) await rm(join(evidence, `${manager}-cache`), { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
-  await rm(extracted, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  for (const manager of ["npm", "bun"]) await cleanup(join(evidence, `${manager}-cache`));
+  await cleanup(extracted);
   summary.status = "passed";
 } catch (error) {
   summary.status = "failed";

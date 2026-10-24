@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { consumerRuntimeEnvironment, npmCommand, verificationEnvironment } from "../scripts/npm-consumer-process.js";
+import { cleanupVerificationDirectory, consumerRuntimeEnvironment, npmCommand, verificationEnvironment } from "../scripts/npm-consumer-process.js";
 
 declare const Bun: { which(command: string): string | null };
 
@@ -68,4 +68,18 @@ it("keeps npm local and Bun global installs inside verification despite inherite
     const env = verificationEnvironment(work);
     expect(run([...npmCommand(shim, process.execPath), "--version"], work, env)).toBe("npm-shim:--version\n");
   } finally { rmSync(work, { recursive: true, force: true }); }
+});
+
+it("records Windows cleanup locks without changing successful acceptance results", async () => {
+  const locked = Object.assign(new Error("held by process"), { code: "EBUSY" });
+  const remove = async () => { throw locked; };
+  expect(await cleanupVerificationDirectory("verified-install", "win32", remove))
+    .toEqual({ path: "verified-install", code: "EBUSY" });
+  await expect(cleanupVerificationDirectory("verified-install", "linux", remove)).rejects.toBe(locked);
+});
+
+it("does not hide unexpected cleanup errors on Windows", async () => {
+  const failure = Object.assign(new Error("disk failed"), { code: "EIO" });
+  await expect(cleanupVerificationDirectory("verified-install", "win32", async () => { throw failure; })).rejects.toBe(failure);
+  expect(await cleanupVerificationDirectory("verified-install", "win32", async () => {})).toBeUndefined();
 });
