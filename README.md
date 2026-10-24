@@ -48,19 +48,23 @@ Start with a task in plain language. When it benefits from delegation, agents ca
 
 ## Quick start
 
-**1. Download zapAgent**
+**1. Install zapAgent**
 
-Choose the program for your computer from the [latest release](https://github.com/JackCaow/zapagent/releases/latest):
+Requires the [Bun 1.3+](https://bun.sh) runtime. Install with npm:
 
-| Platform | Downloads |
-| :--- | :--- |
-| macOS | [Apple Silicon](https://github.com/JackCaow/zapagent/releases/latest/download/zap-macos-arm64) · [Intel](https://github.com/JackCaow/zapagent/releases/latest/download/zap-macos-x64) |
-| Linux | [ARM64](https://github.com/JackCaow/zapagent/releases/latest/download/zap-linux-arm64) · [x64](https://github.com/JackCaow/zapagent/releases/latest/download/zap-linux-x64) |
-| Windows | [x64](https://github.com/JackCaow/zapagent/releases/latest/download/zap-windows-x64.exe) |
+```bash
+npm install -g zapagent
+```
 
-**2. Open your working folder**
+**2. Start in your working folder**
 
-zapAgent currently runs in a terminal. Open the folder containing your materials or project, then launch the downloaded program. Add `--watch` to open the live view in your browser. [Launch instructions](docs/usage.md#native-binary-setup).
+Open a terminal in the folder containing your materials or project and run:
+
+```bash
+zap --watch
+```
+
+Interact in the terminal and follow task progress in the live browser view.
 
 **3. Connect a model and describe your task**
 
@@ -69,17 +73,23 @@ On first use, enter `/connect` and follow the setup prompts to connect your mode
 You need your own model service account and API key; usage is billed by your provider. [Connection guide](docs/usage.md#getting-started).
 
 <details>
-<summary>Advanced setup and developer installation: Bun, npm, source, API protocols</summary>
+<summary>Other installation options and advanced setup: Bun, binaries, source, API protocols</summary>
 
-**Package managers** — requires [Bun](https://bun.sh) 1.3+; Git workspaces also require [Git](https://git-scm.com).
+**Install with Bun**:
 
 ```bash
 bun add --global zapagent
-cd /path/to/your-workspace
-zap --watch
 ```
 
-Alternatively, run `npm install --global zapagent`. Bun 1.3+ must also be installed to run the CLI.
+Git workspaces also require [Git](https://git-scm.com).
+
+**Native binaries** — download from the [latest release](https://github.com/JackCaow/zapagent/releases/latest) and follow the [launch instructions](docs/usage.md#native-binary-setup):
+
+| Platform | Downloads |
+| :--- | :--- |
+| macOS | [Apple Silicon](https://github.com/JackCaow/zapagent/releases/latest/download/zap-macos-arm64) · [Intel](https://github.com/JackCaow/zapagent/releases/latest/download/zap-macos-x64) |
+| Linux | [ARM64](https://github.com/JackCaow/zapagent/releases/latest/download/zap-linux-arm64) · [x64](https://github.com/JackCaow/zapagent/releases/latest/download/zap-linux-x64) |
+| Windows | [x64](https://github.com/JackCaow/zapagent/releases/latest/download/zap-windows-x64.exe) |
 
 **Model configuration** — use `/model` to choose a model and `/effort` to adjust supported reasoning settings. For custom services, enter the Base URL and API key in `/connect` and select the service's API protocol; choose **OpenAI Responses** for a Responses endpoint. [Responses configuration](docs/usage.md#openai-responses-api).
 

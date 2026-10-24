@@ -48,19 +48,23 @@ zapAgent 在终端中理解任务、调用工具并交付结果。用它调研�
 
 ## 快速开始
 
-**1. 下载 zapAgent**
+**1. 安装 zapAgent**
 
-从 [最新版本](https://github.com/JackCaow/zapagent/releases/latest) 选择适合你电脑的程序：
+需要 [Bun 1.3+](https://bun.sh) 运行环境。使用 npm 安装：
 
-| 平台 | 下载 |
-| :--- | :--- |
-| macOS | [Apple Silicon](https://github.com/JackCaow/zapagent/releases/latest/download/zap-macos-arm64) · [Intel](https://github.com/JackCaow/zapagent/releases/latest/download/zap-macos-x64) |
-| Linux | [ARM64](https://github.com/JackCaow/zapagent/releases/latest/download/zap-linux-arm64) · [x64](https://github.com/JackCaow/zapagent/releases/latest/download/zap-linux-x64) |
-| Windows | [x64](https://github.com/JackCaow/zapagent/releases/latest/download/zap-windows-x64.exe) |
+```bash
+npm install -g zapagent
+```
 
-**2. 打开你的工作文件夹**
+**2. 在你的工作文件夹中启动**
 
-zapAgent 目前通过终端使用。在终端中进入存放资料或项目的文件夹，再启动下载的程序。使用 `--watch` 可以同时打开浏览器中的运行视图。[查看启动步骤](docs/usage.md#native-binary-setup)。
+在存放资料或项目的文件夹中打开终端，运行：
+
+```bash
+zap --watch
+```
+
+终端用于交互，浏览器中的实时视图展示任务进展。
 
 **3. 连接模型，描述任务**
 
@@ -69,17 +73,23 @@ zapAgent 目前通过终端使用。在终端中进入存放资料或项目的�
 需要你自己的模型服务账号和 API Key，调用费用由模型服务商收取。[连接指南](docs/usage.md#getting-started)。
 
 <details>
-<summary>高级配置与开发者安装：Bun、npm、源码、API 协议</summary>
+<summary>其他安装方式与高级配置：Bun、二进制、源码、API 协议</summary>
 
-**包管理器安装**——需要 [Bun](https://bun.sh) 1.3+；Git 工作区还需要 [Git](https://git-scm.com)。
+**Bun 安装**：
 
 ```bash
 bun add --global zapagent
-cd /path/to/your-workspace
-zap --watch
 ```
 
-也可以执行 `npm install --global zapagent`；运行 CLI 仍需安装 Bun 1.3+。
+Git 工作区还需要安装 [Git](https://git-scm.com)。
+
+**独立二进制**——从 [最新版本](https://github.com/JackCaow/zapagent/releases/latest) 下载，并按[启动步骤](docs/usage.md#native-binary-setup)运行：
+
+| 平台 | 下载 |
+| :--- | :--- |
+| macOS | [Apple Silicon](https://github.com/JackCaow/zapagent/releases/latest/download/zap-macos-arm64) · [Intel](https://github.com/JackCaow/zapagent/releases/latest/download/zap-macos-x64) |
+| Linux | [ARM64](https://github.com/JackCaow/zapagent/releases/latest/download/zap-linux-arm64) · [x64](https://github.com/JackCaow/zapagent/releases/latest/download/zap-linux-x64) |
+| Windows | [x64](https://github.com/JackCaow/zapagent/releases/latest/download/zap-windows-x64.exe) |
 
 **模型配置**——用 `/model` 选择模型，用 `/effort` 调整模型支持的推理档位。自定义服务时，在 `/connect` 填入 Base URL 和 API Key，并选择服务支持的协议；Responses 端点选择 **OpenAI Responses**。[Responses 配置](docs/usage.md#openai-responses-api)。
 
