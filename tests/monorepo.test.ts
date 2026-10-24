@@ -40,7 +40,7 @@ describe("VM monorepo boundaries", () => {
   })
 
   it("records the monorepo commit without a second repository checkout", () => {
-    const release = read(".github/workflows/release.yml")
+    const release = read(".github/workflows/release-vm.yml")
     expect(release).toContain('cd zapvm')
     expect(release).not.toContain("zapvm-src")
     expect(release).not.toContain("ZAPVM_REPOSITORY_TOKEN")

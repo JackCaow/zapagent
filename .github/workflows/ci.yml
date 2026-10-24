@@ -3,6 +3,10 @@ name: CI
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   ZAP_BUILDER_VERSION: 1.3.14
 
@@ -15,6 +19,7 @@ on:
 jobs:
   secrets:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -29,6 +34,7 @@ jobs:
 
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -57,6 +63,7 @@ jobs:
 
   sandbox-linux:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -88,3 +95,19 @@ jobs:
         run: bun test zapsdk/tests/workspace/copy-workspace.test.ts
         env:
           ZAPCODE_DATA_DIR: ${{ runner.temp }}/zap-copy-test-data
+
+  sandbox-macos:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.ZAP_BUILDER_VERSION }}
+      - run: bun install --frozen-lockfile
+      - name: Native macOS sandbox and multi-agent regressions
+        run: bun test zapsdk/tests/execution/workspace-runtime.test.ts zapsdk/tests/execution/sandbox-temporary-directory.test.ts zapsdk/tests/workspace/subagent-git-write.test.ts zapsdk/tests/coordinator
+        env:
+          ZAPCODE_DATA_DIR: ${{ runner.temp }}/zap-macos-test-data

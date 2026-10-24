@@ -18,6 +18,7 @@ case "$OS" in
   Linux)
     case "$ARCH" in
       x86_64) FILE="zap-linux-x64" ;;
+      aarch64|arm64) FILE="zap-linux-arm64" ;;
       *) echo "Unsupported architecture: $ARCH" && exit 1 ;;
     esac
     ;;
@@ -126,7 +127,7 @@ if [ -n "$RUNTIME_URL" ] && [ -n "$RUNTIME_CHECKSUM_URL" ]; then
   test -f "$RUNTIME_PACKAGE/zapvm-runtime/images/active.json" || { echo "Runtime package is missing active signed image" >&2; exit 1; }
   HAS_RUNTIME=1
 else
-  echo "Runtime package is unavailable for $TAG; installing legacy Host binary only."
+  echo "Runtime package is unavailable for $TAG; installing the standalone CLI."
   github_download "$URL" "$TMP_FILE"
   github_download "$CHECKSUM_URL" "$CHECKSUM_FILE"
 

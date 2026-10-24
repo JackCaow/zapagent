@@ -1,6 +1,8 @@
 # Open-source readiness
 
-Status on 2026-10-19: **private source candidate; not cleared for publication**.
+Historical preparation record from 2026-10-19. The repository is now public;
+current release instructions are in [releasing.md](releasing.md). The checklist
+below records the preparation state at that time, not current visibility.
 
 ## New repository boundary
 

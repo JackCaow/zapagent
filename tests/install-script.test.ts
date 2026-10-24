@@ -33,7 +33,7 @@ describe("install.sh", () => {
     expect(script).toContain("NEEDS_SUDO=0")
   })
 
-  it("installs a mocked Linux release into ZAP_INSTALL_DIR without sudo", () => {
+  for (const [arch, asset] of [["x86_64", "zap-linux-x64"], ["aarch64", "zap-linux-arm64"]]) it(`installs a mocked Linux ${arch} release into ZAP_INSTALL_DIR without sudo`, () => {
     const tmp = mkdtempSync(join(tmpdir(), "zap-install-test-"))
     const fakeBin = join(tmp, "fake-bin")
     const installDir = join(tmp, "install", "bin")
@@ -41,7 +41,7 @@ describe("install.sh", () => {
       mkdirSync(fakeBin, { recursive: true })
       writeExecutable(join(fakeBin, "uname"), [
         "#!/bin/sh",
-        'if [ "$1" = "-s" ]; then echo Linux; else echo x86_64; fi',
+        `if [ "$1" = "-s" ]; then echo Linux; else echo ${arch}; fi`,
       ].join("\n"))
       writeExecutable(join(fakeBin, "sudo"), [
         "#!/bin/sh",
@@ -49,6 +49,7 @@ describe("install.sh", () => {
         "exit 99",
       ].join("\n"))
       writeFakeCurl(join(fakeBin, "curl"), "mock zap binary\n")
+      writeFileSync(join(fakeBin, "curl"), readFileSync(join(fakeBin, "curl"), "utf8").replaceAll("zap-linux-x64", asset))
 
       const proc = spawnSync("sh", [installScript], {
         env: {
