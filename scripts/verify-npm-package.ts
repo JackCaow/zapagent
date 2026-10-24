@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { bundledUiPackages } from "./pack-npm.js";
 import { consumerRuntimeEnvironment, npmCommand, verificationEnvironment } from "./npm-consumer-process.js";
@@ -28,7 +28,8 @@ const npmPath = Bun.which("npm"), node = Bun.which("node");
 if (!npmPath || !node) throw new Error("npm and Node are required for independent npm consumer verification");
 const npm = npmCommand(npmPath, node);
 const extracted = join(evidence, "extracted"); mkdirSync(extracted);
-run("extract", ["tar", "-xzf", artifact, "-C", extracted], evidence);
+// GNU tar treats a Windows drive colon in -f as a remote host delimiter.
+run("extract", ["tar", "-xzf", basename(artifact), "-C", extracted], dirname(artifact));
 const snapshot = join(extracted, "package");
 const pkg = JSON.parse(readFileSync(join(snapshot, "package.json"), "utf8"));
 if (pkg.name !== "zapagent" || pkg.private || pkg.patchedDependencies || pkg.scripts
