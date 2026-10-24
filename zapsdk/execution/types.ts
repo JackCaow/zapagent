@@ -45,6 +45,8 @@ export interface SandboxCommandOptions {
   environment?: Record<string, string>;
   /** Adapter-specific aliases for the broker's private per-command temp dir. */
   temporaryDirectoryEnvironment?: string[];
+  /** Trusted adapter endpoints, scoped to this command; explicit host denials still win. */
+  networkDomains?: string[];
 }
 
 export interface SandboxExecutionContext {
@@ -90,6 +92,8 @@ export interface OsSandbox {
   status(): SandboxStatus;
   createContext(input: {
     executionId: string;
+    /** Broker-authorized external CLI integration, never derived from shell arguments. */
+    externalCliIntegration?: boolean;
     workspace: WorkspaceIdentity;
     effects: ToolEffects;
     grant: CapabilityGrant;

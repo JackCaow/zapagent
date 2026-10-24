@@ -202,7 +202,12 @@ export class DefaultExecutionBroker implements ExecutionBroker {
       if (signal?.aborted) return reject("aborted", "CANCELLED");
       sandbox = needsProcessSandbox && !unsandboxed && sandboxStatus.available
         ? this.sandbox.createContext({ executionId: request.executionId,
-            workspace: request.workspace, effects: request.effects, grant: request.grant })
+            workspace: request.workspace, effects: request.effects, grant: request.grant,
+            externalCliIntegration: request.tool.definition.name === "delegate_agent"
+              && request.tool.definition.executionLocation === "host"
+              && request.workspace.mode !== "shared-readonly"
+              && request.effects.workspace.mode === "root-integration"
+              && request.effects.process.some(effect => effect.commandClass === "external-cli") })
         : undefined;
       processBroker = needsProcessSandbox
         ? this.processBrokerFactory?.({ request, sandbox, signal: executionAbort.signal, limits })

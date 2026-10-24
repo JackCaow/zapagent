@@ -6,6 +6,20 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DEFAULT_ALLOWED_DOMAINS, NetworkProxy, decideHost } from "../../execution/network-proxy.js"
+
+it("adapter domains stay command scoped and never override explicit denials", () => {
+  const base = new NetworkProxy(() => ({ allowedDomains: [], deniedDomains: ["api.anthropic.com"] }))
+  const delegate = base.fork()
+  const sibling = base.fork()
+  try {
+    delegate.allowDomains(["api.anthropic.com", "*.chatgpt.com", "*"])
+    expect(delegate.decideHost("ab.chatgpt.com").allowed).toBe(true)
+    expect(delegate.decideHost("api.anthropic.com").allowed).toBe(false)
+    expect(delegate.decideHost("unrelated.example").allowed).toBe(false)
+    expect(base.decideHost("ab.chatgpt.com").allowed).toBe(false)
+    expect(sibling.decideHost("ab.chatgpt.com").allowed).toBe(false)
+  } finally { base.close(); delegate.close(); sibling.close() }
+})
 import { createPlatformSandbox } from "../../execution/sandbox.js"
 
 describe("decideHost", () => {

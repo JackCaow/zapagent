@@ -7,6 +7,7 @@ import { createCapabilityGrant } from "../../policy/engine.js";
 import type { ToolEffects } from "../../tools/effects.js";
 import { WINDOWS_APPCONTAINER_HELPER } from "../../execution/windows-appcontainer.js";
 import { monitorTool } from "../../builtin-tools/monitor.js";
+import { NetworkProxy } from "../../execution/network-proxy.js";
 
 const cleanup: string[] = [];
 const originalProgramFiles = process.env.ProgramFiles;
@@ -19,6 +20,27 @@ afterEach(() => {
 });
 
 describe("sandbox policy construction", () => {
+  test("only broker-authorized CLI integration can extend command proxy domains", () => {
+    const root = mkdtempSync(join(tmpdir(), "zap-proxy-scope-")); cleanup.push(root);
+    const proxies: NetworkProxy[] = [];
+    const sandbox = createPlatformSandbox({ platform: "darwin", sandboxExecPath: process.execPath,
+      tempRoot: join(root, "temp"), networkProxy: () => {
+        const proxy = new NetworkProxy(() => ({ allowedDomains: [], deniedDomains: ["api.anthropic.com"] }));
+        proxies.push(proxy); return proxy;
+      } });
+    const effects = processEffects(root);
+    effects.network = [{ kind: "network", operation: "connect", destinations: ["*"] }];
+    const input = { executionId: "proxy-scope", workspace: { root }, effects,
+      grant: createCapabilityGrant("proxy", effects, Date.now() + 10000) };
+    const options = { cwd: root, networkDomains: ["chatgpt.com", "api.anthropic.com"] };
+    const ordinary = sandbox.createContext(input).prepareShell("true", options);
+    const delegate = sandbox.createContext({ ...input, externalCliIntegration: true }).prepareCommand("codex", [], options);
+    try {
+      expect(proxies[0]!.decideHost("chatgpt.com").allowed).toBe(false);
+      expect(proxies[1]!.decideHost("chatgpt.com").allowed).toBe(true);
+      expect(proxies[1]!.decideHost("api.anthropic.com").allowed).toBe(false);
+    } finally { ordinary.release(); delegate.release(); }
+  });
   test("adapter env values do not grant writes and temp aliases use the private command directory", () => {
     const root = mkdtempSync(join(tmpdir(), "zap-delegate-env-"));
     cleanup.push(root);
@@ -36,6 +58,7 @@ describe("sandbox policy construction", () => {
       expect(prepared.env.CLAUDE_SECURESTORAGE_CONFIG_DIR).toBe("");
       expect(prepared.env.CLAUDE_CODE_TMPDIR).toBe(prepared.env.TMPDIR);
       expect(prepared.env.TMPDIR).not.toBe("/not-granted");
+      expect(prepared.env.XDG_CONFIG_HOME).toBe(join(prepared.env.TMPDIR!, "config"));
       expect(context.writablePaths).not.toContain("/not-granted");
       expect(existsSync(prepared.env.TMPDIR!)).toBe(true);
     } finally { prepared.release(); }

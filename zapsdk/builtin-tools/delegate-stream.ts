@@ -8,6 +8,7 @@ export interface ParserCtx {
   stepCounter: { value: number };
   textBlockId: string | null;
   finalText: string;
+  error?: string;
   startedEmitted: boolean;
   finishedEmitted: boolean;
   /** Captured from the first event that carries it:
@@ -326,6 +327,9 @@ export function parseCodexLine(line: string, ctx: ParserCtx): AgentEvent[] {
     case "turn.failed":
     case "thread.failed":
     case "error": {
+      const detail = o.error as { message?: unknown } | undefined;
+      const message = detail?.message ?? o.message;
+      if (typeof message === "string") ctx.error = message;
       const ev = emitFinished(ctx, "codex", false);
       if (ev) out.push(ev);
       return out;

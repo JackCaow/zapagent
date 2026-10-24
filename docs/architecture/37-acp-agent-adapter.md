@@ -81,9 +81,31 @@ write access. The default host credential namespace remains selected through
 `CLAUDE_SECURESTORAGE_CONFIG_DIR`; API-key/OAuth-token environment variables are
 preserved only by the trusted delegate adapter.
 
+Codex uses a separate per-workspace `delegates/codex/<canonical-cwd-hash>/`
+directory as `CODEX_HOME`. Its `auth.json` and `config.toml` initially link to
+the read-only host files; sessions, SQLite databases and caches stay private.
+State roots, provider directories and workspace directories must be private,
+user-owned real directories. A symlink cannot redirect a state write grant.
+
+Only broker-authorized external delegation can extend its command-owned network
+proxy with the provider's official service domains. Explicit network denials
+still win, and ordinary shell commands do not inherit these domains. Custom
+provider endpoints need the user's configured network allowlist.
+
+Approved delegates can stage, commit and merge in their declared Git repository.
+A standalone repository receives an explicit `.git` write grant; a validated
+linked worktree receives its own Git directory and the common objects, refs and
+logs directories, excluding common configuration and hooks. Ordinary shell and
+file tools retain their existing control-plane protection, including `.zapcode`.
+The sandbox sets `TMPPREFIX` inside private temporary storage as well as
+`TMPDIR`, so zsh heredocs do not fall back to `/tmp`. Codex is launched with
+`allow_login_shell=false` so login profiles cannot reset the broker PATH and
+bypass the Apple toolchain shims.
+
 On macOS, Security.framework requires read access to the host Keychains directory
 and existing per-user MDS cache, plus locking access to its single `mds.lock`
-file. These paths are declared in the permission effects; Keychain files do not
+file. Claude authentication and Codex's native TLS stack both need this access.
+These paths are declared in the permission effects; Keychain files do not
 receive write grants. Delegation still runs through the OS sandbox. This is an
 authenticated external CLI with access to host login credentials, not an
 untrusted plug-in isolation guarantee. Host credential refresh/login should be

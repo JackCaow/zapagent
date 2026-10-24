@@ -146,3 +146,20 @@ export function workspaceRuntimeEnvironment(root: string, temp: string): Record<
   }
   return env;
 }
+
+/** Explicit Git integration roots for an approved external CLI. Never follow
+ * arbitrary .git pointers; linked worktrees must pass the reciprocal checks. */
+export function integrationGitWriteRoots(workspace: string): string[] {
+  const root = realpathSync(workspace);
+  const entry = join(root, ".git");
+  try {
+    const stat = lstatSync(entry);
+    if (stat.isDirectory() && !stat.isSymbolicLink()) return [entry];
+    const [gitDir, common] = linkedWorktreeReadRoots(root);
+    if (!gitDir || !common) return [];
+    return [gitDir, ...["objects", "refs", "logs"].map(name => join(common, name)).filter(path => {
+      try { const stat = lstatSync(path); return stat.isDirectory() && !stat.isSymbolicLink() && realpathSync(path) === path; }
+      catch { return false; }
+    })];
+  } catch { return []; }
+}

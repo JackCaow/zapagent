@@ -1,10 +1,10 @@
 import { z } from "zod";
 import { currentRuntimeObservation, observeRuntime } from "../runtime/observation.js";
-import { existsSync, mkdirSync, lstatSync } from "node:fs";
+import { existsSync, mkdirSync, lstatSync, symlinkSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { Tool, ToolResult } from "../tools/types.js";
 import type { AgentEventHandler } from "../agent/events.js";
 import type { DetectedProvider } from "./delegate-detect.js";
@@ -19,6 +19,7 @@ import {
   diffSnapshots,
   formatChangeSummary,
 } from "./delegate-changes.js";
+import { integrationGitWriteRoots } from "../execution/workspace-runtime.js";
 import { resolveToolPath, resolveToolPathCanonical } from "./filesystem.js";
 import { createLocalProcessBroker, terminateProcessTreeWithGrace } from "../execution/process.js";
 
@@ -52,11 +53,12 @@ export function buildCliArgs(
     args.push("-p", task);
     return args;
   }
-  // codex
+  // Codex must preserve the broker environment: login profiles reset PATH and
+  // bypass the sandbox toolchain shims (notably Apple git/xcrun).
   if (resumeId) {
-    return ["exec", "resume", "--dangerously-bypass-approvals-and-sandbox", "--json", resumeId, task];
+    return ["exec", "resume", "--dangerously-bypass-approvals-and-sandbox", "--config", "allow_login_shell=false", "--json", resumeId, task];
   }
-  return ["exec", "--dangerously-bypass-approvals-and-sandbox", "--json", task];
+  return ["exec", "--dangerously-bypass-approvals-and-sandbox", "--config", "allow_login_shell=false", "--json", task];
 }
 
 function buildDescription(providers: DetectedProvider[]): string {
@@ -75,6 +77,7 @@ function buildDescription(providers: DetectedProvider[]): string {
     claudeBlurb,
     codexBlurb,
     "Returns a final report, git change summary, and resumable session id.",
+    "Sandbox temp is per-call; save reusable files in cwd.",
   ].filter(Boolean).join(" ");
 }
 
@@ -110,10 +113,11 @@ export function delegateAgentTool(opts: DelegateAgentOptions): Tool | null {
           opts.defaultCwd ?? context.cwd,
         );
         const provider = String(args.provider) as "claude" | "codex";
-        const keychain = provider === "claude" ? macKeychainPaths() : undefined;
+        const keychain = macKeychainPaths();
         return {
           filesystem: [
             { kind: "filesystem", operation: "read", paths: [cwd] },
+            ...integrationGitWriteRoots(cwd).map(path => ({ kind: "filesystem" as const, operation: "modify" as const, paths: [path] })),
             ...delegateCredentialPaths(provider).map((path) => ({
               kind: "filesystem" as const,
               operation: "read" as const,
@@ -124,8 +128,8 @@ export function delegateAgentTool(opts: DelegateAgentOptions): Tool | null {
               { kind: "filesystem" as const, operation: "modify" as const, paths: [keychain.lock] },
             ] : []),
             { kind: "filesystem", operation: "modify", paths: [cwd] },
-            ...(provider === "claude" ? [{ kind: "filesystem" as const, operation: "modify" as const,
-              paths: [claudeStateDirectory(cwd, opts.stateDir)] }] : []),
+            { kind: "filesystem" as const, operation: "modify" as const,
+              paths: [delegateStateDirectory(provider, cwd, opts.stateDir)] },
           ],
           network: [{ kind: "network", operation: "connect", destinations: ["*"], methods: [] }],
           process: [{
@@ -181,22 +185,34 @@ export function delegateAgentTool(opts: DelegateAgentOptions): Tool | null {
       // Cancellation may arrive while the asynchronous workspace snapshot runs.
       if (signal?.aborted) return { success: false, output: "", error: "aborted" };
 
-      let environment: Record<string, string> | undefined;
-      if (provider === "claude") {
-        const stateDir = claudeStateDirectory(resolveToolPathCanonical(cwd, cwd), opts.stateDir);
+      let environment: Record<string, string>;
+      {
+        const stateDir = delegateStateDirectory(provider, resolveToolPathCanonical(cwd, cwd), opts.stateDir);
         mkdirSync(stateDir, { recursive: true, mode: 0o700 });
         const state = lstatSync(stateDir);
-        if (!state.isDirectory() || (state.mode & 0o077) !== 0) {
-          return { success: false, output: "", error: "Claude delegate state must be a private directory (0700)." };
+        if (!state.isDirectory() || state.isSymbolicLink() || (state.mode & 0o077) !== 0) {
+          return { success: false, output: "", error: "Delegate state must be a private directory (0700)." };
         }
-        environment = {
+        environment = provider === "claude" ? {
           CLAUDE_CONFIG_DIR: stateDir,
           // Keep the login/keychain namespace, but never make host settings or
           // credentials writable. Session/debug/cache writes use private state.
           // Empty selects Claude's default credential/keychain namespace;
           // a nonempty path hashes into a different, unauthenticated namespace.
           CLAUDE_SECURESTORAGE_CONFIG_DIR: "",
-        };
+        } : { CODEX_HOME: stateDir };
+        if (provider === "codex") {
+          const host = codexHome();
+          for (const name of ["auth.json", "config.toml"]) {
+            const source = join(host, name), target = join(stateDir, name);
+            if (existsSync(source)) {
+              try { lstatSync(target); } catch (error) {
+                if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+                symlinkSync(realpathSync(source), target);
+              }
+            }
+          }
+        }
       }
 
       observeExternal("starting");
@@ -204,6 +220,9 @@ export function delegateAgentTool(opts: DelegateAgentOptions): Tool | null {
       try { child = processBroker.spawnCommand(detected.bin, cliArgs, {
         cwd,
         hostHome: true,
+        networkDomains: provider === "claude"
+          ? ["api.anthropic.com", "console.anthropic.com", "claude.ai", "*.claude.ai"]
+          : ["chatgpt.com", "*.chatgpt.com", "api.openai.com", "auth.openai.com", "*.oaiusercontent.com"],
         environment,
         temporaryDirectoryEnvironment: provider === "claude" ? ["CLAUDE_CODE_TMPDIR"] : undefined,
         preserveEnvironment: provider === "claude"
@@ -314,6 +333,7 @@ export function delegateAgentTool(opts: DelegateAgentOptions): Tool | null {
       // main agent has no way to learn what id to pass back next call.
       const sessionLine = ctx.sessionId
         ? `\n\n_Session resumable: pass \`resume_session_id="${ctx.sessionId}"\` (provider="${provider}") in your next delegate_agent call to continue this session._`
+          + (processBroker.sandboxedSpawnCount > 0 ? "\n_Sandbox temporary files were cleaned up at CLI exit; session resume does not restore TMPDIR files. Save reusable artifacts in cwd._" : "")
         : "";
 
       if (aborted) {
@@ -331,7 +351,7 @@ export function delegateAgentTool(opts: DelegateAgentOptions): Tool | null {
         return {
           success: false,
           output: "",
-          error: `${provider} exited with code ${exitInfo.code}. stderr (last ${STDERR_TAIL_BYTES}B):\n${stderrTail}`,
+          error: `${provider} exited with code ${exitInfo.code}. ${ctx.error ? `${ctx.error}\n` : ""}stderr (last ${STDERR_TAIL_BYTES}B):\n${stderrTail}`,
           meta,
         };
       }
@@ -362,10 +382,23 @@ export function delegateAgentTool(opts: DelegateAgentOptions): Tool | null {
   };
 }
 
-function claudeStateDirectory(cwd: string, stateDir?: string): string {
+function delegateStateDirectory(provider: "claude" | "codex", cwd: string, stateDir?: string): string {
   const root = stateDir ?? join(process.env.ZAPCODE_DATA_DIR || join(homedir(), ".zapcode"), "delegates");
-  const workspaceId = createHash("sha256").update(cwd).digest("hex").slice(0, 24);
-  return resolveToolPathCanonical(join(root, "claude", workspaceId), process.cwd());
+  const workspaceId = createHash("sha256").update(resolveToolPathCanonical(cwd, cwd)).digest("hex").slice(0, 24);
+  const target = resolve(root, provider, workspaceId);
+  // Do not canonicalize an existing state symlink into a new host write grant.
+  for (const path of [resolve(root), resolve(root, provider), target]) {
+    try {
+      const stat = lstatSync(path);
+      if (!stat.isDirectory() || stat.isSymbolicLink()
+        || (process.getuid && (stat.uid !== process.getuid() || (stat.mode & 0o077) !== 0))) {
+        throw new Error("Delegate state must be a private directory (0700).");
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+  return resolveToolPathCanonical(target, process.cwd());
 }
 
 /** Security.framework reads its per-user MDS cache and locks mds.lock even
@@ -385,6 +418,8 @@ function delegateCredentialPaths(provider: "claude" | "codex"): string[] {
   const home = homedir();
   const candidates = provider === "claude"
     ? [join(home, ".claude"), join(home, ".claude.json"), join(home, ".config", "claude")]
-    : [join(home, ".codex"), join(home, ".config", "codex")];
+    : [codexHome(), join(home, ".config", "codex")];
   return candidates.filter(existsSync);
 }
+
+function codexHome(): string { return process.env.CODEX_HOME || join(homedir(), ".codex"); }
