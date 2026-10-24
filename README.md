@@ -17,6 +17,7 @@
 </p>
 
 <p align="center">
+  <a href="#what-can-you-do-with-it">Use cases</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="#give-your-agents-a-task">Try it</a> ·
   <a href="#watch-the-work-happen">Live view</a> ·
@@ -28,40 +29,28 @@
 zapAgent works from your terminal to understand tasks, call tools, and deliver results. Use it to research a topic, organize documents, analyze data, develop software, or automate a workflow. For complex tasks, a coordinator can delegate work to child agents and bring their findings and artifacts together.
 
 - **Work in parallel.** Split research, analysis, execution, and review into independent tasks, with dependencies and messages connecting the agents.
-- **Keep edits isolated.** Writing agents use private workspace snapshots, including for non-Git projects. Review their artifacts before merging; merge checks detect conflicts and parent-workspace drift.
+- **Keep edits isolated.** Agents produce files and edits in separate workspaces. Collect and review their artifacts before merging, with a clear delivery boundary for each change.
 - **See the whole run.** `zap --watch` opens a local view of agents, tool calls, approvals, and completion states alongside your terminal.
 
 Bring your own model connection: **Anthropic Messages, OpenAI Chat Completions, and OpenAI Responses API**, including compatible services. Connect your existing files, tools, and workflows.
 
+## What can you do with it?
+
+| Task | Try asking |
+| :--- | :--- |
+| Research | “Read these materials, compare the viewpoints, and summarize the findings with sources.” |
+| Organize documents | “Turn the notes in this folder into a structured report.” |
+| Analyze data | “Find trends and anomalies in this dataset and explain the evidence.” |
+| Automate a workflow | “Organize these files by the given rules and produce an inventory and summary.” |
+| Develop software | “Understand this project, implement the change, add tests, and review the result.” |
+
+Start with a task in plain language. When it benefits from delegation, agents can explore, analyze, and execute separate parts, then combine their results. Available capabilities depend on your model connection, configured tools, and permissions.
+
 ## Quick start
 
-Install [Bun](https://bun.sh) **1.3+** and [Git](https://git-scm.com), then:
+**1. Download zapAgent**
 
-```bash
-bun add --global zapagent
-cd /path/to/your-workspace
-zap --watch
-```
-
-In the terminal UI:
-
-1. Run `/connect` to add your provider's Base URL and API key. Select the API protocol supported by that service, including **OpenAI Responses** for a Responses endpoint.
-2. Run `/model` to select a model. Use `/effort` to adjust reasoning effort when the model supports it.
-3. Describe the task. Watch progress in the terminal and the local browser view.
-
-You provide your own model credentials; usage is billed by your provider. See the [connection guide](docs/usage.md#getting-started), including [Responses configuration](docs/usage.md#openai-responses-api).
-
-<details>
-<summary>Other installation options: npm, native binaries, or source</summary>
-
-**npm** — Bun 1.3+ must also be installed to run the CLI:
-
-```bash
-npm install --global zapagent
-zap
-```
-
-**Native binaries** are available from [GitHub Releases](https://github.com/JackCaow/zapagent/releases/latest), with SHA-256 checksums:
+Choose the program for your computer from the [latest release](https://github.com/JackCaow/zapagent/releases/latest):
 
 | Platform | Downloads |
 | :--- | :--- |
@@ -69,7 +58,30 @@ zap
 | Linux | [ARM64](https://github.com/JackCaow/zapagent/releases/latest/download/zap-linux-arm64) · [x64](https://github.com/JackCaow/zapagent/releases/latest/download/zap-linux-x64) |
 | Windows | [x64](https://github.com/JackCaow/zapagent/releases/latest/download/zap-windows-x64.exe) |
 
-macOS binaries are ad-hoc signed, not Developer ID signed or notarized. Release contents and verification steps are documented in the [release guide](docs/releasing.md).
+**2. Open your working folder**
+
+zapAgent currently runs in a terminal. Open the folder containing your materials or project, then launch the downloaded program. Add `--watch` to open the live view in your browser. [Launch instructions](docs/usage.md#native-binary-setup).
+
+**3. Connect a model and describe your task**
+
+On first use, enter `/connect` and follow the setup prompts to connect your model service. Then describe what you want: “Read the materials in this folder, summarize the key points, and write a report.”
+
+You need your own model service account and API key; usage is billed by your provider. [Connection guide](docs/usage.md#getting-started).
+
+<details>
+<summary>Advanced setup and developer installation: Bun, npm, source, API protocols</summary>
+
+**Package managers** — requires [Bun](https://bun.sh) 1.3+; Git workspaces also require [Git](https://git-scm.com).
+
+```bash
+bun add --global zapagent
+cd /path/to/your-workspace
+zap --watch
+```
+
+Alternatively, run `npm install --global zapagent`. Bun 1.3+ must also be installed to run the CLI.
+
+**Model configuration** — use `/model` to choose a model and `/effort` to adjust supported reasoning settings. For custom services, enter the Base URL and API key in `/connect` and select the service's API protocol; choose **OpenAI Responses** for a Responses endpoint. [Responses configuration](docs/usage.md#openai-responses-api).
 
 **From source** — the repository pins Bun 1.3.14:
 
@@ -80,7 +92,9 @@ bun install --frozen-lockfile
 bun start
 ```
 
-Run `bun link` in the checkout, then use `zapdev` from your project. Or run `bun run build` and use `dist/zap`.
+Run `bun link` in the checkout, then use `zapdev` from your working folder. Or run `bun run build` and use `dist/zap`.
+
+Binaries include SHA-256 checksums. macOS binaries are ad-hoc signed, not Developer ID signed or notarized. See the [release guide](docs/releasing.md).
 
 </details>
 

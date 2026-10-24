@@ -2,7 +2,34 @@
 
 [← README](../README.md) · [中文版](../README.zh-CN.md)
 
-Install from source using the [quick start](../README.md#quick-start), then connect a provider. Commands below assume a compiled `zap` installation; with `bun link`, use `zapdev` instead.
+Download a native binary or install the package using the [quick start](../README.md#quick-start), then connect a provider. Examples below use `zap`; a downloaded binary retains its platform filename unless you rename it. With `bun link`, use `zapdev` instead.
+
+## Native binary setup
+
+Download the binary matching your OS and CPU from [GitHub Releases](https://github.com/JackCaow/zapagent/releases/latest). This is a terminal application, not a desktop installer. Keep it outside folders you ask agents to modify. See the [release guide](releasing.md) for checksums and signing details.
+
+### macOS and Linux
+
+Give the downloaded file permission to run, then start it from the folder you want to work with. For example, on an Apple Silicon Mac:
+
+```bash
+chmod +x /path/to/zap-macos-arm64
+cd /path/to/your-workspace
+/path/to/zap-macos-arm64 --watch
+```
+
+Replace the binary filename with your platform's filename. macOS binaries are not notarized; macOS may require you to approve opening the downloaded program in System Settings → Privacy & Security.
+
+### Windows
+
+Open PowerShell, switch to your working folder, and run the downloaded executable:
+
+```powershell
+cd C:\path\to\your-workspace
+& "C:\path\to\zap-windows-x64.exe" --watch
+```
+
+Use `/connect` in the terminal interface to set up your model service, then enter your task. The browser view opened by `--watch` shows progress; interaction stays in the terminal.
 
 ## Usage
 

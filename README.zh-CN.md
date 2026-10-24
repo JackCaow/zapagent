@@ -17,6 +17,7 @@
 </p>
 
 <p align="center">
+  <a href="#你可以让它做什么">能做什么</a> ·
   <a href="#快速开始">快速开始</a> ·
   <a href="#交给-agent-一个任务">协作示例</a> ·
   <a href="#看见任务如何推进">实时可视化</a> ·
@@ -28,40 +29,28 @@
 zapAgent 在终端中理解任务、调用工具并交付结果。用它调研信息、整理文档、分析数据、开发软件，或将多个步骤串成自动化流程。面对复杂任务，协调器可以分派多个子 agent，汇总它们的发现和产物。
 
 - **分工并行。** 将调研、分析、执行、审查拆成独立任务，通过依赖关系和消息组织协作。
-- **隔离修改。** 写入型 agent 使用私有工作区快照，非 Git 项目同样适用。先检查产物，再合并；合并时检查冲突和父工作区变化。
+- **隔离修改。** 让不同 agent 在独立工作区中产出文件和修改，收集产物后再检查、合并。每份改动都有清晰的交付边界。
 - **实时可见。** `zap --watch` 在终端旁打开本地运行视图，展示 agent、工具调用、审批和完成状态。
 
 支持自带模型连接：**Anthropic Messages、OpenAI Chat Completions、OpenAI Responses API** 及兼容服务，接入你现有的文件、工具和工作流。
 
+## 你可以让它做什么
+
+| 场景 | 试着这样说 |
+| :--- | :--- |
+| 资料调研 | “阅读这些材料，对比不同观点，整理结论并标明来源。” |
+| 文档整理 | “把这个文件夹里的零散记录整理成一份结构清晰的报告。” |
+| 数据分析 | “分析这份数据，找出变化趋势和异常，说明判断依据。” |
+| 流程自动化 | “按规则整理这些文件，生成目录清单和处理结果。” |
+| 软件开发 | “理解这个项目，完成改动、补充测试，再审查结果。” |
+
+任务可以从一句话开始。需要分工时，让多个 agent 分别探索、分析和执行，最后汇总成你需要的结果。可用范围取决于连接的模型、已配置的工具和授权。
+
 ## 快速开始
 
-安装 [Bun](https://bun.sh) **1.3+** 和 [Git](https://git-scm.com)，然后：
+**1. 下载 zapAgent**
 
-```bash
-bun add --global zapagent
-cd /path/to/your-workspace
-zap --watch
-```
-
-进入终端界面后：
-
-1. 用 `/connect` 填入模型服务的 Base URL 和 API Key，选择服务支持的协议。Responses 端点选择 **OpenAI Responses**。
-2. 用 `/model` 选择模型；模型支持时，可用 `/effort` 调整推理档位。
-3. 描述任务，在终端和本地浏览器中查看进展。
-
-需要使用你自己的模型凭据，调用费用由模型服务商收取。详见[连接配置](docs/usage.md#getting-started)和 [Responses 配置](docs/usage.md#openai-responses-api)。
-
-<details>
-<summary>其他安装方式：npm、独立二进制、源码</summary>
-
-**npm 安装**——运行 CLI 仍需安装 Bun 1.3+：
-
-```bash
-npm install --global zapagent
-zap
-```
-
-**独立二进制**可从 [GitHub Releases](https://github.com/JackCaow/zapagent/releases/latest) 下载，附带 SHA-256 校验文件：
+从 [最新版本](https://github.com/JackCaow/zapagent/releases/latest) 选择适合你电脑的程序：
 
 | 平台 | 下载 |
 | :--- | :--- |
@@ -69,7 +58,30 @@ zap
 | Linux | [ARM64](https://github.com/JackCaow/zapagent/releases/latest/download/zap-linux-arm64) · [x64](https://github.com/JackCaow/zapagent/releases/latest/download/zap-linux-x64) |
 | Windows | [x64](https://github.com/JackCaow/zapagent/releases/latest/download/zap-windows-x64.exe) |
 
-macOS 二进制使用临时签名，尚未进行 Developer ID 签名或公证。发布内容和校验流程见[发布说明](docs/releasing.md)。
+**2. 打开你的工作文件夹**
+
+zapAgent 目前通过终端使用。在终端中进入存放资料或项目的文件夹，再启动下载的程序。使用 `--watch` 可以同时打开浏览器中的运行视图。[查看启动步骤](docs/usage.md#native-binary-setup)。
+
+**3. 连接模型，描述任务**
+
+首次使用时，输入 `/connect`，按界面引导连接你的模型服务。然后直接告诉它你要完成什么，例如：“阅读这个文件夹里的资料，整理重点并生成一份报告。”
+
+需要你自己的模型服务账号和 API Key，调用费用由模型服务商收取。[连接指南](docs/usage.md#getting-started)。
+
+<details>
+<summary>高级配置与开发者安装：Bun、npm、源码、API 协议</summary>
+
+**包管理器安装**——需要 [Bun](https://bun.sh) 1.3+；Git 工作区还需要 [Git](https://git-scm.com)。
+
+```bash
+bun add --global zapagent
+cd /path/to/your-workspace
+zap --watch
+```
+
+也可以执行 `npm install --global zapagent`；运行 CLI 仍需安装 Bun 1.3+。
+
+**模型配置**——用 `/model` 选择模型，用 `/effort` 调整模型支持的推理档位。自定义服务时，在 `/connect` 填入 Base URL 和 API Key，并选择服务支持的协议；Responses 端点选择 **OpenAI Responses**。[Responses 配置](docs/usage.md#openai-responses-api)。
 
 **从源码运行**——仓库固定使用 Bun 1.3.14：
 
@@ -80,7 +92,9 @@ bun install --frozen-lockfile
 bun start
 ```
 
-在源码目录执行 `bun link` 后，可在自己的项目中使用 `zapdev`；也可以执行 `bun run build`，使用 `dist/zap`。
+在源码目录执行 `bun link` 后，可在自己的工作目录中使用 `zapdev`；也可以执行 `bun run build`，使用 `dist/zap`。
+
+二进制附带 SHA-256 校验文件。macOS 二进制使用临时签名，尚未进行 Developer ID 签名或公证。详见[发布说明](docs/releasing.md)。
 
 </details>
 
