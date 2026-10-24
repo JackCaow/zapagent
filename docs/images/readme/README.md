@@ -1,6 +1,6 @@
 # README visual assets
 
-- `hero.png`: original AI-generated concept artwork created for this README with OpenAI image generation. It illustrates a coordinator and isolated workspaces; it is not a product screenshot.
+- `logo.png`: original AI-generated zapAgent brand lockup, created with OpenAI image generation. The lime Z symbol and white wordmark sit on a dark plaque with transparent outer padding, for use on light and dark README backgrounds.
 - `architecture.svg`: original, editable vector diagram of the current agent collaboration and execution boundaries. Text in the READMEs provides the same flow for accessibility.
 - `watch-preview.png`: screenshot of the actual Watch UI, produced with `bun scripts/watch-preview.ts`. Events are synthetic; no model calls, tools, or approvals execute. The browser viewport excludes its token-bearing address bar. No user sessions or credentials are depicted.
 
