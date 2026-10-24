@@ -28,8 +28,9 @@ const npmPath = Bun.which("npm"), node = Bun.which("node");
 if (!npmPath || !node) throw new Error("npm and Node are required for independent npm consumer verification");
 const npm = npmCommand(npmPath, node);
 const extracted = join(evidence, "extracted"); mkdirSync(extracted);
-// GNU tar treats a Windows drive colon in -f as a remote host delimiter.
-run("extract", ["tar", "-xzf", basename(artifact), "-C", extracted], dirname(artifact));
+// Git Bash may put GNU tar first in PATH; it cannot handle native drive paths.
+const tar = process.platform === "win32" ? join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe") : "tar";
+run("extract", [tar, "-xzf", basename(artifact), "-C", extracted], dirname(artifact));
 const snapshot = join(extracted, "package");
 const pkg = JSON.parse(readFileSync(join(snapshot, "package.json"), "utf8"));
 if (pkg.name !== "zapagent" || pkg.private || pkg.patchedDependencies || pkg.scripts
