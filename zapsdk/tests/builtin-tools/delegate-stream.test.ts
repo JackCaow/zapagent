@@ -168,3 +168,10 @@ describe("parseCodexLine", () => {
     expect(parseCodexLine(JSON.stringify({ type: "no_such_event" }), ctx)).toEqual([]);
   });
 });
+
+it("retains Codex structured failure messages for delegate diagnostics", () => {
+  const ctx = makeParserCtx("failed-codex", []);
+  const events = parseCodexLine(JSON.stringify({type:"turn.failed", error:{message:"TLS connection denied"}}), ctx);
+  expect(ctx.error).toBe("TLS connection denied");
+  expect(events.some(e => e.type === "sub_agent_finished" && !e.success)).toBe(true);
+});

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "bun:test";
 import { join } from "node:path";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delegateAgentTool, buildCliArgs } from "../../builtin-tools/delegate.js";
 import type { DetectedProvider } from "../../builtin-tools/delegate-detect.js";
@@ -35,6 +36,7 @@ describe("buildCliArgs", () => {
     expect(buildCliArgs("codex", "do Y")).toEqual([
       "exec",
       "--dangerously-bypass-approvals-and-sandbox",
+      "--config", "allow_login_shell=false",
       "--json",
       "do Y",
     ]);
@@ -44,6 +46,7 @@ describe("buildCliArgs", () => {
     expect(buildCliArgs("codex", "follow-up", "thread-xyz")).toEqual([
       "exec", "resume",
       "--dangerously-bypass-approvals-and-sandbox",
+      "--config", "allow_login_shell=false",
       "--json",
       "thread-xyz",
       "follow-up",
@@ -52,6 +55,40 @@ describe("buildCliArgs", () => {
 });
 
 describe("delegateAgentTool factory", () => {
+  it("rejects redirected or non-private persistent state before granting access", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "zap-state-validation-"));
+    const stateDir = join(cwd, "state"), outside = join(cwd, "outside");
+    mkdirSync(outside, { mode: 0o700 });
+    const tool = delegateAgentTool({ providers: fakeBin, stateDir, defaultCwd: cwd })!;
+    try {
+      symlinkSync(outside, stateDir, process.platform === "win32" ? "junction" : "dir");
+      expect(() => tool.definition.resolveEffects!({ provider: "claude" }, { cwd, toolName: "delegate_agent" }))
+        .toThrow("private directory");
+      rmSync(stateDir);
+      if (process.platform !== "win32") {
+        mkdirSync(stateDir, { mode: 0o755 });
+        expect(() => tool.definition.resolveEffects!({ provider: "claude" }, { cwd, toolName: "delegate_agent" }))
+          .toThrow("private directory");
+      }
+    } finally { rmSync(cwd, { recursive: true, force: true }); }
+  });
+  it("rejects provider and leaf state symlinks without granting their destinations", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "zap-state-links-"));
+    const stateDir = join(cwd, "state"), outside = join(cwd, "outside");
+    mkdirSync(stateDir, { mode: 0o700 }); mkdirSync(outside, { mode: 0o700 });
+    const provider = join(stateDir, "codex");
+    const leaf = join(provider, createHash("sha256").update(realpathSync(cwd)).digest("hex").slice(0, 24));
+    const tool = delegateAgentTool({ providers: [{ name: "codex", bin: "/bin/echo" }], stateDir, defaultCwd: cwd })!;
+    const effects = () => tool.definition.resolveEffects!({ provider: "codex" }, { cwd, toolName: "delegate_agent" });
+    try {
+      symlinkSync(outside, provider, process.platform === "win32" ? "junction" : "dir");
+      expect(effects).toThrow("private directory");
+      rmSync(provider); mkdirSync(provider, { mode: 0o700 });
+      symlinkSync(outside, leaf, process.platform === "win32" ? "junction" : "dir");
+      expect(effects).toThrow("private directory");
+    } finally { rmSync(cwd, { recursive: true, force: true }); }
+  });
+
   it("returns null when no providers are detected", () => {
     const tool = delegateAgentTool({ providers: [] });
     expect(tool).toBeNull();

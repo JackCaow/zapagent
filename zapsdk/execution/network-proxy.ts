@@ -92,6 +92,19 @@ export class NetworkProxy {
    * Concurrent commands must never inherit one another's denial evidence. */
   fork(): NetworkProxy { return new NetworkProxy(this.policy); }
 
+  /** Only trusted adapters may extend a command-owned listener. */
+  private readonly additionalDomains = new Set<string>();
+  allowDomains(domains: string[]): void {
+    for (const domain of domains) {
+      if (/^(?:\*\.)?[a-z0-9][a-z0-9.-]*$/i.test(domain)) this.additionalDomains.add(domain);
+    }
+  }
+
+  decideHost(host: string): ReturnType<typeof decideHost> {
+    const policy = this.policy();
+    return decideHost({ ...policy, allowedDomains: [...policy.allowedDomains, ...this.additionalDomains] }, host);
+  }
+
   close(): void {
     this.server.close();
     for (const socket of this.sockets) socket.destroy();
@@ -142,7 +155,7 @@ export class NetworkProxy {
       const headers = lines.slice(1).filter((line) => !/^(proxy-connection|connection|proxy-authorization):/i.test(line));
       forwardHead = [`${method} ${url.pathname}${url.search} HTTP/1.1`, ...headers, "Connection: close"].join("\r\n") + "\r\n\r\n";
     }
-    const decision = decideHost(this.policy(), host);
+    const decision = this.decideHost(host);
     if (!decision.allowed) {
       const key = normalizeHost(host);
       if (!this.blocked.has(key)) this.blocked.set(key, decision.reason);

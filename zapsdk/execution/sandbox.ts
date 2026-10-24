@@ -110,9 +110,11 @@ abstract class CommandWrappingSandbox implements OsSandbox {
       dirname(canonicalPath(process.execPath)),
     ].map((path) => canonicalPath(resolve(input.workspace.root, path))))];
     const networkAllowed = (input.grant.network?.destinations.length ?? 0) > 0;
+    const integrationGit = input.externalCliIntegration
+      && input.grant.filesystem?.write.some(path => canonicalPath(path) === canonicalPath(join(input.workspace.root, ".git")));
     const protectedPaths = [".git", ".zapcode"]
       .map((name) => canonicalPath(resolve(input.workspace.root, name)))
-      .filter((path) => path !== privateGit);
+      .filter((path) => path !== privateGit && !(integrationGit && path === canonicalPath(join(input.workspace.root, ".git"))));
     const provider = status.provider;
     const prepare = (
       executable: string,
@@ -133,6 +135,7 @@ abstract class CommandWrappingSandbox implements OsSandbox {
               operationFailure("BACKEND_UNAVAILABLE", "backend", input.executionId));
           }
         }
+        if (input.externalCliIntegration) proxy?.allowDomains(options.networkDomains ?? []);
         wrapped = this.wrap(executable, args, {
           cwd: canonicalPath(resolve(options.cwd)),
           readablePaths: [...new Set([
@@ -523,6 +526,9 @@ function sandboxEnvironment(
   Object.assign(env, options.environment);
   for (const key of options.temporaryDirectoryEnvironment ?? []) env[key] = tempDir;
   env.HOME = options.hostHome ? homedir() : tempDir;
+  // Authenticated CLIs use explicit credential paths, not implicit host XDG
+  // settings (Git otherwise probes ~/.config/git/ignore outside its grant).
+  if (options.hostHome) env.XDG_CONFIG_HOME = join(tempDir, "config");
   env.TMPDIR = tempDir;
   env.TMP = tempDir;
   env.TEMP = tempDir;
@@ -534,6 +540,8 @@ function sandboxEnvironment(
       : [join(env.HOME!, ".local", "bin"), join(env.HOME!, ".cargo", "bin"), join(env.HOME!, ".bun", "bin")];
     env.PATH = [...bins, ...(env.PATH ? [env.PATH] : [])].join(delimiter);
   }
+  // zsh uses TMPPREFIX rather than TMPDIR for heredoc temporary files.
+  env.TMPPREFIX = join(env.TMPDIR!, "zsh");
   env.GIT_CONFIG_GLOBAL = "/dev/null";
   if (proxyUrl) {
     for (const name of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]) env[name] = proxyUrl;
