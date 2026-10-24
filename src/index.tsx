@@ -26,6 +26,7 @@ Options:
   --watch-no-open   Print the Watch URL without opening a browser
   --watch-linger <s> Keep the headless viewer available after a run (0..300)
   --help-headless   Show non-interactive (headless) mode flags
+  update [--yes]   Check, confirm and install the latest version
   acp              Serve Agent Client Protocol v1 over stdio (no TUI)
   workflow         Inspect, wait for or cancel a persisted workflow (--db required)
 
@@ -59,6 +60,11 @@ Keys:
 if (args.includes("--version") || args.includes("-v")) {
   console.log(`zapAgent v${VERSION}`)
   process.exit(0)
+}
+
+if (args[0] === "update") {
+  const { runUpdateCommand } = await import("./update-cli.js")
+  process.exit(await runUpdateCommand(args.slice(1)))
 }
 
 let watchOptions: import("./watch/args.js").WatchOptions;
@@ -386,6 +392,32 @@ if (process.stdout.isTTY) {
 // app-side hooks. macOS Cmd-C / pbpaste continue to work as expected.
 
 await inst.waitUntilExit()
+const restart = (await import("./self-update.js")).takeUpdateRestart()
+if (restart) {
+  await (await import("./update-lifecycle.js")).prepareUpdateRestart({
+    stopWatch: (await import("./watch/integration.js")).stopWatch,
+    stopHost: stopHostProtocolServer,
+    stopRuntime: (await import("./singletons.js")).stopRuntimeForRestart,
+  })
+  // Ink has restored the terminal before the replacement process inherits it.
+  const restartEnv = { ...process.env, ZAPAGENT_RESTORE_SESSION: restart.sessionId }
+  if (process.platform !== "win32" && typeof process.execve === "function") {
+    // Replace this process rather than accumulating old runtimes after updates.
+    try { process.execve(restart.command, [restart.command, ...restart.args], restartEnv) }
+    catch { /* Unsupported runtime/host: use the portable foreground fallback. */ }
+  }
+  const child = spawn(restart.command, restart.args, { stdio: "inherit", env: restartEnv })
+  const forward = (signal: NodeJS.Signals) => { child.kill(signal) }
+  const onInterrupt = () => forward("SIGINT")
+  const onTerminate = () => forward("SIGTERM")
+  process.on("SIGINT", onInterrupt)
+  process.on("SIGTERM", onTerminate)
+  const code = await new Promise<number>(resolve => {
+    child.once("error", error => { console.error(`Restart failed: ${error.message}. Run zap again and use /sessions.`); resolve(1) })
+    child.once("exit", code => resolve(code ?? 1))
+  })
+  process.exit(code)
+}
 await (await import("./watch/integration.js")).stopWatch()
 await stopHostProtocolServer()
 process.exit(0)

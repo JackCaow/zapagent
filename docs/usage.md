@@ -104,10 +104,33 @@ by this adapter. Existing Chat Completions and Anthropic connections are unchang
 
 Protocol reference: [OpenAI Responses migration guide](https://developers.openai.com/api/docs/guides/migrate-to-responses).
 
+## Updating
+
+Run `zap update` to check for the latest stable version and confirm installation.
+Use `zap update --yes` (or `-y`) for unattended installation. Network or install
+failures return a nonzero exit code; cancelling leaves the installation unchanged.
+
+The interactive CLI also checks in the background (24-hour success cache,
+15-minute retry interval after failures). It does not delay startup. A newer
+version appears above the input prompt. Enter `/update`, then press `y` to
+confirm download, SHA-256 verification, installation and restart with the saved
+session. Finish running tasks and queued messages before updating. Cancellation
+or installation failure keeps the current session running.
+
+Automatic installation supports global npm installations and standalone
+macOS/Linux binaries. Local project dependencies, Bun-managed installations,
+Homebrew/source builds and standalone Windows binaries show instructions for
+updating with their original installation method. On Windows, use a global npm
+installation for automatic updates. No elevation is attempted.
+
+Set `ZAP_DISABLE_UPDATE_CHECK=1` to disable background checks. Background checks
+also skip CI, headless output and ACP; explicit `zap update` still checks.
+
 ## Slash Commands
 
 | Command | Description |
 |---------|-------------|
+| `/update` | Confirm download, installation and restart with session recovery |
 | `/help` | Show command reference |
 | `/connect` | Set up provider & API key |
 | `/model` | Show or switch model |

@@ -80,6 +80,8 @@ type RestorableUserEntry = {
 }
 
 export type DialogId =
+  | "restoring"
+  | "update"
   | "connect"
   | "model"
   | "mode"
@@ -372,6 +374,7 @@ export function dispatchSlashCommand(
       return true
     }
 
+    case "open_update":      deps.setDialog("update");      return true
     case "open_connect":     deps.setDialog("connect");     return true
     case "open_model_picker":deps.setDialog("model");       return true
     case "open_mode_picker": deps.setDialog("mode");        return true

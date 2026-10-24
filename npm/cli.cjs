@@ -4,7 +4,7 @@ const { constants } = require("node:os");
 const { ensureBinary } = require("./install.cjs");
 (async () => {
   const binary = await ensureBinary();
-  const child = spawn(binary, process.argv.slice(2), { stdio: "inherit", env: process.env });
+  const child = spawn(binary, process.argv.slice(2), { stdio: "inherit", env: { ...process.env, ZAPAGENT_NPM_LAUNCHER: __filename, ZAPAGENT_NPM_RUNTIME: process.execPath } });
   const forward = signal => { if (!child.killed) child.kill(signal); };
   const handlers = Object.fromEntries(["SIGINT", "SIGTERM", "SIGHUP"].map(signal => [signal, () => forward(signal)]));
   for (const [signal, handler] of Object.entries(handlers)) process.on(signal, handler);

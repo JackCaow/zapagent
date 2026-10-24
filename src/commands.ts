@@ -11,6 +11,7 @@ export interface CommandResult {
     | "copy"
     | "copy_input"
     | "compact_session"
+    | "open_update"
     | "open_connect"
     | "open_model_picker"
     | "set_model"
@@ -80,6 +81,7 @@ export function parseCommand(input: string): CommandResult | null {
   const rest = match[2] ?? ""
 
   switch (cmd) {
+    case "update": return { type: "open_update" }
     case "help":
       return {
         type: "output",
@@ -87,6 +89,7 @@ export function parseCommand(input: string): CommandResult | null {
           "⚡ zapAgent Commands:",
           "",
           "  Built-in:",
+          "  /update          — Confirm download, installation and restart",
           "  /review [path]   — Review code for bugs & security",
           "  /commit          — Stage changes and create a commit",
           "  /init            — Analyze project and generate AGENTS.md",

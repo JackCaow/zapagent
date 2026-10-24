@@ -1,4 +1,7 @@
 /** @jsxImportSource react */
+import { restoreAfterUpdate } from "./update-lifecycle.js"
+import { UpdateDialog } from "./ui/dialog-update.js"
+import { requestUpdateRestart } from "./self-update.js"
 // Ink-based App, orchestrator only — every non-trivial subsystem lives in
 // src/hooks/* or src/commands/*. The monolithic ~2200-line predecessor was
 // broken up in the App→hooks refactor (commit 30f1544).
@@ -33,6 +36,8 @@ import { cwdShort, configPath, getCurrentSessionId, getSessionPersistenceStatus,
 import { useLogs } from "./hooks/useLogs.js"
 import { useAgentRunner } from "./hooks/useAgentRunner.js"
 import { useToasts } from "./hooks/useToasts.js"
+import { useUpdateCheck } from "./hooks/useUpdateCheck.js"
+import { UpdateNotice } from "./ui/UpdateNotice.js"
 import { autoMemory, appLogger, agentLogger, conversation, tokenAccounting } from "./singletons.js"
 import { CheckpointManager } from "../zapsdk/checkpoint/index.js"
 import { type Todo, type TodoStore } from "../zapsdk/index.js"
@@ -112,7 +117,7 @@ import { ConnectDialog } from "./ui/dialog-connect.js"
 import { ModeDialog, EffortDialog } from "./ui/dialog-config.js"
 import { ModelDialog } from "./ui/dialog-model.js"
 import { StatusDialog } from "./ui/dialog-status.js"
-import { commitSessionForDialog, replaceConversationMessages, SessionsDialog } from "./ui/dialog-sessions.js"
+import { loadSessionForDialog, type DialogSessionRestore, commitSessionForDialog, replaceConversationMessages, SessionsDialog } from "./ui/dialog-sessions.js"
 import { MemDialog } from "./ui/dialog-mem.js"
 import { PermissionsDialog } from "./ui/dialog-permissions.js"
 import { RewindDialog, rewindDraft } from "./ui/dialog-rewind.js"
@@ -346,7 +351,7 @@ export function App() {
   // Only one modal can be open at a time; the prompt is hidden behind it
   // (Ink keyboard input routes to the dialog because it mounts a useInput
   // hook of its own).
-  const [dialog, setDialog] = useState<DialogId>(null)
+  const [dialog, setDialog] = useState<DialogId>(() => process.env.ZAPAGENT_RESTORE_SESSION ? "restoring" : null)
   // ZAPCODE_DIAG=1: log dialog open/close transitions so latest.log shows
   // exactly when /model entered + how long before the user dismissed.
   useEffect(() => {
@@ -441,6 +446,7 @@ export function App() {
 
   // ── Toasts ──
   const { toasts, addToast } = useToasts()
+  const availableUpdate = useUpdateCheck()
 
   // ── Pending images attached to next user turn ──
   const [pendingImages, setPendingImages] = useState<import("./queue/inputQueue.js").PendingImage[]>([])
@@ -798,7 +804,7 @@ export function App() {
     // Pending delivery is busy for UI/controls, but must not block the
     // dispatcher effect that starts that very delivery.
     isRunning: isAgentRunning,
-    paused: dialog === "rewind",
+    paused: dialog === "rewind" || dialog === "update" || dialog === "restoring",
     inputQueue,
     systemInboxSize,
     followUpMode: config.followUpMode ?? "queue",
@@ -944,6 +950,117 @@ export function App() {
   // surrounding context must stay visible.
   const inModal = dialog !== null && process.env.ZAPCODE_MODAL_TAKEOVER === "1"
 
+  const restoreSession = (loaded: DialogSessionRestore) => {
+    const { logs: restored, messages, loadedSessionId, metadata } = loaded
+    appLogger.info("session_restore_begin", {
+      sessionId: loadedSessionId,
+      restoredLogs: restored.length,
+      messagesToAdd: messages.length,
+    })
+    // All fallible file reads and transcript conversion completed in
+    // the dialog's prepare phase. Commit conversation + durable writer
+    // together; a writer failure restores the previous conversation.
+    const restoredActiveSessionId = commitSessionForDialog(loaded, conversation)
+    restoreQueueDraft()
+    bindQueue(loadedSessionId)
+    // Recalibrate the current next-prompt estimate from the LAST API
+    // truth persisted with this session. Recovering provider overhead
+    // via `total - localEstimateAtTime` avoids a fresh process showing
+    // a number 10-30k below what the API would receive next.
+    const persistedHistory = metadata.usages
+    const persisted = persistedHistory.at(-1) ?? null
+    const activeCacheScope = makePromptCacheScope(
+      config.active.providerId,
+      config.active.model,
+    )
+    const persistedMatchesActiveModel = !!persisted && (
+      !persisted.cacheScope || samePromptCacheScope(persisted.cacheScope, activeCacheScope)
+    )
+    if (persisted && persistedMatchesActiveModel) {
+      const restoredUsage = resolveRestoredUsageContext(
+        persisted,
+        conversation.estimatedTokens,
+        tokenAccounting.promptOverhead,
+      )
+      tokenAccounting.promptOverhead = restoredUsage.promptOverhead
+      setContextTokens(
+        restoredUsage.contextTokens,
+        "restored",
+        persisted.total > 0 ? persisted.total : null,
+      )
+      resetRunDiagnostics(
+        persistedUsageToRunnerUsage(persisted),
+        persisted.contextDiagnostics,
+        persistedHistory.map(persistedUsageToRunnerUsage),
+        persistedHistory.flatMap((usage) => usage.contextDiagnostics ? [usage.contextDiagnostics] : []),
+        persisted.promptCacheDiagnostics,
+      )
+    } else {
+      const restoredUsage = resolveUnmeasuredUsageContext(conversation.estimatedTokens)
+      tokenAccounting.promptOverhead = restoredUsage.promptOverhead
+      setContextTokens(restoredUsage.contextTokens, "pending", null)
+      if (persisted) {
+        resetRunDiagnostics(
+          persistedUsageToRunnerUsage(persisted),
+          persisted.contextDiagnostics,
+          persistedHistory.map(persistedUsageToRunnerUsage),
+          persistedHistory.flatMap((usage) => usage.contextDiagnostics ? [usage.contextDiagnostics] : []),
+          persisted.promptCacheDiagnostics,
+        )
+      } else {
+        resetRunDiagnostics()
+      }
+    }
+    setLogs(restored)
+    restoreMemoryQueryHistoryFromLogs(restored)
+    appLogger.info("session_restore_state_set", {
+      convEstimatedTokens: conversation.estimatedTokens,
+      convMessageCount: conversation.getMessages().length,
+      persistedUsage: persisted,
+      promptOverhead: tokenAccounting.promptOverhead,
+      firstMsgRole: messages[0]?.role,
+      firstMsgPreview: messages[0]?.content?.slice(0, 60),
+      lastMsgRole: messages[messages.length - 1]?.role,
+      lastMsgPreview: messages[messages.length - 1]?.content?.slice(0, 60),
+    })
+    // Rebind checkpoint to the durable fork and hydrate from the same
+    // validated source bundle that was copied into the fork.
+    try {
+      checkpoint.setSessionId(restoredActiveSessionId)
+      checkpoint.hydrateFromJsonl(metadata.checkpointJournal, { remapToCurrentSession: true })
+    } catch (err) {
+      addLog("error", `checkpoint hydrate failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    // `parseTodoUpdates` is tail-wins per key. The exact validated map
+    // was also persisted into the durable fork during commit.
+    try {
+      const todoMap = metadata.todos
+      const main = todoMap.get("main") as Todo[] | undefined
+      todosRef.current = main ?? []
+      setTodos(main ?? [])
+      subagentTodosRef.current.clear()
+      for (const [key, list] of todoMap) {
+        if (key === "main") continue
+        subagentTodosRef.current.set(key, list as Todo[])
+      }
+    } catch (err) {
+      addLog("error", `todo restore failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    bumpTranscript()
+    appLogger.info("session_restore_end", { sessionId: loadedSessionId })
+    closeDialog()
+
+  }
+  useEffect(() => {
+    const id = process.env.ZAPAGENT_RESTORE_SESSION
+    delete process.env.ZAPAGENT_RESTORE_SESSION
+    if (id) void restoreAfterUpdate({
+      load: () => loadSessionForDialog(id), commit: restoreSession,
+      failed: () => addToast("Could not restore the previous session. Open /sessions to recover it.", { variant: "error" }),
+      finished: () => setDialog(null),
+    })
+  }, [])
+
   return (
     <TermWidthContext.Provider value={termWidth}>
     <ConversationSurface>
@@ -976,6 +1093,7 @@ export function App() {
           />
 
           <ToastContainer toasts={toasts} />
+          <UpdateNotice version={availableUpdate} />
 
           <TokenWarning contextBudget={contextBudget} />
 
@@ -1049,6 +1167,12 @@ export function App() {
        *  FilePalette already work). Prompt above stays visible but
        *  defocused while the dialog owns the keyboard (see focused= prop
        *  above). */}
+      {dialog === "restoring" && <Text>Restoring saved session…</Text>}
+      {dialog === "update" && <UpdateDialog version={availableUpdate} busy={isRunning} sessionId={getCurrentSessionId()} beforeInstall={() => {
+        readCurrentSessionLogs()
+        const persistence = getSessionPersistenceStatus()
+        if (persistence.pendingWrites || persistence.lastFailure) throw new Error("Save the current session successfully before updating.")
+      }} onCancel={closeDialog} onRestart={request => { readCurrentSessionLogs(); requestUpdateRestart(request); exit() }} />}
       {dialog === "connect"     && <ConnectDialog     config={config} onSave={updateConfig} onCommit={commitConfig} onCancel={closeDialog} />}
       {dialog === "model"       && <ModelDialog       config={config} onCommit={commitConfig} onCancel={closeDialog} />}
       {dialog === "mode"        && <ModeDialog        config={config} onCommit={commitConfig} onCancel={closeDialog} />}
@@ -1080,106 +1204,7 @@ export function App() {
       )}
       {dialog === "sessions"    && (
         <SessionsDialog
-          onLoad={(loaded) => {
-            const { logs: restored, messages, loadedSessionId, metadata } = loaded
-            appLogger.info("session_restore_begin", {
-              sessionId: loadedSessionId,
-              restoredLogs: restored.length,
-              messagesToAdd: messages.length,
-            })
-            // All fallible file reads and transcript conversion completed in
-            // the dialog's prepare phase. Commit conversation + durable writer
-            // together; a writer failure restores the previous conversation.
-            const restoredActiveSessionId = commitSessionForDialog(loaded, conversation)
-            restoreQueueDraft()
-            bindQueue(loadedSessionId)
-            // Recalibrate the current next-prompt estimate from the LAST API
-            // truth persisted with this session. Recovering provider overhead
-            // via `total - localEstimateAtTime` avoids a fresh process showing
-            // a number 10-30k below what the API would receive next.
-            const persistedHistory = metadata.usages
-            const persisted = persistedHistory.at(-1) ?? null
-            const activeCacheScope = makePromptCacheScope(
-              config.active.providerId,
-              config.active.model,
-            )
-            const persistedMatchesActiveModel = !!persisted && (
-              !persisted.cacheScope || samePromptCacheScope(persisted.cacheScope, activeCacheScope)
-            )
-            if (persisted && persistedMatchesActiveModel) {
-              const restoredUsage = resolveRestoredUsageContext(
-                persisted,
-                conversation.estimatedTokens,
-                tokenAccounting.promptOverhead,
-              )
-              tokenAccounting.promptOverhead = restoredUsage.promptOverhead
-              setContextTokens(
-                restoredUsage.contextTokens,
-                "restored",
-                persisted.total > 0 ? persisted.total : null,
-              )
-              resetRunDiagnostics(
-                persistedUsageToRunnerUsage(persisted),
-                persisted.contextDiagnostics,
-                persistedHistory.map(persistedUsageToRunnerUsage),
-                persistedHistory.flatMap((usage) => usage.contextDiagnostics ? [usage.contextDiagnostics] : []),
-                persisted.promptCacheDiagnostics,
-              )
-            } else {
-              const restoredUsage = resolveUnmeasuredUsageContext(conversation.estimatedTokens)
-              tokenAccounting.promptOverhead = restoredUsage.promptOverhead
-              setContextTokens(restoredUsage.contextTokens, "pending", null)
-              if (persisted) {
-                resetRunDiagnostics(
-                  persistedUsageToRunnerUsage(persisted),
-                  persisted.contextDiagnostics,
-                  persistedHistory.map(persistedUsageToRunnerUsage),
-                  persistedHistory.flatMap((usage) => usage.contextDiagnostics ? [usage.contextDiagnostics] : []),
-                  persisted.promptCacheDiagnostics,
-                )
-              } else {
-                resetRunDiagnostics()
-              }
-            }
-            setLogs(restored)
-            restoreMemoryQueryHistoryFromLogs(restored)
-            appLogger.info("session_restore_state_set", {
-              convEstimatedTokens: conversation.estimatedTokens,
-              convMessageCount: conversation.getMessages().length,
-              persistedUsage: persisted,
-              promptOverhead: tokenAccounting.promptOverhead,
-              firstMsgRole: messages[0]?.role,
-              firstMsgPreview: messages[0]?.content?.slice(0, 60),
-              lastMsgRole: messages[messages.length - 1]?.role,
-              lastMsgPreview: messages[messages.length - 1]?.content?.slice(0, 60),
-            })
-            // Rebind checkpoint to the durable fork and hydrate from the same
-            // validated source bundle that was copied into the fork.
-            try {
-              checkpoint.setSessionId(restoredActiveSessionId)
-              checkpoint.hydrateFromJsonl(metadata.checkpointJournal, { remapToCurrentSession: true })
-            } catch (err) {
-              addLog("error", `checkpoint hydrate failed: ${err instanceof Error ? err.message : String(err)}`)
-            }
-            // `parseTodoUpdates` is tail-wins per key. The exact validated map
-            // was also persisted into the durable fork during commit.
-            try {
-              const todoMap = metadata.todos
-              const main = todoMap.get("main") as Todo[] | undefined
-              todosRef.current = main ?? []
-              setTodos(main ?? [])
-              subagentTodosRef.current.clear()
-              for (const [key, list] of todoMap) {
-                if (key === "main") continue
-                subagentTodosRef.current.set(key, list as Todo[])
-              }
-            } catch (err) {
-              addLog("error", `todo restore failed: ${err instanceof Error ? err.message : String(err)}`)
-            }
-            bumpTranscript()
-            appLogger.info("session_restore_end", { sessionId: loadedSessionId })
-            closeDialog()
-          }}
+          onLoad={restoreSession}
           onCancel={closeDialog}
         />
       )}

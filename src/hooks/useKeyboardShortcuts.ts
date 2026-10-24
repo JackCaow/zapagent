@@ -354,7 +354,7 @@ export function useKeyboardShortcuts(opts: UseKeyboardShortcutsOptions): void {
       opts.addToast("Press Ctrl+C again to exit")
       lastCtrlCRef.current = now
     }
-    if (key.ctrl && rawInput === "l") {
+    if (key.ctrl && rawInput === "l" && opts.dialog !== "update" && opts.dialog !== "restoring") {
       // Same as /clear — let App's onClearScreen own the full reset.
       opts.onClearScreen()
     }

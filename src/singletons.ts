@@ -153,8 +153,16 @@ function _shutdown(): void {
   try { cronHandle.stop() } catch {}
 }
 process.on("exit", _shutdown)
-process.on("SIGINT", () => { _shutdown(); process.exit(130) })
-process.on("SIGTERM", () => { _shutdown(); process.exit(143) })
+const shutdownOnInterrupt = () => { _shutdown(); process.exit(130) }
+const shutdownOnTerminate = () => { _shutdown(); process.exit(143) }
+process.on("SIGINT", shutdownOnInterrupt)
+process.on("SIGTERM", shutdownOnTerminate)
+
+export function stopRuntimeForRestart(): void {
+  _shutdown()
+  process.removeListener("SIGINT", shutdownOnInterrupt)
+  process.removeListener("SIGTERM", shutdownOnTerminate)
+}
 
 // ─── Delegate-agent provider probe + event bridge ───
 // Probe PATH for `claude` / `codex` once at startup so per-turn agent factory
