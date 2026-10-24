@@ -72,6 +72,10 @@ zap --watch
 
 需要你自己的模型服务账号和 API Key，调用费用由模型服务商收取。[连接指南](docs/usage.md#getting-started)。
 
+在终端执行 `zap update` 检查并确认更新；脚本中可用 `zap update --yes` 跳过交互确认。
+
+启动后会在后台检查新版本，不阻塞使用。发现新版时输入 `/update`，按 `y` 确认后才下载、校验、安装并重启，恢复已保存的会话。支持 npm 全局安装和 macOS/Linux 独立程序；其他安装方式按提示使用原包管理器更新。设置 `ZAP_DISABLE_UPDATE_CHECK=1` 可关闭后台检查，CI 和非交互模式不检查。
+
 <details>
 <summary>其他安装方式与高级配置：Bun、二进制、源码、API 协议</summary>
 

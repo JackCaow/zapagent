@@ -17,6 +17,7 @@ export interface SlashEntry {
 }
 
 export const BUILTIN_COMMANDS: SlashEntry[] = [
+  { name: "/update",      desc: "Download, install and restart after confirmation" },
   { name: "/help",        desc: "Show command reference" },
   { name: "/connect",     desc: "Set up provider & API key" },
   { name: "/model",       desc: "Show or switch model" },

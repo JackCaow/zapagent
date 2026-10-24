@@ -72,6 +72,10 @@ On first use, enter `/connect` and follow the setup prompts to connect your mode
 
 You need your own model service account and API key; usage is billed by your provider. [Connection guide](docs/usage.md#getting-started).
 
+Update from your terminal with `zap update` (or `zap update --yes` for unattended installation).
+
+The interactive CLI checks for updates in the background without delaying startup. When an update is available, run `/update` and press `y` to download, verify, install and restart with your saved session. Automatic installation supports global npm installs and standalone macOS/Linux binaries; other installations show instructions for their package manager. Set `ZAP_DISABLE_UPDATE_CHECK=1` to disable checks. CI and non-interactive modes do not check.
+
 <details>
 <summary>Other installation options and advanced setup: Bun, binaries, source, API protocols</summary>
 
