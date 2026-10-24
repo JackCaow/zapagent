@@ -4,6 +4,12 @@
 
 Download a native binary or install the package using the [quick start](../README.md#quick-start), then connect a provider. Examples below use `zap`; a downloaded binary retains its platform filename unless you rename it. With `bun link`, use `zapdev` instead.
 
+## npm installation
+
+Install Node.js 22+ and run `npm install -g zapagent`. The package downloads the matching native CLI, which already contains its runtime; no separate Bun installation is needed. Run `zap --watch` in your working folder.
+
+If installation scripts were disabled or the binary download failed, `zap` retries the verified download at first launch. Initial setup requires access to GitHub Releases; subsequent cached launches can run offline. Building from source or using the TypeScript SDK still requires Bun.
+
 ## Native binary setup
 
 Download the binary matching your OS and CPU from [GitHub Releases](https://github.com/JackCaow/zapagent/releases/latest). This is a terminal application, not a desktop installer. Keep it outside folders you ask agents to modify. See the [release guide](releasing.md) for checksums and signing details.

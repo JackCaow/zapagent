@@ -119,7 +119,7 @@ jobs:
           retention-days: 7
 
   npm-candidate:
-    needs: verify
+    needs: [verify, binaries]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -136,7 +136,13 @@ jobs:
       - run: bun run build:watch && bun run build:node-proxy
       - run: bun run typecheck:npm
       - run: bun run pack:npm
+      - uses: actions/download-artifact@v4
+        with:
+          name: cli-zap-linux-x64
+          path: dist/native
       - name: Verify exact npm candidate
+        env:
+          ZAPAGENT_TEST_BINARY: dist/native/zap-linux-x64
         shell: bash
         run: |
           set -euo pipefail

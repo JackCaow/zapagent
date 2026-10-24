@@ -50,7 +50,7 @@ Start with a task in plain language. When it benefits from delegation, agents ca
 
 **1. Install zapAgent**
 
-Requires the [Bun 1.3+](https://bun.sh) runtime. Install with npm:
+Requires Node.js 22+ (includes npm). Installation fetches the native program for your platform; no separate Bun installation is needed:
 
 ```bash
 npm install -g zapagent

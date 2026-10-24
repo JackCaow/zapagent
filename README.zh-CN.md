@@ -50,7 +50,7 @@ zapAgent 在终端中理解任务、调用工具并交付结果。用它调研�
 
 **1. 安装 zapAgent**
 
-需要 [Bun 1.3+](https://bun.sh) 运行环境。使用 npm 安装：
+需要 Node.js 22+（包含 npm）。安装时自动获取对应平台的独立程序，无需单独安装 Bun：
 
 ```bash
 npm install -g zapagent
