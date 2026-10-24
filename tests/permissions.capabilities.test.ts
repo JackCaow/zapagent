@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test"
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs"
 import { join } from "node:path"
+import { tmpdir } from "node:os"
 import { z } from "zod"
 import { ToolRegistry } from "../zapsdk/tools/registry.js"
 import { ToolExecutor, isToolAuthorization, type ApprovalContext } from "../zapsdk/tools/executor.js"
@@ -12,7 +13,7 @@ import type { PermissionMode } from "../src/config.js"
 
 let root: string, cwd: string, previous: string | undefined
 beforeEach(() => {
-  root = mkdtempSync("/private/tmp/zap-capability-contract-"); cwd = join(root, "workspace"); mkdirSync(cwd)
+  root = mkdtempSync(join(tmpdir(), "zap-capability-contract-")); cwd = join(root, "workspace"); mkdirSync(cwd)
   previous = process.env.ZAPCODE_DATA_DIR; process.env.ZAPCODE_DATA_DIR = join(root, "data")
 })
 afterEach(() => {
