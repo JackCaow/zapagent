@@ -50,4 +50,4 @@ jobs:
           test -n "$NODE_AUTH_TOKEN" || { echo 'Configure NPM_TOKEN in the npm environment first' >&2; exit 1; }
           dist_tag=latest
           if [[ "$RELEASE_TAG" == *-* ]]; then dist_tag=next; fi
-          npm publish "candidate/zapagent-${RELEASE_TAG#v}.tgz" --access public --tag "$dist_tag" --ignore-scripts
+          npm publish "./candidate/zapagent-${RELEASE_TAG#v}.tgz" --access public --tag "$dist_tag" --ignore-scripts
