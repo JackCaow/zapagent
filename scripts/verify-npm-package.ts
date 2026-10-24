@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -112,11 +113,12 @@ try {
       { ...cliRuntime, OPENAI_BASE_URL: `${fixtureUrl}/v1`, OPENAI_API_KEY: "local-test-key", MODEL: "native-fixture" });
     if (!task.includes("NATIVE_TOOL_OK")) throw new Error(`${label} compiled tool call failed`);
     cases.push({ nativeToolCall: "passed", manager, global, status: "passed", version, binShimVerified: process.platform !== "win32" || manager === "npm", bunOnPath: false, ...(audit ? { audit } : {}) });
-    // Reclaim only this successful isolated installation; keep logs and failed cases.
-    rmSync(location, { recursive: true, force: true });
+    // Reclaim only successful installs. Windows may retain a transient executable/AV
+    // handle after process exit; retry cleanup without skipping acceptance checks.
+    await rm(location, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   }
-  for (const manager of ["npm", "bun"]) rmSync(join(evidence, `${manager}-cache`), { recursive: true, force: true });
-  rmSync(extracted, { recursive: true, force: true });
+  for (const manager of ["npm", "bun"]) await rm(join(evidence, `${manager}-cache`), { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  await rm(extracted, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   summary.status = "passed";
 } catch (error) {
   summary.status = "failed";
