@@ -2,46 +2,76 @@
   <img src="docs/images/readme/hero.png" alt="zapAgent — Code flows. Your terminal. A team of agents." width="100%" />
 </p>
 
-<h1 align="center">One task. A coordinated team of agents.</h1>
+<h1 align="center">One task. A team of coding agents.</h1>
 
 <p align="center">
-  Delegate work. Keep edits isolated. Watch every step.<br />
-  A terminal coding agent with a reusable TypeScript runtime.
+  Delegate independent work. Review isolated edits. Watch the run unfold.<br />
+  An open-source terminal coding agent and TypeScript SDK.
+</p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/zapagent"><img src="https://img.shields.io/npm/v/zapagent?style=flat-square&color=b4e66e" alt="npm version" /></a>
+  <a href="https://github.com/JackCaow/zapagent/releases"><img src="https://img.shields.io/github/v/release/JackCaow/zapagent?style=flat-square" alt="Latest release" /></a>
+  <a href="https://github.com/JackCaow/zapagent/actions/workflows/ci.yml"><img src="https://github.com/JackCaow/zapagent/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/CLI_%26_SDK-MIT-blue?style=flat-square" alt="CLI and SDK: MIT" /></a>
 </p>
 
 <p align="center">
   <a href="#quick-start">Quick start</a> ·
-  <a href="#see-the-work-as-it-happens">Live visualization</a> ·
-  <a href="#how-the-agents-work-together">Architecture</a> ·
-  <a href="docs/usage.md">CLI reference</a> ·
+  <a href="#give-your-agents-a-task">Try it</a> ·
+  <a href="#watch-the-work-happen">Live view</a> ·
+  <a href="#how-it-works">Architecture</a> ·
+  <a href="docs/usage.md">Docs</a> ·
   <a href="README.zh-CN.md">简体中文</a>
 </p>
 
-zapAgent brings **multi-agent collaboration, isolated workspaces, and live runtime visualization** into your terminal. Ask it to investigate a codebase, split an implementation into independent pieces, or review a change. Writing agents work in private snapshots; you can inspect their progress and approve artifact merges back into your project.
+zapAgent helps you explore a repository, implement changes, and run tests from your terminal. For larger tasks, a coordinator can delegate work to child agents, collect their results, and merge their edits back into your project.
 
-Use Anthropic Messages, OpenAI Chat Completions, or **OpenAI Responses API**, including compatible endpoints. Keep your editor, terminal, and existing toolchain.
+- **Work in parallel.** Split exploration, implementation, and review into independent tasks, with dependencies and messages connecting the agents.
+- **Keep edits isolated.** Writing agents use private workspace snapshots, including for non-Git projects. Review their artifacts before merging; merge checks detect conflicts and parent-workspace drift.
+- **See the whole run.** `zap --watch` opens a local view of agents, tool calls, approvals, and completion states alongside your terminal.
 
-## Built for work that needs more than one agent
-
-| Collaborate | Isolate | Observe |
-| :--- | :--- | :--- |
-| Delegate exploration, planning, and implementation to child agents. The coordinator manages dependencies, concurrency, messages, and run state. | Writing agents get private workspaces, including in non-Git projects. Their edits return as artifacts for an explicit merge. | `--watch` opens a live graph of model requests, tools, approvals, and child agents alongside the terminal. |
-| **Independent work can happen together.** | **Child edits reach your project through a merge gate.** | **See what is running, waiting, or finished.** |
-
-Try a prompt like this:
-
-```text
-Investigate how authentication works in this repository.
-Delegate independent parts to agents: map the request flow, review session
-handling, and inspect the tests. Summarize their findings, then propose a fix.
-Ask before merging implementation artifacts into my workspace.
-```
-
-Delegation follows the task and model decisions; independent steps can run concurrently, while dependent steps wait for their prerequisites.
+Bring your own model connection: **Anthropic Messages, OpenAI Chat Completions, and OpenAI Responses API**, including compatible services. Keep your existing editor and toolchain.
 
 ## Quick start
 
-Requires **Git** and **[Bun](https://bun.sh) 1.3+**. Bun 1.3.14 is the version pinned by this repository.
+Install [Bun](https://bun.sh) **1.3+** and [Git](https://git-scm.com), then:
+
+```bash
+bun add --global zapagent
+cd /path/to/your-project
+zap --watch
+```
+
+In the terminal UI:
+
+1. Run `/connect` to add your provider's Base URL and API key. Select the API protocol supported by that service, including **OpenAI Responses** for a Responses endpoint.
+2. Run `/model` to select a model. Use `/effort` to adjust reasoning effort when the model supports it.
+3. Describe the task. Watch progress in the terminal and the local browser view.
+
+You provide your own model credentials; usage is billed by your provider. See the [connection guide](docs/usage.md#getting-started), including [Responses configuration](docs/usage.md#openai-responses-api).
+
+<details>
+<summary>Other installation options: npm, native binaries, or source</summary>
+
+**npm** — Bun 1.3+ must also be installed to run the CLI:
+
+```bash
+npm install --global zapagent
+zap
+```
+
+**Native binaries** are available from [GitHub Releases](https://github.com/JackCaow/zapagent/releases/latest), with SHA-256 checksums:
+
+| Platform | Downloads |
+| :--- | :--- |
+| macOS | [Apple Silicon](https://github.com/JackCaow/zapagent/releases/latest/download/zap-macos-arm64) · [Intel](https://github.com/JackCaow/zapagent/releases/latest/download/zap-macos-x64) |
+| Linux | [ARM64](https://github.com/JackCaow/zapagent/releases/latest/download/zap-linux-arm64) · [x64](https://github.com/JackCaow/zapagent/releases/latest/download/zap-linux-x64) |
+| Windows | [x64](https://github.com/JackCaow/zapagent/releases/latest/download/zap-windows-x64.exe) |
+
+macOS binaries are ad-hoc signed, not Developer ID signed or notarized. Release contents and verification steps are documented in the [release guide](docs/releasing.md).
+
+**From source** — the repository pins Bun 1.3.14:
 
 ```bash
 git clone https://github.com/JackCaow/zapagent.git
@@ -50,85 +80,75 @@ bun install --frozen-lockfile
 bun start
 ```
 
-In the terminal UI, run `/connect` to configure a provider, then `/model` to choose a model.
+Run `bun link` in the checkout, then use `zapdev` from your project. Or run `bun run build` and use `dist/zap`.
 
-To use this checkout from your own project:
+</details>
 
-```bash
-# Run once inside the zapagent checkout.
-bun link
+## Give your agents a task
 
-# Then run from the project you want to work on.
-cd /path/to/your-project
-zapdev --watch
+Start with a real change in your repository:
+
+```text
+Add input validation to this project's API.
+First inspect the codebase, then delegate independent parts to child agents:
+implement validation, add regression tests, and review compatibility.
+Run the relevant tests and summarize the results.
+Ask before merging implementation artifacts into my workspace.
 ```
 
-Prefer a compiled CLI? Run `bun run build`, then use `dist/zap` from your checkout. Examples below use `zap`; the development command `zapdev` accepts the same arguments.
+The coordinator manages child-agent dependencies, concurrency, messages, and lifecycle states. Delegation follows the task and model decisions; independent work can run together, while dependent work waits for prerequisites.
 
-> Source installation is available now. Binary and npm releases are published through the [release workflows](docs/releasing.md); check [GitHub Releases](https://github.com/JackCaow/zapagent/releases) for available versions.
+Writing agents can edit files, install dependencies, run tests, and stage or commit changes in their private workspaces, subject to tool permissions and the platform sandbox. Merging applies file changes to the parent workspace; it does not import the child's commit history. See [workspace isolation](docs/architecture/48-non-git-workspace-isolation.md).
 
-## See the work as it happens
+## Watch the work happen
 
-```bash
-zap --watch
-```
+![The actual Watch UI showing connected agents, tool activity, and an approval wait, using synthetic demo events.](docs/images/readme/watch-preview.png)
 
-Keep coding in the terminal while a local browser view shows the run unfolding: which agent is active, which tool is running, where approval is needed, and which steps have finished.
+*Captured from the actual Watch UI using synthetic preview events. This illustrates the interface, not a benchmark or a recorded model run. The header artwork is a concept illustration.*
 
-![Watch UI showing a root agent, a child agent, tool activity, and an approval wait. Synthetic demo events.](docs/images/readme/watch-preview.png)
+Run `zap --watch` to follow the agent tree and tool lifecycle in a local browser. See which agents are active, which tools are executing, and where approval is needed.
 
-*The actual Watch interface, captured with the repository's synthetic preview events. This is a UI demonstration, not a benchmark or a recorded model run.*
+Watch is **read-only** and displays runtime metadata rather than prompts, tool arguments, or tool output. Refreshing the page does not replay tools. Its loopback URL contains a private access token; do not share it. Use `--watch-no-open` to print the URL without opening a browser. [Watch details →](docs/architecture/57-watch-runtime-observability.md)
 
-- **Follow the agent tree:** root and child runs stay connected to their tools and lifecycle states.
-- **Understand waits:** distinguish model activity, tool execution, approval, and completion.
-- **Keep the terminal in control:** Watch is read-only. Refreshing the page does not replay tools or change the run.
-- **Keep content out of the viewer:** Watch projects runtime metadata; prompts, tool arguments, and tool output are excluded. Its loopback URL contains a private access token.
+## Fit it into your workflow
 
-Use `--watch-no-open` to print the viewer URL without opening a browser. See [Watch architecture](docs/architecture/57-watch-runtime-observability.md) for the event flow and current limits.
-
-## How the agents work together
-
-![Agent architecture: the host drives a root agent and coordinator; read-only agents share a view, writing agents use private snapshots, and artifacts pass conflict and drift checks before merging. Tools run through policy and execution layers; events feed the read-only Watch view.](docs/images/readme/architecture.svg)
-
-1. **The host starts a run.** The terminal, headless CLI, or ACP adapter uses `AgentRuntime`. `LoopAgent` handles the model/tool loop with context management and execution budgets.
-2. **The coordinator delegates.** Child runs have their own identities, lifecycle states, dependencies, and messaging. Independent work can run concurrently within configured limits.
-3. **Writing agents work in isolation.** Git projects use private clones of a working-tree snapshot, including eligible uncommitted changes. Non-Git projects use controlled copy snapshots. Read-only agents can share the parent workspace view.
-4. **Results come back through a merge gate.** Writing agents produce frozen artifacts. Merging checks conflicts and parent-workspace drift before applying changes. Child staging and commits stay private; merging delivers file changes, not child commit history.
-5. **Runtime events make progress visible.** Watch observes the execution lifecycle without controlling it. The runtime distinguishes execution outcomes from acceptance; task acceptance requires an explicit evaluator or human review.
-
-The three modules have separate responsibilities:
-
-| Module | Responsibility |
+| What you need | What zapAgent provides |
 | :--- | :--- |
-| [`src/`](src/) | Terminal UI, provider setup, sessions, headless/ACP hosts, and Watch. |
-| [`zapsdk/`](zapsdk/) | Reusable TypeScript agent runtime: model loop, orchestration, tools, policy, workspaces, merge, context, memory, and events. |
-| [`zapvm/`](zapvm/) | Independent Go execution runtime. Optional VM execution sits behind the SDK's execution protocol; the VM does not own agent prompts, permissions, or completion decisions. |
+| Use your model provider | `/connect`, `/model`, and `/effort`; Anthropic, Chat Completions, and Responses protocols. |
+| Continue a long task | Context compaction, project memory, saved sessions, and `/queue` for follow-up requests. |
+| Control tool access | `/permissions`, scoped approvals, and the host OS sandbox by default. [Platform boundaries](docs/architecture/39-local-sandbox-default.md). |
+| Return to earlier work | `/rewind` for conversation, tracked code changes, or both. External effects and some filesystem changes are outside checkpoint coverage. |
+| Bring existing tools | Built-in file, search, shell, HTTP, and document tools, plus MCP integrations and skills. |
+| Automate or build a host | Structured headless output, an ACP adapter, and a reusable TypeScript SDK. |
 
-Explore the [architecture guide](docs/architecture/README.md), [multi-agent design](docs/architecture/26-multi-agent-orchestration.md), and [non-Git workspace isolation](docs/architecture/48-non-git-workspace-isolation.md).
-
-## More of your workflow, in one place
-
-- **Choose your model.** Connect Anthropic or OpenAI-compatible providers and switch with `/model`; adjust supported reasoning settings with `/effort`.
-- **Keep long tasks moving.** Context compaction, project memory, saved sessions, and a follow-up queue help carry work across turns. Steer the active task or queue the next request with `/queue`.
-- **Control tool access.** Inspect permissions and scoped approvals with `/permissions`. Commands use the host OS sandbox by default; VM execution is opt-in. See the [execution boundary](docs/architecture/39-local-sandbox-default.md) for platform-specific restrictions.
-- **Return to earlier work.** `/rewind` can restore conversation, tracked code changes, or both. Checkpoints have coverage limits; external effects and every filesystem topology change are not fully reversible.
-- **Bring your tools.** Built-in file, search, shell, HTTP, and document tools sit alongside MCP integrations and skills.
-- **Build your own host.** Reuse the SDK, stream structured headless output, or connect an ACP-compatible client.
-
-### Script it
-
-After configuring a provider:
+After configuring a provider, use the CLI in scripts:
 
 ```bash
 zap -p "Explain this repository's architecture" --output-format json
 zap --watch -p "Review the latest changes" --output-format stream-json --watch-linger 30
 ```
 
-Use `zap --help-headless` for automation options. See the [CLI reference](docs/usage.md) for all slash commands, keyboard shortcuts, environment variables, approval scopes, and optional VM setup.
+See `zap --help-headless` and the [CLI reference](docs/usage.md) for commands, configuration, approvals, and automation.
 
-## Build with us
+## How it works
 
-Useful contributions include reproducible agent failures, clearer runtime visualization, provider compatibility fixes, and platform-specific sandbox tests. Include the expected behavior and a minimal reproduction; remove credentials and private code from reports.
+![Architecture: a host and coordinator delegate to read-only agents or isolated writing agents. Artifacts pass merge checks, tools run through policy and execution layers, and runtime events feed the read-only Watch view.](docs/images/readme/architecture.svg)
+
+The host starts a run through `AgentRuntime`. `LoopAgent` manages the model/tool loop, context, and execution budgets. The coordinator manages child runs; writing agents return frozen artifacts that pass conflict and workspace-drift checks before merging. Runtime events feed Watch. Execution success and task acceptance are separate: acceptance requires an explicit evaluator or human review.
+
+| Module | Responsibility |
+| :--- | :--- |
+| [`src/`](src/) | Terminal UI, provider setup, sessions, headless/ACP hosts, and Watch. |
+| [`zapsdk/`](zapsdk/) | TypeScript agent runtime: model loop, orchestration, tools, permissions, workspaces, merge, context, memory, and events. |
+| [`zapvm/`](zapvm/) | Independent Go execution runtime. Optional VM execution connects through the SDK protocol; the VM does not own agent prompts, permissions, or completion decisions. |
+
+Git workspaces use private clones of a working-tree snapshot, including eligible uncommitted changes. Non-Git projects use controlled copy snapshots. Read-only agents can share the parent workspace view.
+
+Read the [architecture guide](docs/architecture/README.md) and [multi-agent design](docs/architecture/26-multi-agent-orchestration.md) for implementation details.
+
+## Contributing
+
+Help improve provider compatibility, sandbox behavior, collaboration, or the live view. Bug reports are most useful with expected behavior and a minimal reproduction, with credentials and private code removed.
 
 ```bash
 bun run typecheck
@@ -136,9 +156,7 @@ bun test
 bun run build
 ```
 
-Working on the independent VM module? Use `bun run check:vm`; `bun run build:all` builds both host components. See [CONTRIBUTING.md](CONTRIBUTING.md) and report vulnerabilities via [SECURITY.md](SECURITY.md).
-
-If this is the workflow you want in your terminal, star the repository and help shape it.
+For the independent VM module, use `bun run check:vm`; `bun run build:all` builds both host components. See [CONTRIBUTING.md](CONTRIBUTING.md), [open issues](https://github.com/JackCaow/zapagent/issues), and [SECURITY.md](SECURITY.md).
 
 ## License
 
