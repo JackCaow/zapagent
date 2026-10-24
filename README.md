@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/readme/hero.png" alt="zapAgent — Code flows. Your terminal. A team of agents." width="100%" />
+  <img src="docs/images/readme/logo.png" alt="zapAgent logo" width="360" />
 </p>
 
 <h1 align="center">One task. A team of coding agents.</h1>
@@ -104,7 +104,7 @@ Writing agents can edit files, install dependencies, run tests, and stage or com
 
 ![The actual Watch UI showing connected agents, tool activity, and an approval wait, using synthetic demo events.](docs/images/readme/watch-preview.png)
 
-*Captured from the actual Watch UI using synthetic preview events. This illustrates the interface, not a benchmark or a recorded model run. The header artwork is a concept illustration.*
+*Captured from the actual Watch UI using synthetic preview events. This illustrates the interface, not a benchmark or a recorded model run.*
 
 Run `zap --watch` to follow the agent tree and tool lifecycle in a local browser. See which agents are active, which tools are executing, and where approval is needed.
 

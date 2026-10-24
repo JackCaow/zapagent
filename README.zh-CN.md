@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/readme/hero.png" alt="zapAgent — Code flows. 在终端里，与一组 agent 协作。" width="100%" />
+  <img src="docs/images/readme/logo.png" alt="zapAgent 品牌标志" width="360" />
 </p>
 
 <h1 align="center">一个任务，一组协作的编程 agent。</h1>
@@ -103,7 +103,7 @@ bun start
 
 ![真实 Watch 界面：主 agent、子 agent、工具活动与审批等待；使用模拟事件演示。](docs/images/readme/watch-preview.png)
 
-*截图来自真实 Watch 界面，使用内置模拟事件展示，不代表基准测试或一次真实模型任务。页首配图为概念插画。*
+*截图来自真实 Watch 界面，使用内置模拟事件展示，不代表基准测试或一次真实模型任务。*
 
 运行 `zap --watch`，在本地浏览器中跟随 agent 协作关系和工具生命周期：谁在运行、哪个工具正在执行、哪里需要审批，都有对应状态。
 
