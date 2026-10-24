@@ -6,6 +6,8 @@ import { dirname, join } from "node:path"
 import { BUILTIN_COMMANDS } from "../src/ui/slash-palette.js"
 import { bundledUiPackages, packNpmPackage } from "../scripts/pack-npm.js"
 
+declare const Bun: { which(command: string): string | null };
+
 const root = process.cwd()
 
 describe("package metadata", () => {
@@ -137,7 +139,7 @@ describe("package metadata", () => {
     expect(pkg.files).toContain("!zapsdk/tests/**")
   })
 
-  it("declares Bun as the package runtime for source-distributed global installs", () => {
+  it("keeps Bun entry points for source development", () => {
     const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf-8")) as {
       packageManager?: string
       engines?: Record<string, string>
@@ -212,7 +214,7 @@ describe("package metadata", () => {
     } finally { rmSync(fixture, { recursive: true, force: true }) }
   })
 
-  it("packed global bin entry can start from the published files", () => {
+  it("packs a Node launcher while preserving SDK imports and patched UI dependencies", () => {
     const tmp = mkdtempSync(join(tmpdir(), "zap-pack-bin-"))
     try {
       const pack = spawnSync(process.execPath, [
@@ -245,11 +247,11 @@ describe("package metadata", () => {
         scripts?: unknown
       }
       expect(packedPkg.bin).toEqual({
-        zap: "src/index.tsx",
+        zap: "npm/cli.cjs",
       })
       expect(packedPkg.private).toBeUndefined()
       expect(packedPkg.patchedDependencies).toBeUndefined()
-      expect(packedPkg.scripts).toBeUndefined()
+      expect(packedPkg.scripts).toEqual({ postinstall: "node npm/install.cjs" })
       expect(packedPkg.bundledDependencies).toEqual([...bundledUiPackages])
       const patchCheck = spawnSync("git", ["apply", "--reverse", "--check", join(root, "patches/ink@7.1.1.patch")], {
         cwd: join(pkgDir, "node_modules", "ink"), encoding: "utf8",
@@ -280,32 +282,31 @@ describe("package metadata", () => {
         mkdirSync(dirname(destination), { recursive: true })
         symlinkSync(installed, destination, "junction")
       }
-      const runtimeEnvironment = { ...process.env, BUN_INSTALL_CACHE_DIR: join(tmp, "empty-cache") }
+      const native = require("../npm/install.cjs")
+      const nativeCache = join(tmp, "native-cache")
+      // The executable fixture uses Node itself, with its native --version result.
+      const node = Bun.which("node")!
+      const nodeBytes = readFileSync(node)
+      const nodeHash = native.digest(nodeBytes)
+      const nativePath = join(nativeCache, "zapagent", pkg.version, `${process.platform}-${process.arch}`, process.platform === "win32" ? "zap.exe" : "zap")
+      mkdirSync(dirname(nativePath), { recursive: true })
+      cpSync(node, nativePath)
+      writeFileSync(`${nativePath}.sha256`, `${nodeHash}\n`)
+      const runtimeEnvironment = { ...process.env, BUN_INSTALL_CACHE_DIR: join(tmp, "empty-cache"), ZAPAGENT_CACHE_DIR: nativeCache }
       const binPaths = [...new Set(Object.values(packedPkg.bin ?? {}))]
       for (const binPath of binPaths) {
         const entry = join(pkgDir, binPath)
         expect(existsSync(entry)).toBe(true)
-        expect(readFileSync(entry, "utf-8").startsWith("#!/usr/bin/env bun\n")).toBe(true)
+        expect(readFileSync(entry, "utf-8").startsWith("#!/usr/bin/env node\n")).toBe(true)
 
-        const proc = spawnSync(entry, ["--version"], {
+        const proc = spawnSync(node, [entry, "--version"], {
           cwd: pkgDir,
           encoding: "utf-8",
           env: runtimeEnvironment,
         })
         expect(proc.status).toBe(0)
-        expect(proc.stdout.trim()).toBe(`zapAgent v${pkg.version}`)
+        expect(proc.stdout.trim()).toBe(spawnSync(node, ["--version"], { encoding: "utf8" }).stdout.trim())
       }
-
-      const cliEntry = join(pkgDir, packedPkg.bin!.zap)
-      const headlessHelp = spawnSync(cliEntry, ["--help-headless"], {
-        cwd: pkgDir,
-        encoding: "utf-8",
-        env: runtimeEnvironment,
-      })
-      expect(headlessHelp.status).toBe(0)
-      expect(headlessHelp.stdout).toContain("zap non-interactive mode")
-      expect(headlessHelp.stdout).not.toContain("zapcode")
-      expect(headlessHelp.stdout).toContain("--permission-mode")
 
       const sdkImport = spawnSync(process.execPath, [
         "--no-install",

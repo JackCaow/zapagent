@@ -1,6 +1,6 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,7 +18,10 @@ const evidence = mkdtempSync(join(tmpdir(), "zapagent-npm-verification-"));
 console.log(`Verification evidence: ${evidence}`);
 const env = verificationEnvironment(evidence);
 function run(label: string, command: string[], cwd: string, extra: Record<string, string> = {}, allowedStatuses = [0]): string {
-  const result = spawnSync(command[0]!, command.slice(1), { cwd, env: { ...env, ...extra },
+  const inherited = { ...env };
+  if (extra.PATH) for (const key of Object.keys(inherited)) if (/^path$/i.test(key)) delete inherited[key];
+  const result = spawnSync(command[0]!, command.slice(1), { cwd, env: { ...inherited, ...extra },
+    windowsVerbatimArguments: process.platform === "win32" && basename(command[0]!).toLowerCase() === "cmd.exe",
     encoding: "utf8", timeout: 180_000, killSignal: "SIGKILL", maxBuffer: 16 * 1024 * 1024 });
   writeFileSync(join(evidence, `${label}.log`), result.stdout + "\n" + result.stderr);
   if (result.error || result.status === null || !allowedStatuses.includes(result.status)) throw new Error(`${label} failed (${result.status}); inspect ${evidence}`);
@@ -33,12 +36,24 @@ const tar = process.platform === "win32" ? join(process.env.SystemRoot ?? "C:\\W
 run("extract", [tar, "-xzf", basename(artifact), "-C", extracted], dirname(artifact));
 const snapshot = join(extracted, "package");
 const pkg = JSON.parse(readFileSync(join(snapshot, "package.json"), "utf8"));
-if (pkg.name !== "zapagent" || pkg.private || pkg.patchedDependencies || pkg.scripts
-  || JSON.stringify(pkg.bin) !== JSON.stringify({ zap: "src/index.tsx" })
+if (pkg.name !== "zapagent" || pkg.private || pkg.patchedDependencies || JSON.stringify(pkg.scripts) !== JSON.stringify({ postinstall: "node npm/install.cjs" })
+  || JSON.stringify(pkg.bin) !== JSON.stringify({ zap: "npm/cli.cjs" })
   || JSON.stringify(pkg.bundledDependencies) !== JSON.stringify(bundledUiPackages)) throw new Error("Unexpected published manifest");
 run("patch-check", ["git", "apply", "--reverse", "--check", join(repository, "patches", "ink@7.1.1.patch")], join(snapshot, "node_modules", "ink"));
 const hashes = Object.fromEntries(["cursor-helpers.js", "ink.js", "log-update.js"].map(file => [file,
   createHash("sha256").update(readFileSync(join(snapshot, "node_modules", "ink", "build", file))).digest("hex")]));
+const nativeBinary = resolve(process.env.ZAPAGENT_TEST_BINARY || (process.platform === "win32" ? "dist/zap.exe" : "dist/zap"));
+if (!existsSync(nativeBinary)) throw new Error("Build the native CLI before verification, or set ZAPAGENT_TEST_BINARY");
+const fixture = spawn(node, [join(repository, "scripts/npm-release-fixture.cjs"), nativeBinary], { stdio: ["ignore", "ignore", "pipe", "ipc"] });
+const fixtureUrl = await new Promise<string>((accept, reject) => {
+  const timer = setTimeout(() => reject(new Error("Native release fixture did not start")), 10_000);
+  fixture.once("message", value => { clearTimeout(timer); accept(String(value)); });
+  fixture.once("error", error => { clearTimeout(timer); reject(error); });
+  fixture.once("exit", code => { clearTimeout(timer); reject(new Error(`Native fixture exited: ${code}`)); });
+}).catch(error => { fixture.kill(); throw error; });
+// Only Node is visible to CLI shims. A source entry relying on /usr/bin/env bun must fail here.
+const nodeOnly = join(evidence, "node-only"); mkdirSync(nodeOnly);
+copyFileSync(node, join(nodeOnly, process.platform === "win32" ? "node.exe" : "node"));
 const cases: Array<Record<string, unknown>> = [];
 const summary = { artifactSha256: createHash("sha256").update(readFileSync(artifact)).digest("hex"),
   name: pkg.name, version: pkg.version, platform: process.platform, arch: process.arch, hashes, cases,
@@ -49,12 +64,16 @@ try {
     mkdirSync(location);
     writeFileSync(join(location, "package.json"), '{"private":true}\n');
     const prefix = join(location, "prefix"), cache = join(evidence, `${manager}-cache`);
-    const runtime = consumerRuntimeEnvironment(location, cache, hashes);
+    const runtime = { ...consumerRuntimeEnvironment(location, cache, hashes),
+      ZAPAGENT_DOWNLOAD_BASE_URL: fixtureUrl, ZAPAGENT_CACHE_DIR: join(location, "native-cache") };
     let installed: string, audit: Record<string, number> | undefined;
     if (manager === "npm") {
       run(label + "-install", [...npm, "install", ...(global ? ["--global", "--prefix", prefix] : []), artifact,
-        "--ignore-scripts", "--no-audit", "--no-fund", "--prefer-offline", "--cache", cache, "--registry=https://registry.npmjs.org"], location, runtime);
+        ...(global ? [] : ["--ignore-scripts"]), "--no-audit", "--no-fund", "--prefer-offline", "--cache", cache, "--registry=https://registry.npmjs.org"], location, runtime);
       installed = join(global ? process.platform === "win32" ? prefix : join(prefix, "lib") : location, "node_modules", "zapagent");
+      if (global && !existsSync(join(runtime.ZAPAGENT_CACHE_DIR, "zapagent", pkg.version, `${process.platform}-${process.arch}`, process.platform === "win32" ? "zap.exe" : "zap"))) {
+        throw new Error("npm postinstall did not prefetch the native binary");
+      }
       if (!global) {
         const report = JSON.parse(run(label + "-audit", [...npm, "audit", "--omit=dev", "--json", "--cache", cache,
           "--registry=https://registry.npmjs.org"], location, runtime, [0, 1]));
@@ -76,15 +95,23 @@ try {
     const smoke = join(installed, "npm-consumer-smoke.mjs");
     writeFileSync(smoke, readFileSync(join(repository, "scripts", "npm-consumer-smoke.mjs")));
     run(label + "-smoke", [process.execPath, "--no-install", smoke], location, runtime);
-    const bin = global ? join(prefix, "bin", "zap") : join(location, "node_modules", ".bin", "zap");
-    const entry = process.platform === "win32" ? [process.execPath, join(installed, "src", "index.tsx")] : [bin];
-    const version = run(label + "-version", [...entry, "--version"], location, runtime).trim();
+    const bin = global ? process.platform === "win32" && manager === "npm" ? join(prefix, "zap.cmd") : join(prefix, "bin", "zap") : join(location, "node_modules", ".bin", process.platform === "win32" ? "zap.cmd" : "zap");
+    const cliRuntime = { ...runtime, PATH: nodeOnly };
+    // Windows npm uses a cmd shim; Bun's global Windows shim still belongs to Bun.
+    const entry = process.platform === "win32" ? [node, join(installed, "npm", "cli.cjs")] : [bin];
+    const command = (args: string[]) => process.platform === "win32" && manager === "npm"
+      ? [process.env.ComSpec || join(process.env.SystemRoot || "C:\\Windows", "System32", "cmd.exe"), "/d", "/s", "/c", `""${bin}" ${args.join(" ")}"`] : [...entry, ...args];
+    const version = run(label + "-version", command(["--version"]), location, cliRuntime).trim();
     if (version !== `zapAgent v${pkg.version}`) throw new Error(`${label} returned unexpected CLI version`);
-    const help = run(label + "-help", [...entry, "--help-headless"], location, runtime);
+    const help = run(label + "-help", command(["--help-headless"]), location, cliRuntime);
     if (!help.includes("--permission-mode") || !help.includes("zap -p <prompt>") || /\bzapcode\b/.test(help)) {
       throw new Error(`${label} returned invalid CLI help`);
     }
-    cases.push({ manager, global, status: "passed", version, binShimVerified: process.platform !== "win32", ...(audit ? { audit } : {}) });
+    writeFileSync(join(location, "native-proof.txt"), "NATIVE_FILE_CONTENT_OK\n");
+    const task = run(label + "-native-tool", command(["-p", "native-proof.txt", "--allowed-tools", "read_file", "--max-turns", "3", "--timeout-ms", "30000", "--output-format", "json"]), location,
+      { ...cliRuntime, OPENAI_BASE_URL: `${fixtureUrl}/v1`, OPENAI_API_KEY: "local-test-key", MODEL: "native-fixture" });
+    if (!task.includes("NATIVE_TOOL_OK")) throw new Error(`${label} compiled tool call failed`);
+    cases.push({ nativeToolCall: "passed", manager, global, status: "passed", version, binShimVerified: process.platform !== "win32" || manager === "npm", bunOnPath: false, ...(audit ? { audit } : {}) });
     // Reclaim only this successful isolated installation; keep logs and failed cases.
     rmSync(location, { recursive: true, force: true });
   }
@@ -95,5 +122,5 @@ try {
   summary.status = "failed";
   summary.error = error instanceof Error ? error.message : String(error);
   throw error;
-} finally { writeFileSync(join(evidence, "result.json"), JSON.stringify(summary, null, 2) + "\n"); }
+} finally { fixture.kill(); writeFileSync(join(evidence, "result.json"), JSON.stringify(summary, null, 2) + "\n"); }
 console.log(`All four isolated installs passed; ${join(evidence, "result.json")}`);

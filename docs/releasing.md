@@ -62,7 +62,9 @@ Run **Publish npm release** on `main` and enter the already published GitHub
 Release tag. Stable versions publish to `latest`, prereleases to `next`.
 The source workspace remains `private: true`; `pack:npm` prepares the public
 manifest, bundled UI dependencies, and license inventory in the tarball.
-Consumers need Bun as specified by the package's `engines` field.
+CLI consumers need Node.js 22+; the npm launcher downloads the exact-version native binary and verifies its SHA-256. No separate Bun install is needed for the CLI. The source SDK still requires Bun.
+
+Postinstall prefetches the binary. If install scripts are disabled or GitHub is temporarily unavailable, the launcher retries on first use. Verified binaries are cached per user, version and platform; cached launches work offline. CI tests the current native candidate through a local release fixture before the public tag exists. `ZAPAGENT_CACHE_DIR` overrides the cache root. `ZAPAGENT_DOWNLOAD_BASE_URL` overrides the release download root for trusted HTTPS mirrors (loopback HTTP is supported for tests).
 
 If a release build fails, fix the issue and publish a new version rather than
 moving an existing public release tag. A failed verification/build never starts

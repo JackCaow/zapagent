@@ -49,7 +49,9 @@ export function packNpmPackage(options: { root?: string; destination: string; dr
     delete manifest.patchedDependencies;
     delete manifest.scripts;
     manifest.bundledDependencies = [...bundledUiPackages];
-    manifest.bin = { zap: "src/index.tsx" };
+    manifest.bin = { zap: "npm/cli.cjs" };
+    manifest.scripts = { postinstall: "node npm/install.cjs" };
+    manifest.engines = { node: ">=22" };
     writeFileSync(join(stage, "package.json"), JSON.stringify(manifest, null, 2) + "\n");
     // Let Bun collect the complete installed dependency closure, including nested
     // versions. A partial node_modules tree makes npm skip missing bundled deps.
