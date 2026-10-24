@@ -2,11 +2,11 @@
   <img src="docs/images/readme/logo.png" alt="zapAgent logo" width="360" />
 </p>
 
-<h1 align="center">One task. A team of coding agents.</h1>
+<h1 align="center">One task. A team of agents.</h1>
 
 <p align="center">
   Delegate independent work. Review isolated edits. Watch the run unfold.<br />
-  An open-source terminal coding agent and TypeScript SDK.
+  An open-source, general-purpose agent and TypeScript SDK.
 </p>
 
 <p align="center">
@@ -25,13 +25,13 @@
   <a href="README.zh-CN.md">简体中文</a>
 </p>
 
-zapAgent helps you explore a repository, implement changes, and run tests from your terminal. For larger tasks, a coordinator can delegate work to child agents, collect their results, and merge their edits back into your project.
+zapAgent works from your terminal to understand tasks, call tools, and deliver results. Use it to research a topic, organize documents, analyze data, develop software, or automate a workflow. For complex tasks, a coordinator can delegate work to child agents and bring their findings and artifacts together.
 
-- **Work in parallel.** Split exploration, implementation, and review into independent tasks, with dependencies and messages connecting the agents.
+- **Work in parallel.** Split research, analysis, execution, and review into independent tasks, with dependencies and messages connecting the agents.
 - **Keep edits isolated.** Writing agents use private workspace snapshots, including for non-Git projects. Review their artifacts before merging; merge checks detect conflicts and parent-workspace drift.
 - **See the whole run.** `zap --watch` opens a local view of agents, tool calls, approvals, and completion states alongside your terminal.
 
-Bring your own model connection: **Anthropic Messages, OpenAI Chat Completions, and OpenAI Responses API**, including compatible services. Keep your existing editor and toolchain.
+Bring your own model connection: **Anthropic Messages, OpenAI Chat Completions, and OpenAI Responses API**, including compatible services. Connect your existing files, tools, and workflows.
 
 ## Quick start
 
@@ -39,7 +39,7 @@ Install [Bun](https://bun.sh) **1.3+** and [Git](https://git-scm.com), then:
 
 ```bash
 bun add --global zapagent
-cd /path/to/your-project
+cd /path/to/your-workspace
 zap --watch
 ```
 
@@ -86,19 +86,19 @@ Run `bun link` in the checkout, then use `zapdev` from your project. Or run `bun
 
 ## Give your agents a task
 
-Start with a real change in your repository:
+Start with a task that benefits from several perspectives:
 
 ```text
-Add input validation to this project's API.
-First inspect the codebase, then delegate independent parts to child agents:
-implement validation, add regression tests, and review compatibility.
-Run the relevant tests and summarize the results.
-Ask before merging implementation artifacts into my workspace.
+Read the materials in this directory and prepare a project assessment.
+Delegate independent parts to child agents: map the project background,
+analyze risks, and review the conclusions against the evidence.
+Combine the results in report.md. Cite sources and flag missing information.
+Ask before merging the report into my workspace.
 ```
 
 The coordinator manages child-agent dependencies, concurrency, messages, and lifecycle states. Delegation follows the task and model decisions; independent work can run together, while dependent work waits for prerequisites.
 
-Writing agents can edit files, install dependencies, run tests, and stage or commit changes in their private workspaces, subject to tool permissions and the platform sandbox. Merging applies file changes to the parent workspace; it does not import the child's commit history. See [workspace isolation](docs/architecture/48-non-git-workspace-isolation.md).
+Writing agents can process files, write reports, and run scripts in their private workspaces. Development tasks can also install dependencies, run tests, and stage or commit changes, subject to tool permissions and the platform sandbox. Merging applies file changes to the parent workspace; it does not import the child's commit history. See [workspace isolation](docs/architecture/48-non-git-workspace-isolation.md).
 
 ## Watch the work happen
 
@@ -124,8 +124,8 @@ Watch is **read-only** and displays runtime metadata rather than prompts, tool a
 After configuring a provider, use the CLI in scripts:
 
 ```bash
-zap -p "Explain this repository's architecture" --output-format json
-zap --watch -p "Review the latest changes" --output-format stream-json --watch-linger 30
+zap -p "Organize the materials in this directory into themes, findings, and open questions" --output-format json
+zap --watch -p "Analyze the data in this directory and write a report" --output-format stream-json --watch-linger 30
 ```
 
 See `zap --help-headless` and the [CLI reference](docs/usage.md) for commands, configuration, approvals, and automation.

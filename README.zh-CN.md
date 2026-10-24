@@ -2,11 +2,11 @@
   <img src="docs/images/readme/logo.png" alt="zapAgent 品牌标志" width="360" />
 </p>
 
-<h1 align="center">一个任务，一组协作的编程 agent。</h1>
+<h1 align="center">一个任务，一组协作的 agent。</h1>
 
 <p align="center">
   分工并行，隔离修改，实时看见进展。<br />
-  开源终端编程助手，以及可复用的 TypeScript SDK。
+  开源通用 agent，以及可复用的 TypeScript SDK。
 </p>
 
 <p align="center">
@@ -25,13 +25,13 @@
   <a href="README.md">English</a>
 </p>
 
-zapAgent 在终端里帮你读代码、实现修改、运行测试。面对更大的任务，协调器可以把工作交给多个子 agent，收集结果，再将它们的修改合并回项目。
+zapAgent 在终端中理解任务、调用工具并交付结果。用它调研信息、整理文档、分析数据、开发软件，或将多个步骤串成自动化流程。面对复杂任务，协调器可以分派多个子 agent，汇总它们的发现和产物。
 
-- **分工并行。** 将探索、实现、审查拆成独立任务，通过依赖关系和消息组织协作。
+- **分工并行。** 将调研、分析、执行、审查拆成独立任务，通过依赖关系和消息组织协作。
 - **隔离修改。** 写入型 agent 使用私有工作区快照，非 Git 项目同样适用。先检查产物，再合并；合并时检查冲突和父工作区变化。
 - **实时可见。** `zap --watch` 在终端旁打开本地运行视图，展示 agent、工具调用、审批和完成状态。
 
-支持自带模型连接：**Anthropic Messages、OpenAI Chat Completions、OpenAI Responses API** 及兼容服务，沿用你现有的编辑器和工具链。
+支持自带模型连接：**Anthropic Messages、OpenAI Chat Completions、OpenAI Responses API** 及兼容服务，接入你现有的文件、工具和工作流。
 
 ## 快速开始
 
@@ -39,7 +39,7 @@ zapAgent 在终端里帮你读代码、实现修改、运行测试。面对更�
 
 ```bash
 bun add --global zapagent
-cd /path/to/your-project
+cd /path/to/your-workspace
 zap --watch
 ```
 
@@ -86,18 +86,18 @@ bun start
 
 ## 交给 agent 一个任务
 
-从仓库中的实际改动开始：
+从一个需要多方协作的任务开始：
 
 ```text
-给这个项目的 API 增加输入校验。
-先理解代码，再把独立部分交给子 agent：实现校验、补充回归测试、审查兼容性。
-运行相关测试，汇总结果。
-将实现产物合并回我的工作区之前，先请求审批。
+阅读当前目录的资料，整理一份项目评估报告。
+把独立部分交给子 agent：梳理项目背景、分析风险、审查结论与依据。
+汇总为 report.md，引用资料来源，标明信息缺口。
+将报告合并回我的工作区之前，先请求审批。
 ```
 
 协调器管理子 agent 的依赖、并发、消息和生命周期。实际分工由任务和模型决策驱动；独立步骤可以并行，有依赖的步骤等待前置结果。
 
-写入型 agent 可以在私有工作区中改代码、安装依赖、运行测试，以及暂存或提交修改，具体受工具权限和平台沙箱约束。合并交付文件修改，不搬运子 agent 的提交历史。详见[工作区隔离](docs/architecture/48-non-git-workspace-isolation.md)。
+写入型 agent 在私有工作区中处理文件、编写报告、运行脚本；开发任务也可以安装依赖、运行测试，以及暂存或提交修改，具体受工具权限和平台沙箱约束。合并交付文件修改，不搬运子 agent 的提交历史。详见[工作区隔离](docs/architecture/48-non-git-workspace-isolation.md)。
 
 ## 看见任务如何推进
 
@@ -123,8 +123,8 @@ Watch **只读**，展示运行元数据，不展示提示词、工具参数或�
 配置模型服务后，可以接入脚本：
 
 ```bash
-zap -p "解释这个仓库的架构" --output-format json
-zap --watch -p "审查最近的改动" --output-format stream-json --watch-linger 30
+zap -p "整理当前目录的资料，列出主题、结论与待确认的问题" --output-format json
+zap --watch -p "分析当前目录的数据并生成报告" --output-format stream-json --watch-linger 30
 ```
 
 完整命令、配置、审批和自动化选项见 `zap --help-headless` 与 [CLI 手册](docs/usage.md)。
