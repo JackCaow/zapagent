@@ -21,6 +21,7 @@ function run(label: string, command: string[], cwd: string, extra: Record<string
   const inherited = { ...env };
   if (extra.PATH) for (const key of Object.keys(inherited)) if (/^path$/i.test(key)) delete inherited[key];
   const result = spawnSync(command[0]!, command.slice(1), { cwd, env: { ...inherited, ...extra },
+    windowsVerbatimArguments: process.platform === "win32" && basename(command[0]!).toLowerCase() === "cmd.exe",
     encoding: "utf8", timeout: 180_000, killSignal: "SIGKILL", maxBuffer: 16 * 1024 * 1024 });
   writeFileSync(join(evidence, `${label}.log`), result.stdout + "\n" + result.stderr);
   if (result.error || result.status === null || !allowedStatuses.includes(result.status)) throw new Error(`${label} failed (${result.status}); inspect ${evidence}`);
@@ -99,7 +100,7 @@ try {
     // Windows npm uses a cmd shim; Bun's global Windows shim still belongs to Bun.
     const entry = process.platform === "win32" ? [node, join(installed, "npm", "cli.cjs")] : [bin];
     const command = (args: string[]) => process.platform === "win32" && manager === "npm"
-      ? [process.env.ComSpec || join(process.env.SystemRoot || "C:\\Windows", "System32", "cmd.exe"), "/d", "/s", "/c", `"${bin}" ${args.join(" ")}`] : [...entry, ...args];
+      ? [process.env.ComSpec || join(process.env.SystemRoot || "C:\\Windows", "System32", "cmd.exe"), "/d", "/s", "/c", `""${bin}" ${args.join(" ")}"`] : [...entry, ...args];
     const version = run(label + "-version", command(["--version"]), location, cliRuntime).trim();
     if (version !== `zapAgent v${pkg.version}`) throw new Error(`${label} returned unexpected CLI version`);
     const help = run(label + "-help", command(["--help-headless"]), location, cliRuntime);
