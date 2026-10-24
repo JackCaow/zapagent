@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: npm-package-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   consumers:
     strategy:

@@ -1,0 +1,2 @@
+# Bun applies this patch during install; CRLF conversion breaks reverse checks.
+*.patch text eol=lf

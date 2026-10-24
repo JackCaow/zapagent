@@ -65,7 +65,7 @@ zapdev --watch
 
 Prefer a compiled CLI? Run `bun run build`, then use `dist/zap` from your checkout. Examples below use `zap`; the development command `zapdev` accepts the same arguments.
 
-> **Source preview:** this repository is being prepared for public release. npm and binary releases are not yet published here; source installation currently requires repository access. See [release readiness](docs/open-source-readiness.md).
+> Source installation is available now. Binary and npm releases are published through the [release workflows](docs/releasing.md); check [GitHub Releases](https://github.com/JackCaow/zapagent/releases) for available versions.
 
 ## See the work as it happens
 

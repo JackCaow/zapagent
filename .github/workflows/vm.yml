@@ -14,7 +14,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  web-assets:
+    uses: ./.github/workflows/vm-web-assets.yml
+
   source:
+    needs: web-assets
     name: VM source and security
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -31,6 +35,10 @@ jobs:
         run: ./scripts/verify-repository.sh
       - name: Active root workflow syntax
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 ../.github/workflows/*.yml
+      - uses: actions/download-artifact@v4
+        with:
+          name: vm-web-assets
+          path: zapvm/web/client/app/dist
       - name: Tests and race detector
         run: go test -race -timeout 10m ./...
       - name: Vet
@@ -76,6 +84,7 @@ jobs:
             '
 
   platform:
+    needs: web-assets
     name: VM platform (${{ matrix.runner }})
     strategy:
       fail-fast: false
@@ -92,6 +101,10 @@ jobs:
         with:
           go-version-file: zapvm/go.mod
           cache-dependency-path: zapvm/go.sum
+      - uses: actions/download-artifact@v4
+        with:
+          name: vm-web-assets
+          path: zapvm/web/client/app/dist
       - name: Unix tests and Host package validation
         if: runner.os != 'Windows'
         shell: bash

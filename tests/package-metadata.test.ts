@@ -81,11 +81,11 @@ describe("package metadata", () => {
     const ci = readFileSync(join(root, ".github/workflows/ci.yml"), "utf-8")
     const release = readFileSync(join(root, ".github/workflows/release.yml"), "utf-8")
     expect(ci).toContain("bun install --frozen-lockfile")
-    expect(release.match(/bun install --frozen-lockfile/g)?.length).toBe(2)
+    expect(release.match(/bun install --frozen-lockfile/g)?.length).toBe(3)
   })
 
-  it("publishes checksums for release binaries", () => {
-    const release = readFileSync(join(root, ".github/workflows/release.yml"), "utf-8")
+  it("publishes checksums for signed VM runtime binaries", () => {
+    const release = readFileSync(join(root, ".github/workflows/release-vm.yml"), "utf-8")
     expect(release).toContain('bun scripts/write-release-checksum.ts "dist/${{ matrix.artifact }}"')
     expect(release).toContain('bun scripts/write-release-checksum.ts "dist/${{ matrix.artifact }}.runtime.tar.gz"')
     expect(release).toContain("dist/${{ matrix.artifact }}.sha256")
@@ -97,7 +97,7 @@ describe("package metadata", () => {
   })
 
   it("stages the independent Runtime image without embedding an Agent", () => {
-    const release = readFileSync(join(root, ".github/workflows/release.yml"), "utf-8")
+    const release = readFileSync(join(root, ".github/workflows/release-vm.yml"), "utf-8")
     expect(release).toContain("ZAPVM_IMAGE_PROFILE: host-runtime")
     expect(release).not.toContain("ZAPVM_ZAP_BINARY")
     expect(release).toContain('bundle="$release_dir/zapvm-image-${{ matrix.arch }}.bundle.tar.zst"')
@@ -109,7 +109,7 @@ describe("package metadata", () => {
   })
 
   it("builds both modules from the same checkout and keeps candidates draft", () => {
-    const release = readFileSync(join(root, ".github/workflows/release.yml"), "utf-8")
+    const release = readFileSync(join(root, ".github/workflows/release-vm.yml"), "utf-8")
     expect(release).toContain("go-version-file: zapvm/go.mod")
     expect(release).toContain('--zapvm-revision "$GITHUB_SHA"')
     expect(release).not.toContain("ZAPVM_REPOSITORY_TOKEN")
@@ -119,8 +119,8 @@ describe("package metadata", () => {
     expect(release).toContain("draft: true")
   })
 
-  it("authorizes only a GitHub-verified annotated release tag reachable from main", () => {
-    const release = readFileSync(join(root, ".github/workflows/release.yml"), "utf-8")
+  it("authorizes only a GitHub-verified annotated VM release tag reachable from main", () => {
+    const release = readFileSync(join(root, ".github/workflows/release-vm.yml"), "utf-8")
     expect(release).toContain("release tag must be annotated and signed")
     expect(release).toContain(".verification.verified == true")
     expect(release).toContain(".verification.reason == \"valid\"")

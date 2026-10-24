@@ -65,7 +65,7 @@ zapdev --watch
 
 也可以运行 `bun run build`，使用源码目录下的 `dist/zap` 编译产物。下文以 `zap` 为例，开发命令 `zapdev` 接受相同参数。
 
-> **源码预览阶段：** 仓库正在准备公开发布，尚未在这里发布 npm 包或二进制版本；当前源码安装需要仓库访问权限。进度见[开源准备清单](docs/open-source-readiness.md)。
+> 目前可从源码安装。二进制和 npm 发布流程见[发布说明](docs/releasing.md)，可用版本以 [GitHub Releases](https://github.com/JackCaow/zapagent/releases) 为准。
 
 ## 看见任务如何推进
 

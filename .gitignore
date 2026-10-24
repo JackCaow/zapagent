@@ -11,6 +11,7 @@ dist/
 .zapcode/
 .worktrees/
 package-lock.json
+!zapvm/web/client/react/package-lock.json
 .claude/settings.local.json
 .*.bun-build
 

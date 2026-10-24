@@ -8,6 +8,10 @@ changes that are called out explicitly.
 
 ### Fixed
 
+- Base r8 refreshes the signed Alpine package closure for both architectures.
+- CI and release builds generate the locked web assets before Go embeds them;
+  patched frontend dependencies and their npm lockfile are now tracked.
+
 - Guest builds now constrain every direct and transitive Alpine dependency
   before installation, retaining signature and final database checks. Base r5
   records reviewed pcre2/Python updates; both architecture locks run in PR CI.

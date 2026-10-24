@@ -1,12 +1,16 @@
-name: Release
+name: CLI Release
 
 on:
   push:
-    tags:
-      - "v*"
+    tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: cli-release-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   ZAP_BUILDER_VERSION: 1.3.14
@@ -14,348 +18,167 @@ env:
 jobs:
   verify:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           persist-credentials: false
-
-      - name: Authorize signed release tag on main
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
-          RELEASE_COMMIT: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || {
-            echo "release tag must be a semantic version" >&2
-            exit 2
-          }
-          ref=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG")
-          tag_object_type=$(jq -r '.object.type' <<<"$ref")
-          tag_object_sha=$(jq -r '.object.sha' <<<"$ref")
-          [[ "$tag_object_type" == tag ]] || {
-            echo "release tag must be annotated and signed; lightweight tags are rejected" >&2
-            exit 1
-          }
-          tag=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$tag_object_sha")
-          jq -e --arg commit "$RELEASE_COMMIT" '
-            .object.type == "commit" and
-            .object.sha == $commit and
-            .verification.verified == true and
-            .verification.reason == "valid"
-          ' <<<"$tag" >/dev/null || {
-            echo "release tag is unsigned, invalid, or does not resolve to the workflow commit" >&2
-            exit 1
-          }
-          comparison=$(gh api "repos/$GITHUB_REPOSITORY/compare/$RELEASE_COMMIT...main")
-          jq -e --arg commit "$RELEASE_COMMIT" '
-            (.status == "ahead" or .status == "identical") and
-            .merge_base_commit.sha == $commit
-          ' <<<"$comparison" >/dev/null || {
-            echo "release commit is not reachable from main" >&2
-            exit 1
-          }
-
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ env.ZAP_BUILDER_VERSION }}
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
+      - name: Validate version and main ancestry
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Verify source and release packager
+          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
         run: |
           set -euo pipefail
-          bun run typecheck
-          bun test --reporter dot
-          sh -n install.sh
-
-  build-signed-image:
-    name: Build signed ${{ matrix.arch }} Guest image
-    needs: verify
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: amd64
-            os: ubuntu-24.04
-          - arch: arm64
-            os: ubuntu-24.04-arm
-    steps:
-      - name: Check out exact Zap source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: ${{ env.ZAP_BUILDER_VERSION }}
-
-      - name: Require image signing secret
-        shell: bash
+          bun scripts/check-release-version.ts
+          git merge-base --is-ancestor HEAD origin/main
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun audit --audit-level=high
+      - run: bun test --reporter dot
         env:
-          SIGNING_KEY: ${{ secrets.ZAPVM_IMAGE_SIGNING_PRIVATE_KEY }}
-        run: |
-          set -euo pipefail
-          test -n "$SIGNING_KEY" || { echo "ZAPVM_IMAGE_SIGNING_PRIVATE_KEY is required" >&2; exit 1; }
-
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+          ZAPCODE_DATA_DIR: ${{ runner.temp }}/zap-release-data
+      - run: sh -n install.sh
+      - uses: actions/upload-artifact@v4
         with:
-          go-version-file: zapvm/go.mod
-          cache-dependency-path: zapvm/go.sum
-
-      - name: Build exact Guest image
-        working-directory: zapvm
-        shell: bash
-        env:
-          ZAPVM_IMAGE_VERSION: ${{ github.ref_name }}
-          ZAPVM_REPLACE_OUTPUT: "1"
-          ZAPVM_IMAGE_PROFILE: host-runtime
-        run: |
-          set -euo pipefail
-          go test ./...
-          go vet ./...
-          ./scripts/build-rootfs.sh "${{ matrix.arch }}"
-
-      - name: Sign and bundle exact image
-        working-directory: zapvm
-        shell: bash
-        env:
-          SIGNING_KEY: ${{ secrets.ZAPVM_IMAGE_SIGNING_PRIVATE_KEY }}
-        run: |
-          set -euo pipefail
-          umask 077
-          release_dir="$RUNNER_TEMP/zapvm-image-${{ matrix.arch }}"
-          private_key="$RUNNER_TEMP/zapvm-image-private-${{ matrix.arch }}.pem"
-          public_key="$release_dir/zapvm-image-public.pem"
-          signature="$RUNNER_TEMP/manifest-${{ matrix.arch }}.sig"
-          image_tool="$RUNNER_TEMP/zapvm-image-tool"
-          bundle="$release_dir/zapvm-image-${{ matrix.arch }}.bundle.tar.zst"
-          layer_targets="$release_dir/layer-targets"
-          mkdir -p "$release_dir"
-          trap 'rm -f "$private_key" "$signature"' EXIT
-          printf '%s' "$SIGNING_KEY" >"$private_key"
-          openssl pkey -in "$private_key" -pubout -out "$public_key"
-          go build -trimpath -o "$image_tool" ./cmd/zapvm-image
-          "$image_tool" sign \
-            --manifest "dist/${{ matrix.arch }}/manifest.json" \
-            --private-key "$private_key" \
-            --output "$signature"
-          "$image_tool" bundle \
-            --manifest "dist/${{ matrix.arch }}/manifest.json" \
-            --signature "$signature" \
-            --public-key "$public_key" \
-            --output "$bundle"
-          "$image_tool" bundle-layers \
-            --manifest "dist/${{ matrix.arch }}/manifest.json" \
-            --signature "$signature" \
-            --public-key "$public_key" \
-            --output-dir "$layer_targets"
-          "$image_tool" target-metadata \
-            --manifest "dist/${{ matrix.arch }}/manifest.json" \
-            --signature "$signature" \
-            --public-key "$public_key" \
-            --release-sequence "$GITHUB_RUN_NUMBER" \
-            --layer-target-index "$layer_targets/layer-targets.json" \
-            --layer-target-prefix "layers/${{ matrix.arch }}" \
-            --output "$release_dir/target-custom-schema3.json"
-          "$image_tool" verify \
-            --manifest "dist/${{ matrix.arch }}/manifest.json" \
-            --signature "$signature" \
-            --public-key "$public_key" \
-            --base-dir "dist/${{ matrix.arch }}"
-          rm -f "$private_key" "$signature"
-
-      - name: Upload signed image for package assembly
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: zapvm-signed-image-${{ matrix.arch }}
-          path: ${{ runner.temp }}/zapvm-image-${{ matrix.arch }}
+          name: cli-notices
+          path: |
+            LICENSE
+            THIRD_PARTY_NOTICES.md
           if-no-files-found: error
-          compression-level: 0
-          retention-days: 2
+          retention-days: 7
 
-  build:
-    name: Package ${{ matrix.artifact }}
-    needs: [verify, build-signed-image]
+  binaries:
+    needs: verify
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-24.04
-            artifact: zap-linux-x64
             target: bun-linux-x64
-            arch: amd64
-            goos: linux
-            goarch: amd64
-            cgo: 0
-            zapvm: zapvm
-            image_tool: zapvm-image
+            asset: zap-linux-x64
+          - os: ubuntu-24.04-arm
+            target: bun-linux-arm64
+            asset: zap-linux-arm64
           - os: macos-15-intel
-            artifact: zap-macos-x64
             target: bun-darwin-x64
-            arch: amd64
-            goos: darwin
-            goarch: amd64
-            cgo: 1
-            zapvm: zapvm
-            image_tool: zapvm-image
+            asset: zap-macos-x64
           - os: macos-15
-            artifact: zap-macos-arm64
             target: bun-darwin-arm64
-            arch: arm64
-            goos: darwin
-            goarch: arm64
-            cgo: 1
-            zapvm: zapvm
-            image_tool: zapvm-image
+            asset: zap-macos-arm64
           - os: windows-2025
-            artifact: zap-windows-x64.exe
             target: bun-windows-x64
-            arch: amd64
-            goos: windows
-            goarch: amd64
-            cgo: 0
-            zapvm: zapvm.exe
-            image_tool: zapvm-image.exe
-
+            asset: zap-windows-x64.exe
     runs-on: ${{ matrix.os }}
-    permissions:
-      contents: write
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ env.ZAP_BUILDER_VERSION }}
-
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: zapvm/go.mod
-          cache-dependency-path: zapvm/go.sum
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
+      - run: bun install --frozen-lockfile
+      - name: Generate embedded resources and compile
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Download signed image
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: zapvm-signed-image-${{ matrix.arch }}
-          path: signed-image
-
-      - name: Build Zap and native zapVM tools
-        shell: bash
+          BUILD_TARGET: ${{ matrix.target }}
+          ASSET: ${{ matrix.asset }}
         run: |
           set -euo pipefail
-          mkdir -p dist/zapvm-host
-          bun build --compile --target=${{ matrix.target }} src/index.tsx --outfile "dist/${{ matrix.artifact }}"
-          (
-            cd zapvm
-            CGO_ENABLED=${{ matrix.cgo }} GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -trimpath \
-              -o "../dist/zapvm-host/${{ matrix.zapvm }}" ./cmd/zapvm
-            CGO_ENABLED=${{ matrix.cgo }} GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -trimpath \
-              -o "../dist/zapvm-host/${{ matrix.image_tool }}" ./cmd/zapvm-image
-          )
-
-      - name: Sign macOS executables and add Virtualization entitlement
+          bun run build:watch
+          bun run build:node-proxy
+          bun build --compile --target="$BUILD_TARGET" src/index.tsx --outfile "dist/$ASSET"
+      - name: Ad-hoc sign macOS binary
         if: runner.os == 'macOS'
+        env:
+          ASSET: ${{ matrix.asset }}
+        run: |
+          codesign --force --sign - "dist/$ASSET"
+          codesign --verify --strict "dist/$ASSET"
+      - name: Smoke test the native binary and write checksum
         shell: bash
+        env:
+          ASSET: ${{ matrix.asset }}
         run: |
           set -euo pipefail
-          codesign --force --sign - "dist/${{ matrix.artifact }}"
-          codesign --force --sign - \
-            --entitlements zapvm/packaging/macos/zapvm.entitlements \
-            "dist/zapvm-host/${{ matrix.zapvm }}"
-          codesign --force --sign - "dist/zapvm-host/${{ matrix.image_tool }}"
-          codesign --verify --strict --verbose=2 \
-            "dist/${{ matrix.artifact }}" \
-            "dist/zapvm-host/${{ matrix.zapvm }}" \
-            "dist/zapvm-host/${{ matrix.image_tool }}"
-
-      - name: Assemble verified runtime package
-        shell: bash
-        run: |
-          set -euo pipefail
-          package_dir="$RUNNER_TEMP/${{ matrix.artifact }}-runtime"
-          bun scripts/package-zapvm-runtime.ts \
-            --zap "dist/${{ matrix.artifact }}" \
-            --zapvm "dist/zapvm-host/${{ matrix.zapvm }}" \
-            --image-tool "dist/zapvm-host/${{ matrix.image_tool }}" \
-            --bundle "signed-image/zapvm-image-${{ matrix.arch }}.bundle.tar.zst" \
-            --public-key "signed-image/zapvm-image-public.pem" \
-            --output "$package_dir" \
-            --arch "${{ matrix.arch }}" \
-            --zapvm-revision "$GITHUB_SHA"
-          tar -czf "dist/${{ matrix.artifact }}.runtime.tar.gz" -C "$package_dir" .
-          bun scripts/write-release-checksum.ts "dist/${{ matrix.artifact }}"
-          bun scripts/write-release-checksum.ts "dist/${{ matrix.artifact }}.runtime.tar.gz"
-
-      - name: Upload binaries and signed runtime to Release
-        uses: softprops/action-gh-release@v2
+          expected=$(bun -p 'require("./package.json").version')
+          actual=$("./dist/$ASSET" --version)
+          test "$actual" = "zapAgent v$expected"
+          "./dist/$ASSET" --help-headless
+          bun scripts/write-release-checksum.ts "dist/$ASSET"
+      - uses: actions/upload-artifact@v4
         with:
-          files: |
-            dist/${{ matrix.artifact }}
-            dist/${{ matrix.artifact }}.sha256
-            dist/${{ matrix.artifact }}.runtime.tar.gz
-            dist/${{ matrix.artifact }}.runtime.tar.gz.sha256
-          generate_release_notes: true
-          draft: true
-          fail_on_unmatched_files: true
+          name: cli-${{ matrix.asset }}
+          path: |
+            dist/${{ matrix.asset }}
+            dist/${{ matrix.asset }}.sha256
+          if-no-files-found: error
+          retention-days: 7
 
-  publish-signed-image:
-    name: Stage signed ${{ matrix.arch }} Runtime image
-    needs: build-signed-image
+  npm-candidate:
+    needs: verify
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.ZAP_BUILDER_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: bun install --frozen-lockfile
+      - run: bun run build:watch && bun run build:node-proxy
+      - run: bun run typecheck:npm
+      - run: bun run pack:npm
+      - name: Verify exact npm candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate="dist/npm/zapagent-$(bun -p 'require("./package.json").version').tgz"
+          bun run verify:npm "$candidate"
+          bun scripts/write-release-checksum.ts "$candidate"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-npm
+          path: dist/npm/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [verify, binaries, npm-candidate]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
       contents: write
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [amd64, arm64]
     steps:
-      - name: Download the exact signed image
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@v4
         with:
-          name: zapvm-signed-image-${{ matrix.arch }}
-          path: signed-image
-
-      - name: Name and hash public acceptance assets
+          pattern: cli-*
+          merge-multiple: true
+          path: release-assets
+      - name: Verify complete asset set and publish once
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
         shell: bash
         run: |
           set -euo pipefail
-          cd signed-image
-          mv zapvm-image-public.pem "zapvm-image-${{ matrix.arch }}.public.pem"
-          mv target-custom-schema3.json "target-custom-${{ matrix.arch }}-schema3.json"
-          sha256sum "zapvm-image-${{ matrix.arch }}.bundle.tar.zst" \
-            >"zapvm-image-${{ matrix.arch }}.bundle.tar.zst.sha256"
-          sha256sum "zapvm-image-${{ matrix.arch }}.public.pem" \
-            >"zapvm-image-${{ matrix.arch }}.public.pem.sha256"
-          sha256sum "target-custom-${{ matrix.arch }}-schema3.json" \
-            >"target-custom-${{ matrix.arch }}-schema3.json.sha256"
-          find layer-targets -type f -print0 | sort -z | xargs -0 sha256sum \
-            >"layer-targets-${{ matrix.arch }}.sha256"
-
-      - name: Upload immutable target-host acceptance assets
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            signed-image/zapvm-image-${{ matrix.arch }}.bundle.tar.zst
-            signed-image/zapvm-image-${{ matrix.arch }}.bundle.tar.zst.sha256
-            signed-image/zapvm-image-${{ matrix.arch }}.public.pem
-            signed-image/zapvm-image-${{ matrix.arch }}.public.pem.sha256
-            signed-image/target-custom-${{ matrix.arch }}-schema3.json
-            signed-image/target-custom-${{ matrix.arch }}-schema3.json.sha256
-            signed-image/layer-targets-${{ matrix.arch }}.sha256
-            signed-image/layer-targets/*
-          draft: true
-          fail_on_unmatched_files: true
-
-  # Candidate artifacts remain draft. Formal promotion requires Developer ID /
-  # notarization and target-host acceptance; ad-hoc signatures are not enough.
+          cd release-assets
+          test -s LICENSE
+          test -s THIRD_PARTY_NOTICES.md
+          for asset in zap-linux-x64 zap-linux-arm64 zap-macos-x64 zap-macos-arm64 zap-windows-x64.exe "zapagent-${RELEASE_TAG#v}.tgz"; do
+            test -s "$asset"
+            sha256sum -c "$asset.sha256"
+          done
+          sha256sum zap-linux-x64 zap-linux-arm64 zap-macos-x64 zap-macos-arm64 zap-windows-x64.exe zapagent-*.tgz > SHA256SUMS
+          # A fresh tag is required; existing published releases are never overwritten.
+          args=()
+          if [[ "$RELEASE_TAG" == *-* ]]; then args+=(--prerelease --latest=false); else args+=(--latest); fi
+          gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes --title "$RELEASE_TAG" "${args[@]}" ./*

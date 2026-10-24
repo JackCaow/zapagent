@@ -1,0 +1,53 @@
+name: Publish npm release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing published GitHub Release tag (for example v1.14.7)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: npm
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: Download and validate the published candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || exit 2
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft' | grep -qx false
+          mkdir candidate
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "zapagent-${RELEASE_TAG#v}.tgz*" --dir candidate
+          cd candidate
+          sha256sum -c "zapagent-${RELEASE_TAG#v}.tgz.sha256"
+          tar -xOf "zapagent-${RELEASE_TAG#v}.tgz" package/package.json > manifest.json
+          node -e 'const p=require("./manifest.json");if(p.name!=="zapagent"||p.version!==process.env.RELEASE_TAG.slice(1)||p.private)process.exit(1)'
+      - name: Publish verified tarball
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$NODE_AUTH_TOKEN" || { echo 'Configure NPM_TOKEN in the npm environment first' >&2; exit 1; }
+          dist_tag=latest
+          if [[ "$RELEASE_TAG" == *-* ]]; then dist_tag=next; fi
+          npm publish "candidate/zapagent-${RELEASE_TAG#v}.tgz" --access public --tag "$dist_tag" --ignore-scripts

@@ -53,7 +53,7 @@
     "react-devtools-core": "^7.0.1",
     "shiki": "^4.0.2",
     "typescript": "^5.9.3",
-    "zod": "^4.3.6"
+    "zod": "4.6.7"
   },
   "overrides": {
     "@hono/node-server": "1.19.15",
@@ -63,7 +63,9 @@
     "ip-address": "10.7.3",
     "proxy-addr": "2.0.8",
     "qs": "6.16.0",
-    "shell-quote": "1.11.0"
+    "shell-quote": "1.11.0",
+    "body-parser": "2.4.0",
+    "zod": "4.6.7"
   },
   "bin": {
     "zapagent": "src/index.tsx",
