@@ -52,6 +52,9 @@ export interface ApprovalRequest {
   call: ResolvedToolCall;
   effects: ToolEffects;
   proposedGrant: CapabilityGrant;
+  /** Host policy opt-in: start this grant lifetime after approval completes.
+   * Omitted custom policies retain their absolute proposedGrant expiry. */
+  grantTtlMs?: number;
 }
 
 export interface PolicyRequest {

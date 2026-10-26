@@ -1,4 +1,6 @@
-import { describe, expect, it } from "bun:test";
+import { DefaultToolPolicyEngine } from "../../policy/engine.js";
+import { isToolAuthorization } from "../../tools/executor.js";
+import { describe, expect, it, spyOn } from "bun:test";
 import { z } from "zod";
 import {
   ToolExecutor,
@@ -152,4 +154,90 @@ describe("ToolExecutor execution lifecycle", () => {
       .rejects.toThrow("state disk unavailable");
     expect(handlerRan).toBe(false);
   });
+});
+
+
+describe("approval grant activation", () => {
+  it("starts the default grant lifetime after a delayed affirmative approval", async () => {
+    let now = Date.now();
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const executor = new ToolExecutor(confirmRegistry(), {
+        policyEngine: new DefaultToolPolicyEngine({ grantTtlMs: 100 }),
+        onApproval: async () => { now += 1000; return true; },
+      });
+      const authorization = await executor.authorize("confirm_write", { path: "a", content: "x" });
+      if (!isToolAuthorization(authorization)) throw new Error("missing authorization");
+      expect(authorization.grant.expiresAt).toBe(now + 100);
+      expect((await executor.executeAuthorized(authorization)).success).toBe(true);
+      now += 101;
+      expect((await executor.executeAuthorized(authorization)).error).toContain("authorization expired");
+    } finally { clock.mockRestore(); }
+  });
+  it("keeps an absolute custom-policy expiry even when the user approves later", async () => {
+    let now = Date.now();
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const defaults = new DefaultToolPolicyEngine({ grantTtlMs: 100 });
+      const executor = new ToolExecutor(confirmRegistry(), {
+        policyEngine: { evaluate(request) {
+          const decision = defaults.evaluate(request);
+          if (decision.decision === "ask") delete decision.request.grantTtlMs;
+          return decision;
+        } },
+        onApproval: async () => { now += 1000; return true; },
+      });
+      const result = await executor.execute("confirm_write", { path: "a", content: "x" });
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("authorization expired");
+    } finally { clock.mockRestore(); }
+  });
+  it("does not extend a task deadline when approval arrives after that deadline", async () => {
+    let now = Date.now();
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const executor = new ToolExecutor(confirmRegistry(), { onApproval: async () => { now += 1000; return true; } });
+      const result = await executor.execute("confirm_write", { path: "a", content: "x" }, undefined, { deadlineAtMs: now + 100 });
+      expect(result.failure?.code).toBe("DEADLINE_EXCEEDED");
+    } finally { clock.mockRestore(); }
+  });
+  it("does not activate a grant after denial or cancellation", async () => {
+    const controller = new AbortController();
+    const cancelled = new ToolExecutor(confirmRegistry(), { onApproval: async () => { controller.abort(); return true; } });
+    expect((await cancelled.execute("confirm_write", { path: "a", content: "x" }, controller.signal)).failure?.code).toBe("CANCELLED");
+    const denied = new ToolExecutor(confirmRegistry(), { onApproval: async () => false });
+    expect((await denied.execute("confirm_write", { path: "a", content: "x" })).failure?.code).toBe("POLICY_DENIED");
+  });
+});
+
+
+it("activates queued approvals independently after their own affirmative decision", async () => {
+  let now = Date.now();
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  let approveFirst!: (approved: boolean) => void;
+  let requested!: () => void;
+  const entered = new Promise<void>(resolve => { requested = resolve; });
+  let calls = 0;
+  try {
+    const executor = new ToolExecutor(confirmRegistry(), {
+      policyEngine: new DefaultToolPolicyEngine({ grantTtlMs: 100 }),
+      onApproval: async () => {
+        if (++calls === 1) { requested(); return new Promise<boolean>(resolve => { approveFirst = resolve; }); }
+        now += 1000; return true;
+      },
+    });
+    const first = executor.authorize("confirm_write", { path: "a", content: "x" });
+    await entered;
+    const second = executor.authorize("confirm_write", { path: "b", content: "y" });
+    now += 1000; approveFirst(true);
+    const [one, two] = await Promise.all([first, second]);
+    expect(calls).toBe(2);
+    if (!isToolAuthorization(one) || !isToolAuthorization(two)) throw new Error("missing queued authorizations");
+    expect(two.grant.expiresAt).toBe(now + 100);
+    expect((await executor.executeAuthorized(two)).success).toBe(true);
+    // Queue time is excluded, but a completed authorization still expires if
+    // scheduling waits too long after approval.
+    now += 101;
+    expect((await executor.executeAuthorized(two)).error).toContain("authorization expired");
+  } finally { clock.mockRestore(); }
 });

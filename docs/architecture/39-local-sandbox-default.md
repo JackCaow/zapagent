@@ -15,7 +15,7 @@ Linux 环境：本机工具链（Xcode、Swift、npm 全局工具）、浏览器
 | --- | --- |
 | 默认执行位置 | 本机，套 OS 沙箱（macOS Seatbelt / Linux bubblewrap / Windows AppContainer） |
 | VM | 显式 opt-in：配置 `executionBackend: "vm"` 或环境变量 `ZAPCODE_EXECUTION=vm`（环境变量优先） |
-| 沙箱内写入 | 工作区、工作区私有 HOME／缓存／临时目录，以及已存在的包管理器缓存（见下文）；`.git`、`.zapcode` 只读 |
+| 沙箱内写入 | 工作区、工作区私有 HOME／缓存／临时目录，以及已存在的包管理器缓存（见下文）；普通 shell 的 `.git`、`.zapcode` 只读；受信 Git 适配见下文 |
 | 沙箱内读取 | 系统目录、整个工作区、经双向指针校验的 Git worktree 元数据，以及本机工具链只读根 |
 | 网络 | macOS：只能连回环，经本地代理按域名白名单访问；Linux/Windows：目前仍全开（见下文） |
 | 沙箱外重试 | bash 参数 `dangerouslyDisableSandbox: true`，每次调用都需要用户批准 |
@@ -144,12 +144,13 @@ Shell 退出码通常只表示最后一条命令或管道末端的状态。前�
   沙箱外的 `git`/`clang` 指向攻击者的程序。做法是在宿主上用 `xcrun --find git` 解析真实 git，把它所在目录放到沙箱
   `PATH` 最前面（只接受 root 所有、其他人不可写的目录）。于是 `status`、`diff`、`log`、`show`、`blame`、
   公共仓库的 `clone` 和 `ls-remote` 都能在沙箱内工作。
-- **父工作区的 `.git` 仍然整体只读。** `commit`、`checkout`、`merge`、`stash`、`fetch`、`push` 走审批后的沙箱外重试。
+- **普通 shell 的父工作区 `.git` 仍然整体只读。** CLI 对已授权根工作区的单条 `git add`、`git commit -m`、`git stash push/pop`、`git rebase <ref>` 启用受信适配器：严格解析 argv，固定系统 Git，不重新交给 shell；仅该 Git 进程的 OS 沙箱临时允许实际 Git 元数据目录写入。
+  hooks、fsmonitor、签名和交互编辑器关闭，清除继承的 Git 配置重定向。含配置 include、filters、merge drivers、未知本地配置或已有 rebase/sequencer 状态的仓库不走该适配器。复合命令、`-c`、`-C`、交互/exec 选项保留原有权限路径。校验普通 `.git` 目录和双向关联的 linked worktree，不跟随伪造指针或 `.git` 符号链接。SDK 默认不启用该 Host 适配器。
 - **写入型子 agent 的私有 Git 克隆可写。** 宿主通过工作区身份传递该克隆的独立 `.git` 路径；不从模型参数或 `.git` 指针推导授权。`git add` 可在 OS 沙箱内写私有 index 和对象，不获得父仓库或兄弟工作区的写权限。
   私有 Git 配置、hooks、index 和对象均视为不可信。结束时宿主从原始快照建立另一个受信产物仓库，用显式 work-tree 读取子 agent 的工作文件，不在子 agent 的 `.git` 中执行宿主 Git。产物 Git 禁用全局/系统配置、hooks、fsmonitor 和提交签名；合并只使用受信产物仓库。
   为保留 `git add -f` 显式跟踪的被忽略文件，宿主仅复制有大小限制、非符号链接的普通 index/sharedindex 数据，在受信仓库中只读提取文件名。验证路径后重新读取工作文件，不导入子索引中的对象内容或配置；文件名按字面值处理，支持空格、换行和 pathspec 特殊字符。无效索引或不支持的路径会明确失败，不静默遗漏。
 
-**评估过并放弃的方案：让沙箱内的 `git commit` 直接可用。** 这需要放开 `.git` 的一部分写权限，而独立审查三轮，
+**历史上放弃的方案：对任意 shell 放开 `.git` 以支持 `git commit`。** 这需要放开 `.git` 的一部分写权限，而独立审查三轮，
 每次都找到可演示的问题，最后一轮的结论是不能合并：
 
 1. 黑名单（只保护 `hooks`、`config`）：把 `.git` 改名、改里面的 `config` 再改回，之后沙箱外的 git 会执行任意命令；
@@ -161,7 +162,7 @@ Shell 退出码通常只表示最后一条命令或管道末端的状态。前�
    事后扫描并删除新增链接补不全：后台进程在命令返回之后仍可种链接，而且你自己终端里的 git 不受 Zap 控制。
 
 根本矛盾是 `git commit` 必须写一个会被原地覆盖的文件。**只要放开它，就会有一个沙箱外的写穿原语。** 若要支持，
-应当由宿主侧的受信代理在沙箱外执行一小组严格解析的 git 子命令，而不是放开 `.git`。
+因此不能对普通 shell 放开 `.git`。当前实现只为严格校验、禁用可执行配置的受信 Git 进程单独准备 OS 沙箱；普通 shell 和不受支持的 Git 调用不获得该权限。
 
 上述约束针对用户会继续在沙箱外使用的父仓库；子 agent 私有克隆的例外依赖独立产物仓库，不把其 Git 元数据交给宿主执行。
 
