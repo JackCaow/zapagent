@@ -1,3 +1,4 @@
+import { prepareRootGit } from "./root-git.js";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, rmdirSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
@@ -10,7 +11,7 @@ import type {
 } from "./types.js";
 import { WINDOWS_APPCONTAINER_HELPER } from "./windows-appcontainer.js";
 import { localExecutionShell } from "./shell.js";
-import { linkedWorktreeReadRoots, privateGitWriteRoot, macToolShimPath, workspaceRuntimeDirectory, workspaceRuntimeEnvironment, workspaceRuntimeTemporaryDirectory } from "./workspace-runtime.js";
+import { linkedWorktreeReadRoots, privateGitWriteRoot, integrationGitWriteRoots, macToolShimPath, workspaceRuntimeDirectory, workspaceRuntimeEnvironment, workspaceRuntimeTemporaryDirectory } from "./workspace-runtime.js";
 import { NODE_PROXY_PRELOAD } from "./node-proxy-preload.generated.js";
 import { ExecutionBoundaryError, operationFailure } from "./failure.js";
 
@@ -23,6 +24,9 @@ export interface PlatformSandboxOptions {
   /** Host-owned, workspace-scoped home/cache/scratch. Omitted for strict,
    * stateless SDK sandboxes and remote runtimes. */
   workspaceStateRoot?: string;
+  /** Trusted Host opt-in for strictly parsed single Git commands in an authorized root workspace.
+   * Never applies to readonly/shared or isolated child workspaces. */
+  rootWorkspaceGitWrites?: boolean;
   /** Embedder-owned paths that stay writable inside the process sandbox.
    * These are not derived from model/tool grants and must only be supplied by
    * a trusted runtime boundary such as a per-Computer persistent tool store. */
@@ -63,6 +67,7 @@ abstract class CommandWrappingSandbox implements OsSandbox {
     trustedEnvironmentNames: string[] = [],
     networkProxy?: NetworkProxy | (() => NetworkProxy | undefined),
     workspaceStateRoot?: string,
+    private readonly rootWorkspaceGitWrites = false,
   ) {
     this.networkProxy = networkProxy;
     this.workspaceStateRoot = workspaceStateRoot;
@@ -86,7 +91,7 @@ abstract class CommandWrappingSandbox implements OsSandbox {
     },
   ): { executable: string; args: string[]; release?: () => void };
 
-  createContext(input: Parameters<OsSandbox["createContext"]>[0]): SandboxExecutionContext {
+  createContext(input: Parameters<OsSandbox["createContext"]>[0], gitOperation = false): SandboxExecutionContext {
     const status = this.status();
     if (!status.available || status.provider === "none") {
       throw new Error(status.reason ?? "OS sandbox is unavailable");
@@ -95,10 +100,14 @@ abstract class CommandWrappingSandbox implements OsSandbox {
       ? workspaceRuntimeDirectory(this.workspaceStateRoot, input.workspace.root) : undefined;
     const runtimeTemp = runtimeDirectory ? workspaceRuntimeTemporaryDirectory(runtimeDirectory) : undefined;
     const privateGit = privateGitWriteRoot(input.workspace);
+    const rootGit = gitOperation && this.rootWorkspaceGitWrites && input.workspace.mode === "root"
+      && input.grant.filesystem?.write.some(path => canonicalPath(resolve(input.workspace.root, path)) === canonicalPath(input.workspace.root))
+      ? integrationGitWriteRoots(input.workspace.root) : [];
     const writablePaths = [...new Set([
       ...(input.grant.filesystem?.write ?? []),
       ...this.trustedWritablePaths,
       ...(privateGit ? [privateGit] : []),
+      ...rootGit,
       ...(runtimeDirectory ? [runtimeDirectory] : []),
       ...(runtimeTemp ? [runtimeTemp] : []),
     ].map((path) => canonicalPath(resolve(input.workspace.root, path))))];
@@ -114,7 +123,7 @@ abstract class CommandWrappingSandbox implements OsSandbox {
       && input.grant.filesystem?.write.some(path => canonicalPath(path) === canonicalPath(join(input.workspace.root, ".git")));
     const protectedPaths = [".git", ".zapcode"]
       .map((name) => canonicalPath(resolve(input.workspace.root, name)))
-      .filter((path) => path !== privateGit && !(integrationGit && path === canonicalPath(join(input.workspace.root, ".git"))));
+      .filter((path) => path !== privateGit && !rootGit.includes(path) && !(integrationGit && path === canonicalPath(join(input.workspace.root, ".git"))));
     const provider = status.provider;
     const prepare = (
       executable: string,
@@ -184,6 +193,20 @@ abstract class CommandWrappingSandbox implements OsSandbox {
       networkAllowed,
       prepareCommand: prepare,
       prepareShell: (command, options) => {
+        if (!gitOperation && this.rootWorkspaceGitWrites && input.workspace.mode === "root"
+          && input.grant.filesystem?.write.some(path => canonicalPath(resolve(input.workspace.root, path)) === canonicalPath(input.workspace.root))) {
+          let git: ReturnType<typeof prepareRootGit>;
+          try { git = prepareRootGit(command, input.workspace.root, options.cwd); } catch { /* Unsupported repository: retain normal sandbox protection. */ }
+          if (git) {
+            const prepared = this.createContext(input, true).prepareCommand(git.executable, git.args, { ...options, environment: {} });
+            // Remove inherited GIT_* overrides after normal sandbox environment
+            // construction; untrusted tool environment cannot redirect Git.
+            if (process.platform !== "win32") prepared.env.PATH = `${dirname(git.executable)}:/usr/bin:/bin:/usr/sbin:/sbin`;
+            for (const key of Object.keys(prepared.env)) if (/^GIT_/i.test(key)) delete prepared.env[key];
+            for (const [key, value] of Object.entries(git.environment)) if (/^GIT_/i.test(key)) prepared.env[key] = value;
+            return prepared;
+          }
+        }
         const { executable, argsPrefix } = localExecutionShell();
         return prepare(executable, [...argsPrefix, command], options);
       },
@@ -196,7 +219,7 @@ class MacOsSeatbeltSandbox extends CommandWrappingSandbox {
   protected override readonly enforcesNetworkProxy = true;
 
   constructor(options: PlatformSandboxOptions) {
-    super(options.tempRoot, options.trustedWritablePaths, options.trustedEnvironmentNames, options.networkProxy, options.workspaceStateRoot);
+    super(options.tempRoot, options.trustedWritablePaths, options.trustedEnvironmentNames, options.networkProxy, options.workspaceStateRoot, options.rootWorkspaceGitWrites);
     this.executable = options.sandboxExecPath ?? "/usr/bin/sandbox-exec";
   }
 
@@ -264,7 +287,7 @@ class LinuxBubblewrapSandbox extends CommandWrappingSandbox {
   private readonly executable: string;
 
   constructor(options: PlatformSandboxOptions) {
-    super(options.tempRoot, options.trustedWritablePaths, options.trustedEnvironmentNames, undefined, options.workspaceStateRoot);
+    super(options.tempRoot, options.trustedWritablePaths, options.trustedEnvironmentNames, undefined, options.workspaceStateRoot, options.rootWorkspaceGitWrites);
     this.executable = options.bwrapPath ?? findOnPath("bwrap") ?? "bwrap";
   }
 
@@ -366,7 +389,7 @@ class WindowsHelperSandbox extends CommandWrappingSandbox {
   private readonly trace: boolean;
 
   constructor(options: PlatformSandboxOptions) {
-    super(options.tempRoot, options.trustedWritablePaths, options.trustedEnvironmentNames, undefined, options.workspaceStateRoot);
+    super(options.tempRoot, options.trustedWritablePaths, options.trustedEnvironmentNames, undefined, options.workspaceStateRoot, options.rootWorkspaceGitWrites);
     this.executable = options.windowsHelperPath
       ?? join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
     this.trace = options.trace === true;

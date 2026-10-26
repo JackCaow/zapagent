@@ -97,14 +97,14 @@ export class DefaultToolPolicyEngine implements ToolPolicyEngine {
     if (permission === "confirm") {
       return {
         decision: "ask",
-        request: { call: request.call, effects: request.effects, proposedGrant: grant },
+        request: { call: request.call, effects: request.effects, proposedGrant: grant, grantTtlMs: this.grantTtlMs },
         reason: "tool requires confirmation",
       };
     }
     if (request.effects.confidence === "unknown" && this.askOnUnknownEffects) {
       return {
         decision: "ask",
-        request: { call: request.call, effects: request.effects, proposedGrant: grant },
+        request: { call: request.call, effects: request.effects, proposedGrant: grant, grantTtlMs: this.grantTtlMs },
         reason: "tool effects are unknown",
       };
     }

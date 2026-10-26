@@ -803,9 +803,18 @@ export class ToolExecutor {
             failure: operationFailure("APPROVAL_REQUIRED", "approval", context?.toolCallId),
           };
     }
-    return this.requestApproval(tool, name, parsedArgs, effects, signal, context).then((result) => (
-      result === true ? authorized() : result
-    ));
+    return this.requestApproval(tool, name, parsedArgs, effects, signal, context).then((result) => {
+      if (result !== true) return result;
+      const authorization = authorized();
+      const ttl = policy.request.grantTtlMs;
+      // Human/approval-queue wait consumes no execution authority lifetime.
+      // Only a policy that explicitly supplies a duration may activate a fresh
+      // expiry. Absolute custom-policy expiries and task deadlines stay intact.
+      if (typeof ttl === "number" && Number.isFinite(ttl) && ttl > 0) {
+        authorization.grant = { ...grant, expiresAt: Date.now() + ttl };
+      }
+      return authorization;
+    });
   }
 
   private async requestApproval(

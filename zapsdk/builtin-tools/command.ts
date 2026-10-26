@@ -24,6 +24,8 @@ export interface ExecuteCommandOptions {
    * launch an interpreter; the execution broker owns that decision. */
   executionShell?: string;
   sandboxTemporaryDirectory?: ExecutionEnvironmentFacts["sandboxTemporaryDirectory"];
+  /** Host advertises its scoped, sandboxed root Git adapter. */
+  sandboxGitIntegration?: boolean;
   /** Inject a shared TaskStore to enable the `run_in_background:true`
    *  flag. When omitted (or when `ZAPCODE_DISABLE_BACKGROUND_TASKS=1` is
    *  set), background fields are stripped from the schema entirely — the
@@ -243,6 +245,9 @@ export function executeCommandTool(options: ExecuteCommandOptions = {}): Tool {
     "Exit 0 reports final shell status only. Inspect stderr for warnings or masked failures; do not auto-replay side effects. Chain dependencies with &&. Pipelines report the last stage: check stages or use supported pipefail. Use check_steps for independent checks; each uses a fresh shell and stops on nonzero.",
     "cwd selects the starting directory, not a narrower workspace. For external inputs/outputs declare read_paths/write_paths (relative to cwd); these need file authorization. A prior Read alone does not grant Bash access. Sandboxed .git/.zapcode remain read-only.",
   );
+  if (options.sandboxGitIntegration) {
+    promptLines.push("For root-repository Git writes, use standalone Bash calls: git add <paths>, git commit -m <message>, git stash push/pop, git rebase <ref>. The Host runs supported commands using trusted Git inside the OS sandbox. Do not combine them with &&, cd, redirects, -c/-C or interactive options. Arbitrary shell writes to .git remain blocked; unsupported or executable Git config retains the normal approval path.");
+  }
   if (options.sandboxTemporaryDirectory) {
     promptLines.push(
       `Local sandbox: expand ${options.sandboxTemporaryDirectory.environmentVariables.join(", ")} for a private writable scratch directory; avoid hard-coded /tmp or disposable project files.`,

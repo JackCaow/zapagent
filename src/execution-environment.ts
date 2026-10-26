@@ -22,7 +22,7 @@ export interface ExecutionEnvironment {
   capacity?: ExecutionCapacityFacts
   // No prompt, model, retry, budget or completion policy is accepted here.
   commandOptions: Pick<ExecuteCommandOptions,
-    "disableBackgroundTasks" | "restrictedNetwork" | "preserveEnvironment" | "allowUnsandboxed" | "sandboxNetwork" | "sandboxExcludedCommands">
+    "disableBackgroundTasks" | "restrictedNetwork" | "preserveEnvironment" | "allowUnsandboxed" | "sandboxNetwork" | "sandboxExcludedCommands" | "sandboxGitIntegration">
 }
 
 export type ExecutionBackend = "local" | "vm"
@@ -123,6 +123,7 @@ export function createExecutionEnvironment(
   const local = new DefaultExecutionBroker({
     services: serviceOwner,
     sandbox: createPlatformSandbox({
+      rootWorkspaceGitWrites: true,
       workspaceStateRoot: resident || installation || cloud ? undefined : join(getAppDataDir(), "sandbox", "workspaces"),
       // Trusted outer mounts/egress are enforcement details, not Agent policy.
       trustedWritablePaths: resident ? ["/nix"] : (installation || cloud ? [] : hostPackageWriteRoots()),
@@ -148,6 +149,7 @@ export function createExecutionEnvironment(
       vm: cloud ? createZapVmCloudExecutionBroker(cloud) : undefined,
     }),
     commandOptions: {
+      sandboxGitIntegration: hostSandboxed && sandboxMode !== "disabled" && local.sandboxStatus().available,
       // These transports cannot retain a detached child beyond its lease.
       // Other backends defer to the user's env setting instead of overriding it.
       disableBackgroundTasks: cloud !== undefined || resident ? true : undefined,
