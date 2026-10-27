@@ -30,16 +30,16 @@ const { REQUIRED_COMPACT_SUMMARY_HEADINGS } = await import(root + "/zapsdk/conte
 const { useAgentRunner } = await import(root + "/src/hooks/useAgentRunner.ts")
 const summary = REQUIRED_COMPACT_SUMMARY_HEADINGS.map((heading: string) => `# ${heading}\nSynthetic fixture facts.`).join("\n\n")
 const config = getDefaultConfig()
-const selected = createCustomProvider({ name: "fixture", baseURL: "https://fixture.invalid", apiKey: "", models: ["fixture"], contextWindow: 10000 })
+const selected = createCustomProvider({ name: "fixture", baseURL: "https://fixture.invalid", apiKey: "", models: ["fixture"], contextWindow: 100000 })
 config.providers = [selected]; config.active = { providerId: selected.id, model: "fixture" }
 config.compaction.reserved = 1000; config.maxTokens = 1000
-for (let i = 0; i < 30; i++) conversation.add({ role: i % 2 ? "assistant" : "user", content: "history ".repeat(1000) })
+for (let i = 0; i < 30; i++) conversation.add({ role: i % 2 ? "assistant" : "user", content: "history ".repeat(1200) })
 const before = conversation.estimatedTokens
 let calls = 0, compactCompleted = false
 const options = { currentSessionId: "fixture", config, conversation,
   agentRef: { current: {
     provider: { async call() { calls++; return { type: "text", text: summary, usage: { inputTokens: 100, outputTokens: 20 } } } },
-    registry: { definitions() { throw new Error("END_AFTER_PRETURN") } }, executor: {},
+    registry: new (await import(root + "/zapsdk/tools/registry.ts")).ToolRegistry(), executor: {},
   } },
   autoMemory: { buildInstructions: async () => "" }, agentLogger: {},
   addLog: (...args: unknown[]) => logs.push(args), replaceLog() {}, peekNextLogId: () => 0,
@@ -53,9 +53,27 @@ if (process.env.COMPACT_MODE === "manual") {
     getContextTokens: () => before,
   })
 } else {
-  const hook = useAgentRunner(options)
-  await hook.runAgent("fixture")
+  const { LoopAgent } = await import(root + "/zapsdk/agent/loop.ts")
+  const { ToolExecutor } = await import(root + "/zapsdk/tools/executor.ts")
+  const { createRunHandlers } = await import(root + "/src/agent/wireRunHandlers.ts")
+  const { resolveActiveContextLimits } = await import(root + "/src/context-budget.ts")
+  const limits = resolveActiveContextLimits(config)
+  const registry = options.agentRef.current.registry
+  const loop = new LoopAgent({ provider: { ...options.agentRef.current.provider,
+    async *stream() { yield { type: "text_delta", text: "done" }; yield { type: "done", usage: { inputTokens: 10, outputTokens: 1 } } } },
+    registry, executor: new ToolExecutor(registry), conversation, contextWindow: 100000,
+    autoCompactEnabled: true, autoCompactTokenThreshold: limits.compactAt,
+    autoCompactThreshold: limits.compactAt * 4, maxSteps: 1 })
+  createRunHandlers({ currentConfig: config, controller: new AbortController(),
+    preview: new Proxy({}, { get: () => () => {} }),
+    setStatus() {}, setStep() {}, setActiveTool() {}, setActiveToolBytes() {},
+    setContextTokens() {}, setContextPending() {},
+    addLog: options.addLog, replaceLog() {}, peekNextLogId: () => 0,
+    compactLogs: options.compactLogs,
+    onUsagePersistenceFailure: (failure: any) => { if (failure) logs.push(failure.error) },
+  } as any).wire(loop as any)
+  await loop.run("fixture")
 }
 console.log(JSON.stringify({ calls, compactCompleted, before, after: conversation.estimatedTokens,
-  journalRows: journals.length, warnings, logs, stateUpdates: stateUpdates.filter(value => typeof value !== "function") }))
+  journalRows: journals.filter((row: any) => row[3]?.purpose === "maintenance").length, warnings, logs, stateUpdates: stateUpdates.filter(value => typeof value !== "function") }))
 process.exit(0)

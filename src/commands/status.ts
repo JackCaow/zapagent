@@ -383,6 +383,7 @@ export function buildStatusText(
     if (memoryUtility) lines.push(`Memory utility:  ${memoryUtility}`)
   }
   lines.push(`Auto-compact:    ${config.compaction.auto ? "on" : "off"}`)
+  lines.push("Prune:           not active (reserved setting; overflow recovery is independent)")
   lines.push(`Memory dir:      ${shortPath(autoMemory.memoryDir)}`)
   lines.push(`Global memory:   ${shortPath(globalMemoryDir)}`)
   lines.push("")

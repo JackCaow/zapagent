@@ -2,8 +2,22 @@ import { describe, expect, it } from "bun:test"
 import { dispatchSlashCommand } from "../../src/commands/dispatcher.js"
 import { conversation } from "../../src/singletons.js"
 import type { AppConfig } from "../../src/config.js"
+import { z } from "zod"
 
 describe("dispatchSlashCommand /compact diagnostics", () => {
+  it("keeps the last actual runtime schemas when the factory registry is smaller", async () => {
+    const original = conversation.compress
+    const context = conversation.getCompactionContext()
+    const runtimeTools = [{ name: "runtime_agent", description: "runtime-only", parameters: z.object({ task: z.string() }) }]
+    let used: unknown
+    conversation.setCompactionContext({ tools: runtimeTools })
+    conversation.compress = async (_provider, options) => { used = options?.tools; return null }
+    try {
+      await dispatchSlashCommand("/compact", makeDeps({ agentRef: { current: { provider: {}, registry: { definitions: () => [] } } as any } }))
+      expect(used).toEqual(runtimeTools)
+    } finally { conversation.compress = original; conversation.setCompactionContext(context) }
+  })
+
   it("records manual compact failures for /status diagnostics", async () => {
     const originalCompress = conversation.compress
     const toasts: Array<{ text: string; variant?: string }> = []

@@ -8,6 +8,7 @@ import type { AgentEvent, ContextDiagnostics } from "../../zapsdk/agent/events.j
 import type { LogEntry } from "../../src/ui/types.js"
 import { batchAgentGroups, groupLogs, partitionRenderItems } from "../../src/ui/group-logs.js"
 import { PERSISTED_OUTPUT_TAG, PERSIST_THRESHOLD_CHARS } from "../../zapsdk/utils/tool-result-storage.js"
+import { tokenAccounting } from "../../src/singletons.js"
 
 describe("contextTokensFromRunUsage", () => {
   it("sums fresh input, cache reads, and cache writes for context occupancy", () => {
@@ -55,6 +56,30 @@ describe("contextTokensFromRunUsage", () => {
 })
 
 describe("createRunHandlers context diagnostics", () => {
+  it("uses complete compact request estimates without double overhead and exposes lossy/soft-target status", () => {
+    const agent = new FakeAgent(), values: number[] = [], logs: string[] = []
+    const previous = tokenAccounting.promptOverhead
+    tokenAccounting.promptOverhead = 9000
+    try {
+      createRunHandlers({
+        currentConfig: { providers: [], active: { providerId: "", model: "" }, serperKey: "", maxTokens: 100,
+          maxSteps: 10, customSystemPrompt: "", compaction: { auto: true, prune: true, reserved: 0 }, mcpServers: [], permissionMode: "default" },
+        controller: new AbortController(), preview: {} as any,
+        setStatus() {}, setStep() {}, setActiveTool() {}, setActiveToolBytes() {}, setContextPending() {},
+        setContextTokens: value => values.push(value), compactLogs() {},
+        addLog: (_type, text) => logs.push(text), replaceLog() {}, peekNextLogId: () => 0,
+        persistCompactSummary: async () => null,
+      }).wire(agent as any)
+      agent.emit({ type: "observation", kind: "autocompact_start", detail: { tokenEstimate: 831508, trigger: "tokens", messageCount: 40 } })
+      expect(values.at(-1)).toBe(831508)
+      agent.emit({ type: "observation", kind: "autocompact_done", detail: { outputTokens: 500000,
+        status: "target_not_met", sourceTruncated: true, summary: "summary", messagesBefore: 40, messagesAfter: 5 } })
+      expect(values.at(-1)).toBe(500000)
+      expect(logs.some(line => line.includes("soft target"))).toBe(true)
+      expect(logs.some(line => line.includes("historical detail was omitted"))).toBe(true)
+    } finally { tokenAccounting.promptOverhead = previous }
+  })
+
   it("updates one recovery row and names payload limits accurately", () => {
     const agent = new FakeAgent()
     const added: string[] = []

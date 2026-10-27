@@ -76,6 +76,7 @@ export { ResultCompressor, type ResultCompressorOptions } from "./context/result
 export { Microcompact, type MicrocompactOptions } from "./context/microcompact.js";
 export { ReactiveCompact, type ReactiveCompactOptions } from "./context/reactive-compact.js";
 export { AutoCompact, type AutoCompactOptions } from "./context/autocompact.js";
+export { CompactInputReductionError, compactDecision, planCompact, type CompactOptions, type CompactPlan, type CompactResult } from "./context/compact.js";
 export { restoreRecentFiles } from "./context/restore-files.js";
 export { generateToolUseSummary, type ToolCallInfo } from "./context/tool-use-summary.js";
 

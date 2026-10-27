@@ -11,7 +11,6 @@ import { AgentLogger } from "../../zapsdk/debug/agent-logger.js"
 import type { CheckpointManager } from "../../zapsdk/checkpoint/index.js"
 import { AutoMemory } from "../../zapsdk/memory/auto-memory.js"
 import type { ConversationManager } from "../../zapsdk/index.js"
-import { restoreRecentFiles } from "../../zapsdk/index.js"
 import { extractFilesFromSummary } from "../ui/compact-utils.js"
 import { buildCustomSystemPrompt, buildSystemPrompt, deriveCompaction, getActiveProvider } from "../config.js"
 import { appendUsage, saveLastOutput, getCurrentSessionId } from "../session.js"
@@ -598,97 +597,9 @@ export function useAgentRunner({
       const contextLimits = resolveActiveContextLimits(currentConfig)
       const ctxWin = contextLimits.contextWindow
       const thresholds = syncConversationCompactionThresholds(conversation, contextLimits)
-      if (currentConfig.compaction.auto) {
-      const estimatedProviderInput = estimateProviderInputTokens(
-        conversation.estimatedTokens,
-        tokenAccounting.promptOverhead,
-      )
-      if (shouldPreTurnAutoCompact(conversation.estimatedTokens, tokenAccounting.promptOverhead, thresholds.triggerAt)) {
-        setStatus("compacting")
-        // System log mirrors the in-loop autocompact_start path so the user
-        // gets the same "🗜 Compacting context — ..." marker for all three
-        // compact entry points. compactLogs() will replace the log array
-        // post-compact anyway, but during the 3-10s wait the row is the
-        // most legible "this is why your turn is paused" signal.
-        const ctxTokens = estimatedProviderInput
-        addLog("system", `🗜 Compacting context — ~${Math.round(ctxTokens / 1000)}k tokens (auto, pre-turn)`)
-        try {
-          // Capture pre-compact messages BEFORE compress so the post-compact
-          // file restoration walks the original history. After compress those
-          // turns are gone — restoring from the post-compact view would only
-          // see the summary turn and find no read_file tool calls. Use the
-          // full backing view here; getMessages() may return a truncated
-          // provider view exactly when compaction is needed.
-          const preMessages = conversation.getAllMessages()
-          const compactResult = await conversation.compress(maintenanceMeter.wrap(provider, "maintenance"), {
-            targetTokens: thresholds.keepFloorTokens,
-            signal: controller.signal,
-          })
-          const compactFailureReason = preTurnCompactFailureReason(
-            compactResult,
-            conversation.lastCompressionFailureReason,
-          )
-          if (compactFailureReason) {
-            appLogger.warn("compact_failed", {
-              phase: "pre_turn",
-              error: compactFailureReason,
-              conversationTokens: conversation.estimatedTokens,
-              promptOverhead: tokenAccounting.promptOverhead,
-              triggerAt: thresholds.triggerAt,
-            })
-            setCompactFailure({ phase: "pre_turn", error: compactFailureReason })
-            addLog("error", `✗ Context compact failed (pre-turn): ${compactFailureReason}`)
-          } else {
-            const successfulCompact = compactResult as NonNullable<typeof compactResult>
-            // Re-inject the most recently read files as a synthetic user turn
-            // — same behaviour as the in-loop AutoCompact path. Without this
-            // the agent re-Reads the same files the summary mentions but
-            // doesn't contain.
-            const restored = await restoreRecentFiles(preMessages, { maxTokens: Math.min(2048, Math.max(0, thresholds.keepFloorTokens - conversation.estimatedTokens)) })
-            if (restored) {
-              conversation.commitTurn({ kind: "user", content: restored })
-            }
-            // Persist the durable sections (decisions / errors / files) to the
-            // project's memory dir so they survive compact-of-compact decay.
-            // Fire-and-forget — best effort, never blocks the turn.
-            persistCompactSummaryBestEffort(successfulCompact.summary, autoMemory, {
-              logger: appLogger,
-              onMemoryFailure: setMemoryFailure,
-            })
-            // Replace the in-memory transcript with the boundary marker so
-            // the user sees the same "✻ Conversation compacted — N→M msgs
-            // · K files touched" row that the in-loop and manual paths
-            // emit. Without this, pre-turn compact silently swallowed the
-            // previous transcript without any persistent marker — the
-            // start-log row earlier in this block gets buried under the
-            // upcoming agent reply.
-            compactLogs(
-              successfulCompact.summary,
-              successfulCompact.before,
-              successfulCompact.after,
-              extractFilesFromSummary(successfulCompact.summary),
-            )
-          }
-          setContextTokens(
-            conversation.estimatedTokens + tokenAccounting.promptOverhead,
-            "estimated",
-            null,
-          )
-        } catch (err) {
-          const error = err instanceof Error ? err.message : String(err)
-          appLogger.warn("compact_failed", {
-            phase: "pre_turn",
-            error,
-            conversationTokens: conversation.estimatedTokens,
-            promptOverhead: tokenAccounting.promptOverhead,
-            triggerAt: thresholds.triggerAt,
-          })
-          setCompactFailure({ phase: "pre_turn", error })
-          // Keep the turn moving. The in-loop compact / reactive-compact paths
-          // still get a chance to recover if the next provider call overflows.
-        }
-      }
-    }
+      // The first Loop step is the pre-turn maintenance boundary as well.
+      // It sees the newly assembled system/schema/attachments and user input,
+      // so TUI and headless cannot compact different request views here.
 
     // ── System prompt ──
     // Custom systemPrompt path (skills / /init / /commit): the default

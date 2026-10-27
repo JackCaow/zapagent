@@ -10,7 +10,9 @@ import {
   resolveEffortInput,
   setEffort,
   validateConfig,
+  getActiveMaxOutputTokens,
 } from "../config.js"
+import { TokenCounter } from "../../zapsdk/context/token-counter.js"
 import { resolveActiveContextLimits } from "../context-budget.js"
 import type { CheckpointManager } from "../../zapsdk/checkpoint/index.js"
 import { conversation, autoMemory } from "../singletons.js"
@@ -21,7 +23,6 @@ import {
   readCurrentSessionLogs,
   startNewSession,
 } from "../session.js"
-import { restoreRecentFiles } from "../../zapsdk/index.js"
 import { extractFilesFromSummary } from "../ui/compact-utils.js"
 import { manualCompactFailureReason } from "../agent/compactDiagnostics.js"
 import {
@@ -159,7 +160,7 @@ export interface DispatchSlashCommandDeps {
   onMemoryFailure?: (failure: MemoryFailureDiagnostic | undefined) => void
   /** Refreshes the shared context meter after commands mutate conversation
    * history outside the normal agent event stream (currently /compact). */
-  onContextChanged?: () => void
+  onContextChanged?: (requestTokens?: number) => void
   /** Bind manual compaction to the AbortController used by Esc/Ctrl+C. */
   beginManualCompact?: () => AbortController
   /** Release the controller only when this operation still owns it. */
@@ -521,14 +522,19 @@ export function dispatchSlashCommand(
             try { recordMaintenanceUsage(usage) }
             catch (error) { deps.addToast(`Usage history could not be saved: ${String(error)}`, { variant: "error" }) }
           })
+          const limits = resolveActiveContextLimits(deps.configRef.current)
+          const counter = new TokenCounter(() => deps.agentRef.current.provider.getImageTokenContext?.() ?? {})
           const result = await conversation.compress(meter.wrap(deps.agentRef.current.provider, "maintenance"), {
-            force: true,
-            signal: controller.signal,
+            force: true, signal: controller.signal, counter,
+            contextWindow: limits.contextWindow, inputTokenLimit: limits.inputLimit,
+            reservedOutputTokens: limits.reservedOutputTokens,
+            outputTokenCeiling: getActiveMaxOutputTokens(deps.configRef.current),
+            targetTokens: limits.keepFloorTokens, restoreFiles: true,
+            tools: conversation.getCompactionContext().tools ?? deps.agentRef.current.registry?.definitions() ?? [],
           })
           if (controller.signal.aborted) {
             throw controller.signal.reason ?? new Error("Compact cancelled")
           }
-          const limits = resolveActiveContextLimits(deps.configRef.current)
           const thresholds = {
             triggerAt: limits.compactAt,
             keepFloorTokens: limits.keepFloorTokens,
@@ -545,10 +551,6 @@ export function dispatchSlashCommand(
             deps.onCompactFailure?.({ phase: "manual", error: failureReason })
             deps.addToast(`Compact failed: ${failureReason}`, { variant: "error" })
           } else if (result) {
-            const restored = await restoreRecentFiles(preMessages, { maxTokens: Math.min(2048, Math.max(0, thresholds.keepFloorTokens - conversation.estimatedTokens)) })
-            if (restored) {
-              conversation.commitTurn({ kind: "user", content: restored })
-            }
             // Persist durable sections (decisions / errors / files) so they
             // survive compact-of-compact decay. Fire-and-forget.
             persistCompactSummaryBestEffort(result.summary, autoMemory, {
@@ -556,7 +558,9 @@ export function dispatchSlashCommand(
               persist: deps.persistCompactSummary,
             })
             deps.compactLogs(result.summary, result.before, result.after, extractFilesFromSummary(result.summary))
-            deps.onContextChanged?.()
+            if (result.status === "target_not_met") deps.addToast("Compacted; protected recent input exceeds the soft target but fits the context limit.", { variant: "warning" })
+            if (result.sourceTruncated) deps.addToast("Compact used bounded history previews; some historical detail was omitted.", { variant: "warning" })
+            deps.onContextChanged?.(result.outputTokens)
             deps.onCompactFailure?.(undefined)
             deps.addToast(`Compacted ${result.before}→${result.after} msgs`, { variant: "success" })
           } else {

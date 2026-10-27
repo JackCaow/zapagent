@@ -568,6 +568,8 @@ describe("LoopAgent context diagnostics", () => {
       },
     };
     const conversation = new ConversationManager({ maxMessages: 100 });
+    conversation.add({ role: "user", content: `old context ${"x".repeat(20000)}` });
+    conversation.add({ role: "assistant", content: "previous answer" });
     const agent = new LoopAgent({
       provider,
       registry: new ToolRegistry(),
@@ -577,7 +579,7 @@ describe("LoopAgent context diagnostics", () => {
       maxSteps: 1,
     });
 
-    await agent.run(`fresh request ${"x".repeat(20000)}`, {
+    await agent.run("fresh request", {
       contextPrefix: () => "<system-context>\nvolatile memory\n</system-context>",
     });
 

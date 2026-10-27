@@ -6,6 +6,7 @@ import {
   resolveProviderContextWindow,
   type AppConfig,
 } from "./config.js"
+import { compactBudget } from "../zapsdk/context/compact-budget.js"
 import { CONTEXT_INPUT_SAFETY_MARGIN_TOKENS } from "../zapsdk/agent/context-limits.js"
 
 export type ContextUsageSource = "provider" | "estimated" | "restored" | "pending"
@@ -132,16 +133,8 @@ export function resolveActiveContextLimits(config: AppConfig): ContextLimits {
   const metadata = provider?.modelMetadata?.[config.active.model]
   const inputLimit = positiveInteger(metadata?.inputLimit)
   const derived = deriveCompaction(contextWindow)
-  const advertisedInputCapacity = Math.min(
-    contextWindow - derived.reserveForOutput,
-    inputLimit ?? contextWindow - derived.reserveForOutput,
-  )
-  const effectiveInputLimit = Math.max(
-    1,
-    advertisedInputCapacity - CONTEXT_INPUT_SAFETY_MARGIN_TOKENS,
-  )
-  const compactAt = Math.max(1, Math.floor(effectiveInputLimit * 0.80))
-  const keepFloorTokens = Math.max(1, Math.floor(effectiveInputLimit * 0.40))
+  const budget = compactBudget({ contextWindow, inputTokenLimit: inputLimit, reservedOutputTokens: derived.reserveForOutput })!
+  const { effectiveInputLimit, compactAt, keepFloorTokens } = budget
   return {
     contextWindow,
     ...(inputLimit ? { inputLimit } : {}),

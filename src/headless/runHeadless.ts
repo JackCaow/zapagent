@@ -596,6 +596,7 @@ export async function runHeadless(args: HeadlessArgs, host: HeadlessHost = {}): 
       maxToolRetries: 2,
       autoCompactThreshold: thresholds.triggerAt * 4,
       autoCompactTokenThreshold: thresholds.triggerAt,
+      autoCompactEnabled: config.compaction.auto,
       contextWindow: ctxWin,
       inputTokenLimit: contextLimits.inputLimit,
       outputTokenCeiling: getActiveMaxOutputTokens(config),
