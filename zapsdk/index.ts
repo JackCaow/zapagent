@@ -152,3 +152,5 @@ export { EXECUTION_CONTRACT_VERSION, ExecutionOperationSchema, BackendCapabiliti
 export * from "./services/index.js";
 
 export { createResultSourceGuard, ResultSourcePolicySchema, type ResultSourcePolicy, type ToolResultGuard } from "./tools/result-source-policy.js";
+
+export { planPrune, type PruneResult } from "./context/prune.js";

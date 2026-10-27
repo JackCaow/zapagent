@@ -1,3 +1,4 @@
+import { RequestCacheTracker, scopeRequestCacheShape } from "../context/request-cache.js";
 import { backgroundTaskLifecycle, describeBackgroundTaskLifecycle, type BackgroundTaskOwner } from "../tasks/lifecycle.js";
 import { describeCheckpointCoverage } from "../checkpoint/facts.js";
 import { conciseAgentProtocol, DELIVERABLE_SCOPE_GUIDANCE, resolvePromptProfile, type PromptProfile } from "./prompt-profile.js";
@@ -62,6 +63,7 @@ import { maybePersistToolResult, PERSIST_THRESHOLD_CHARS } from "../utils/tool-r
 import { countCodePoints, sliceHeadCodePoints } from "../utils/logical-lines.js";
 import { createHash, randomUUID } from "node:crypto";
 import { TokenCounter } from "../context/token-counter.js";
+import { planPrune, PruneGate } from "../context/prune.js";
 import { compactBudget } from "../context/compact-budget.js";
 import { CompactInputReductionError, compactDecision, compactRequestTokens, planCompact, type CompactOptions } from "../context/compact.js";
 import {
@@ -218,6 +220,10 @@ export interface SubagentConfig {
  */
 export interface SubagentFactoryArgs {
   autoCompactEnabled?: boolean;
+  /** Pressure-gated old-output pruning; opt-in for legacy SDK callers. */
+  pruneEnabled?: boolean;
+  /** Non-secret Host connection identity used only for local cache statistics. */
+  requestCacheScope?: string;
   inheritedInstructions?: string;
   promptProfile?: PromptProfile;
   getResultSchema?: () => "outcome-v1" | "legacy";
@@ -255,6 +261,10 @@ export type SubagentFactory = (args: SubagentFactoryArgs) => Tool;
 export interface LoopAgentOptions {
   /** Disable proactive summaries; manual and bounded overflow recovery remain available. */
   autoCompactEnabled?: boolean;
+  /** Pressure-gated old-output pruning; opt-in for legacy SDK callers. */
+  pruneEnabled?: boolean;
+  /** Non-secret Host connection identity used only for local cache statistics. */
+  requestCacheScope?: string;
   /** Already metered host maintenance for this run; never charged twice. */
   initialUsage?: TokenUsage;
   provider: LLMProvider;
@@ -482,6 +492,10 @@ export class LoopAgent {
   private autoCompactCharThreshold: number;
   private autoCompactTokenThreshold?: number;
   private autoCompactEnabled: boolean;
+  private pruneEnabled: boolean;
+  private requestCacheScope?: string;
+  private localPruneGate = new PruneGate();
+  private localRequestCacheTracker = new RequestCacheTracker();
   private compactTransientMessages: Message[] = [];
   private protectedUserText?: string;
   private storageSessionId: string;
@@ -495,6 +509,7 @@ export class LoopAgent {
   // via lambda to defer `this.emitter` capture until after construction.
   private reactiveCompact = new ReactiveCompact({
     onRetry: (detail) => {
+      this.requestCacheTracker.markMaintenance("recovery");
       this.emitter.emit({
         type: "observation",
         kind: "reactive_compact",
@@ -564,6 +579,8 @@ export class LoopAgent {
     });
     this.autoCompactTokenThreshold = options.autoCompactTokenThreshold;
     this.autoCompactEnabled = options.autoCompactEnabled ?? true;
+    this.pruneEnabled = options.pruneEnabled ?? false;
+    this.requestCacheScope = options.requestCacheScope;
     this.storageSessionId = options.storageSessionId ?? randomUUID();
     this.storageProjectCwd = options.storageProjectCwd ?? process.cwd();
     this.sessionId = options.sessionId ?? "default";
@@ -619,6 +636,8 @@ export class LoopAgent {
       contextWindow: this.contextWindow, inputTokenLimit: this.inputTokenLimit,
       outputTokenCeiling: this.outputTokenCeiling, reservedOutputTokens: this.reservedOutputTokens,
       autoCompactEnabled: this.autoCompactEnabled,
+      pruneEnabled: this.pruneEnabled,
+      requestCacheScope: this.requestCacheScope,
       storageProjectCwd: this.storageProjectCwd,
       subagent: options.subagent, factory: options.subagentFactory,
       promptProfile: options.promptProfile,
@@ -1090,7 +1109,8 @@ export class LoopAgent {
         const maintenanceRequest = getMessages();
         this.compactTransientMessages = maintenanceRequest.filter(message => message.cache?.transient);
         this.conversation?.setCompactionContext(this.compactOptions(tools));
-        let maintenanceChanged = await this.tryAutoCompact(state, getMessagesForMaintenance, replaceMessages, { signal, startedAt, protectedUserText: input });
+        let maintenanceChanged = await this.tryPrune(getMessagesForMaintenance, replaceMessages, { signal, startedAt, protectedUserText: input });
+        maintenanceChanged = await this.tryAutoCompact(state, getMessagesForMaintenance, replaceMessages, { signal, startedAt, protectedUserText: input }) || maintenanceChanged;
 
         // Maintenance may await a remote summarizer past cancellation or the
         // finalization deadline. Do not claim pending input after either one.
@@ -1784,6 +1804,46 @@ export class LoopAgent {
     return decision;
   }
 
+  /** One maintenance boundary after complete tool groups, before provider I/O. */
+  private async tryPrune(getMessages: GetMessages, replaceMessages: ReplaceMessages,
+    options: { signal?: AbortSignal; startedAt: number; protectedUserText?: string }): Promise<boolean> {
+    if (!this.pruneEnabled) return false;
+    const snapshot = this.conversation?.getSnapshot();
+    const messages = snapshot?.messages ?? structuredClone(getMessages());
+    const budget = compactBudget(this.compactOptions());
+    const compactOptions = { ...this.compactOptions(), ...(budget ? { triggerAtTokens: this.autoCompactTokenThreshold ?? budget.compactAt, charThreshold: undefined } : {}), protectedUserText: options.protectedUserText, signal: options.signal };
+    if (!compactDecision(messages, { ...compactOptions, autoEnabled: true }).shouldCompact) return false;
+    const beforeHash = contextFingerprint(messages);
+    const decision = compactDecision(messages, { ...compactOptions, autoEnabled: true });
+    const threshold = compactOptions.triggerAtTokens ?? Math.floor((compactOptions.charThreshold ?? 320000) / 4);
+    const gate = this.conversation?.pruneGate ?? this.localPruneGate;
+    if (!gate.canAttempt(beforeHash, decision.tokens, threshold, budget?.effectiveInputLimit)) return false;
+    this.emitter.emit({ type: "observation", kind: "prune_start", detail: { reason: "context_pressure" } });
+    // Yield once so a pending cancellation or steering update can win the CAS.
+    await Promise.resolve();
+    if (options.signal?.aborted) throw options.signal.reason ?? new Error("Prune cancelled");
+    if (this.progressController.shouldReserveFinalization(options.startedAt)) return false;
+    const result = planPrune(messages, compactOptions);
+    if (options.signal?.aborted) throw options.signal.reason ?? new Error("Prune cancelled");
+    if (this.progressController.shouldReserveFinalization(options.startedAt)) return false;
+    if (result.status !== "pruned") {
+      if (contextFingerprint(getMessages()) === beforeHash) gate.record(beforeHash, result.outputTokens, threshold);
+      this.emitter.emit({ type: "observation", kind: "prune_skipped", detail: { reason: result.status } });
+      return false;
+    }
+    if (options.signal?.aborted) throw options.signal.reason ?? new Error("Prune cancelled");
+    if (contextFingerprint(getMessages()) !== beforeHash) {
+      this.emitter.emit({ type: "observation", kind: "prune_skipped", detail: { reason: "revision_conflict" } });
+      return false;
+    }
+    replaceMessages(result.messages, snapshot?.revision);
+    this.requestCacheTracker.markMaintenance("prune");
+    gate.record(result.afterHash, result.outputTokens, threshold);
+    const { messages: _messages, ...detail } = result;
+    this.emitter.emit({ type: "observation", kind: "prune_done", detail: { ...detail, reason: "context_pressure" } });
+    return true;
+  }
+
   /** Run AutoCompact if the context is large enough and has grown meaningfully
    *  since the previous attempt. Returns true when a compact attempt happened. */
   private async tryAutoCompact(
@@ -1856,6 +1916,7 @@ export class LoopAgent {
       if (compactSignal?.aborted) throw compactSignal.reason ?? new Error("Compact cancelled");
       if (contextFingerprint(getMessages()) !== originalFingerprint) throw new Error("Context changed during compaction (revision conflict)");
       replaceMessages(finalMessages, snapshot?.revision);
+      this.requestCacheTracker.markMaintenance("summary");
       state.lastAutoCompactAfterTokens = this.currentAutoCompactTokenEstimate(finalMessages);
       state.lastAutoCompactAfterChars = this.autoCompact.totalChars(finalMessages);
       state.consecutiveAutoCompactFailures = 0; // success — reset breaker
@@ -1927,6 +1988,7 @@ export class LoopAgent {
     const { messages: compacted, compacted: didCompact } = this.reactiveCompact.compactMessages(before, this.budgetTokenCounter, this.protectedUserText);
     if (!didCompact) return false;
     replaceMessages(compacted);
+    this.requestCacheTracker.markMaintenance("recovery");
     this.emitter.emit({
       type: "observation",
       kind: "reactive_compact",
@@ -1968,9 +2030,14 @@ export class LoopAgent {
         charsAfter: this.autoCompact.totalChars(compacted),
       },
     });
+    this.requestCacheTracker.markMaintenance("recovery");
     const result = await this.streamWithTools(compacted, tools, steps, signal, executionHooks);
     this.retainTransientRecovery?.(providerView, compacted);
     return result;
+  }
+
+  private get requestCacheTracker(): RequestCacheTracker {
+    return this.conversation?.requestCacheTracker ?? this.localRequestCacheTracker;
   }
 
   private currentAutoCompactTokenEstimate(messages: Message[]): number {
@@ -2172,8 +2239,14 @@ export class LoopAgent {
 
   private providerCallOptions(step: number, maxOutputTokens: number | undefined, signal?: AbortSignal): LLMCallOptions {
     const requestId = nextContentId("request");
+    let observedAttempt: number | undefined;
     const options: LLMCallOptions = { maxOutputTokens, signal,
       deadline: signal ? this.providerDeadlines.get(signal) : undefined, onRequestEvent: request => {
+      if (request.cacheShape && observedAttempt !== request.attempt) {
+        observedAttempt = request.attempt;
+        const detail = this.requestCacheTracker.observe(scopeRequestCacheShape(request.cacheShape, this.requestCacheScope));
+        this.emitter.emit({ type: "observation", kind: "request_cache_shape", detail: { ...detail } });
+      }
       this.emitter.emit({ type: "provider_request", step, requestId, request });
     } };
     assertProviderRequestAllowed(options);

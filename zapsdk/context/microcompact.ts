@@ -10,7 +10,7 @@ export interface MicrocompactOptions {
 const INLINE_CONTEXT_BLOCK_RE = /<(file_content|mcp_resource)\b([^>]*)>([\s\S]+?)<\/\1>/g;
 const FILE_COMPACTED_MARKER = "chars compacted; use read_file tool for full content";
 const MCP_COMPACTED_MARKER = "chars compacted; re-read MCP resource for full content";
-const TOOL_RESULT_COMPACTED_MARKER = "<!-- zap-microcompact:v1 -->";
+export const TOOL_RESULT_COMPACTED_MARKER = "<!-- zap-microcompact:v1 -->";
 const LEGACY_TOOL_RESULT_COMPACTED_RE = /(?:…\[\d+ chars compacted\]…|\[\d+ chars\](?:\s|$))/u;
 
 export class Microcompact {

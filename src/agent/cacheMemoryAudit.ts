@@ -1,3 +1,4 @@
+import type { RequestCacheObservation } from "../../zapsdk/context/request-cache.js"
 import {
   appendFileSync,
   chmodSync,
@@ -51,6 +52,10 @@ export interface CacheMemoryAuditCompaction {
   autoSucceeded: number
   autoFailed: number
   reactiveCompactions: number
+  pruneAttempts?: number
+  pruneSucceeded?: number
+  prunedTokens?: number
+  prunedMessages?: number
 }
 
 export interface CacheMemoryAuditTelemetry {
@@ -59,6 +64,8 @@ export interface CacheMemoryAuditTelemetry {
   contextSamples: number
   contextShapes: number
   conversationPrefixShapes: number
+  wireRequests?: number
+  wireRewrites?: number
 }
 
 export interface CacheMemoryAuditEntry {
@@ -73,6 +80,7 @@ export interface CacheMemoryAuditEntry {
   usage: CacheMemoryAuditUsage
   promptCacheDiagnostics?: PromptCacheDiagnostics
   contextDiagnostics?: ContextDiagnostics
+  requestCache?: RequestCacheObservation
   telemetry?: CacheMemoryAuditTelemetry
   compaction: CacheMemoryAuditCompaction
   memoryUtility?: MemoryUtilityAttribution
@@ -96,6 +104,7 @@ export interface CacheMemoryAuditEntryInput {
   >
   promptCacheDiagnostics?: PromptCacheDiagnostics
   contextDiagnostics?: ContextDiagnostics
+  requestCache?: RequestCacheObservation
   telemetry?: Partial<CacheMemoryAuditTelemetry>
   compaction?: Partial<CacheMemoryAuditCompaction>
   memoryUtility?: MemoryUtilityAttribution
@@ -172,6 +181,7 @@ export function buildCacheMemoryAuditEntry(input: CacheMemoryAuditEntryInput): C
     ...(promptCacheDiagnostics ? { promptCacheDiagnostics } : {}),
     ...(contextDiagnostics ? { contextDiagnostics } : {}),
     ...(input.telemetry ? { telemetry: sanitizeTelemetry(input.telemetry) } : {}),
+    ...(sanitizeRequestCache(input.requestCache) ? { requestCache: sanitizeRequestCache(input.requestCache) } : {}),
     compaction: sanitizeCompaction(input.compaction),
     ...(memoryUtility ? { memoryUtility } : {}),
   }
@@ -241,6 +251,9 @@ export class CacheMemoryAuditTracker {
   private contextShapes = new Set<string>()
   private conversationPrefixShapes = new Set<string>()
   private written = false
+  private requestCache?: RequestCacheObservation
+  private wireRequests = 0
+  private wireRewrites = 0
   private compaction: CacheMemoryAuditCompaction = emptyCompaction()
   private readonly memoryUtility: MemoryUtilityTracker | undefined
 
@@ -268,6 +281,9 @@ export class CacheMemoryAuditTracker {
       this.conversationPrefixShapes.clear()
       this.written = false
       this.compaction = emptyCompaction()
+      this.requestCache = undefined
+      this.wireRequests = 0
+      this.wireRewrites = 0
       return
     }
     if (event.type === "run_step") {
@@ -291,6 +307,13 @@ export class CacheMemoryAuditTracker {
       return
     }
     if (event.type === "observation") {
+      if (event.kind === "request_cache_shape") {
+        const shape = sanitizeRequestCache(event.detail)
+        if (shape) {
+          this.requestCache = shape; this.wireRequests++
+          if (["rewrite", "scope_change", "shape_change"].includes(shape.change)) this.wireRewrites++
+        }
+      }
       this.recordCompaction(event)
       return
     }
@@ -314,12 +337,14 @@ export class CacheMemoryAuditTracker {
       usage: event.usage,
       promptCacheDiagnostics,
       contextDiagnostics: this.latestContextDiagnostics,
+      requestCache: this.requestCache,
       telemetry: {
         usageSamples: this.usageSamples,
         cacheAccountingSamples: this.cacheAccountingSamples,
         contextSamples: this.contextSamples,
         contextShapes: this.contextShapes.size,
         conversationPrefixShapes: this.conversationPrefixShapes.size,
+        ...(this.wireRequests ? { wireRequests: this.wireRequests, wireRewrites: this.wireRewrites } : {}),
       },
       compaction: this.compaction,
       memoryUtility: this.memoryUtility?.summarize(),
@@ -332,7 +357,14 @@ export class CacheMemoryAuditTracker {
   }
 
   private recordCompaction(event: Extract<AgentEvent, { type: "observation" }>): void {
-    if (event.kind === "autocompact_start") {
+    if (event.kind === "prune_start") {
+      this.compaction.pruneAttempts = (this.compaction.pruneAttempts ?? 0) + 1
+    } else if (event.kind === "prune_done") {
+      this.compaction.pruneSucceeded = (this.compaction.pruneSucceeded ?? 0) + 1
+      this.compaction.prunedTokens = (this.compaction.prunedTokens ?? 0) + Math.max(0,
+        nonNegativeInteger(event.detail?.inputTokens) - nonNegativeInteger(event.detail?.outputTokens))
+      this.compaction.prunedMessages = (this.compaction.prunedMessages ?? 0) + nonNegativeInteger(event.detail?.messagesPruned)
+    } else if (event.kind === "autocompact_start") {
       this.compaction.autoAttempts++
     } else if (event.kind === "autocompact_done") {
       if (event.detail?.failed === true) this.compaction.autoFailed++
@@ -388,14 +420,21 @@ function sanitizeCacheMemoryAuditEntry(value: unknown): CacheMemoryAuditEntry | 
           contextSamples: numberOrUndefined(value.telemetry.contextSamples),
           contextShapes: numberOrUndefined(value.telemetry.contextShapes),
           conversationPrefixShapes: numberOrUndefined(value.telemetry.conversationPrefixShapes),
+          wireRequests: numberOrUndefined(value.telemetry.wireRequests),
+          wireRewrites: numberOrUndefined(value.telemetry.wireRewrites),
         }
       : undefined,
+    requestCache: sanitizeRequestCache(value.requestCache),
     compaction: isRecord(value.compaction)
       ? {
           autoAttempts: numberOrUndefined(value.compaction.autoAttempts),
           autoSucceeded: numberOrUndefined(value.compaction.autoSucceeded),
           autoFailed: numberOrUndefined(value.compaction.autoFailed),
           reactiveCompactions: numberOrUndefined(value.compaction.reactiveCompactions),
+          pruneAttempts: numberOrUndefined(value.compaction.pruneAttempts),
+          pruneSucceeded: numberOrUndefined(value.compaction.pruneSucceeded),
+          prunedTokens: numberOrUndefined(value.compaction.prunedTokens),
+          prunedMessages: numberOrUndefined(value.compaction.prunedMessages),
         }
       : undefined,
     memoryUtility: sanitizeMemoryUtilityAttribution(value.memoryUtility),
@@ -440,12 +479,27 @@ function atomicRewrite(path: string, content: string): void {
   }
 }
 
+function sanitizeRequestCache(value: unknown): RequestCacheObservation | undefined {
+  if (!isRecord(value) || !["initial", "unchanged", "append", "rewrite", "scope_change", "shape_change", "unsampled_change"].includes(String(value.change))) return undefined
+  const validHash = (value: unknown): value is string => typeof value === "string" && /^[a-f0-9]{64}$/.test(value)
+  if (!validHash(value.afterHash) || !validHash(value.scopeHash) || !validHash(value.staticHash)) return undefined
+  return { change: value.change as RequestCacheObservation["change"],
+    ...(["prune", "summary", "recovery"].includes(String(value.reason)) ? { reason: value.reason as RequestCacheObservation["reason"] } : {}),
+    commonPrefixMessages: nonNegativeInteger(value.commonPrefixMessages), previousMessages: nonNegativeInteger(value.previousMessages),
+    messages: nonNegativeInteger(value.messages), sampled: value.sampled === true,
+    ...(validHash(value.beforeHash) ? { beforeHash: value.beforeHash } : {}),
+    afterHash: value.afterHash, scopeHash: value.scopeHash, staticHash: value.staticHash }
+}
+
 function sanitizeCompaction(value: Partial<CacheMemoryAuditCompaction> | undefined): CacheMemoryAuditCompaction {
   return {
     autoAttempts: nonNegativeInteger(value?.autoAttempts),
     autoSucceeded: nonNegativeInteger(value?.autoSucceeded),
     autoFailed: nonNegativeInteger(value?.autoFailed),
     reactiveCompactions: nonNegativeInteger(value?.reactiveCompactions),
+    ...Object.fromEntries(["pruneAttempts", "pruneSucceeded", "prunedTokens", "prunedMessages"]
+      .filter(key => value?.[key as keyof CacheMemoryAuditCompaction] !== undefined)
+      .map(key => [key, nonNegativeInteger(value?.[key as keyof CacheMemoryAuditCompaction])])),
   }
 }
 
@@ -454,6 +508,7 @@ function sanitizeTelemetry(value: Partial<CacheMemoryAuditTelemetry>): CacheMemo
   const contextSamples = nonNegativeInteger(value.contextSamples)
   return {
     usageSamples,
+    ...(value.wireRequests === undefined ? {} : { wireRequests: nonNegativeInteger(value.wireRequests), wireRewrites: nonNegativeInteger(value.wireRewrites) }),
     cacheAccountingSamples: Math.min(
       usageSamples,
       nonNegativeInteger(value.cacheAccountingSamples),

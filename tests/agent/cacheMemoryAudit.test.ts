@@ -364,3 +364,22 @@ describe("CacheMemoryAuditTracker", () => {
     expect(JSON.stringify(entries[0])).not.toContain("subagent private")
   })
 })
+
+it("persists bounded prune/wire diagnostics without manufacturing missing cache accounting", () => {
+  const entries: any[] = [];
+  const tracker = new CacheMemoryAuditTracker({ append: entry => entries.push(entry) });
+  tracker.handle({ type: "run_started", input: "private task" });
+  tracker.handle({ type: "observation", kind: "prune_start" });
+  tracker.handle({ type: "observation", kind: "prune_done", detail: { inputTokens: 15000, outputTokens: 6000, messagesPruned: 5, messages: "must not persist" } });
+  tracker.handle({ type: "observation", kind: "request_cache_shape", detail: { change: "rewrite", reason: "prune", commonPrefixMessages: 3,
+    previousMessages: 20, messages: 20, sampled: false, afterHash: "a".repeat(64), scopeHash: "b".repeat(64), staticHash: "c".repeat(64), rawBody: "must not persist" } });
+  tracker.handle({ type: "run_ended", steps: 1, usage: { inputTokens: 6000, outputTokens: 20 } });
+  const restored = parseCacheMemoryAuditJsonl(JSON.stringify(entries[0]) + "\n")[0]!;
+  expect(restored.compaction).toMatchObject({ pruneAttempts: 1, pruneSucceeded: 1, prunedTokens: 9000, prunedMessages: 5 });
+  expect(restored.telemetry).toMatchObject({ wireRequests: 1, wireRewrites: 1 });
+  expect(restored.requestCache?.reason).toBe("prune");
+  expect(restored.usage.cacheHitRatio).toBeUndefined();
+  expect(restored.usage.cacheReadInputTokens).toBeUndefined();
+  expect(JSON.stringify(restored)).not.toContain("must not persist");
+  expect(JSON.stringify(restored)).not.toContain("private task");
+});

@@ -153,7 +153,7 @@ export class OpenAIResponsesProvider implements LLMProvider {
     const request = new ProviderRequest(opts);
     try {
       const body = this.body(messages, tools, opts, false);
-      request.measureBody(body, this.options.maxRequestBytes);
+      request.measureBody(body, this.options.maxRequestBytes, `responses:${this.options.baseURL ?? this.options.client?.baseURL ?? "default"}`);
       const response = await request.wait(this.client.responses.create({ ...body, stream: false }, { signal: request.signal, maxRetries: 0 }));
       const parsed = this.parse(response);
       request.complete();
@@ -168,7 +168,7 @@ export class OpenAIResponsesProvider implements LLMProvider {
 
   private async *streamResponse(messages: Message[], tools: ToolDefinition[] | undefined, opts: LLMCallOptions | undefined, request: ProviderRequest): AsyncIterable<LLMChunk> {
     const body = this.body(messages, tools, opts, true);
-    request.measureBody(body, this.options.maxRequestBytes);
+    request.measureBody(body, this.options.maxRequestBytes, `responses:${this.options.baseURL ?? this.options.client?.baseURL ?? "default"}`);
     const stream = await this.client.responses.create({ ...body, stream: true }, { signal: request.signal, maxRetries: 0 });
     request.responseReceived();
     let emittedText = "";

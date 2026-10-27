@@ -62,6 +62,8 @@ export interface SubagentToolOptions {
    *  to 200_000 chars (~50k tokens). Set to 0 to disable. */
   subagentAutoCompactThreshold?: number;
   autoCompactEnabled?: boolean;
+  pruneEnabled?: boolean;
+  requestCacheScope?: string;
   /** Context window + ceiling inherited from parent LoopAgent for per-call
    *  budget planning. Subagents typically use a narrower slice of the full
    *  context but the absolute bounds are shared with the parent provider. */
@@ -837,6 +839,8 @@ function createDirectSubagentTool(options: SubagentToolOptions): Tool {
           // with big file reads don't blow past the context window. 0 disables.
           autoCompactThreshold: autoCompactThreshold > 0 ? autoCompactThreshold : undefined,
           autoCompactEnabled: options.autoCompactEnabled !== false && autoCompactThreshold > 0,
+          pruneEnabled: options.pruneEnabled ?? false,
+          requestCacheScope: options.requestCacheScope,
         });
 
         if (options.onEvent) {

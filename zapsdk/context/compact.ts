@@ -83,7 +83,7 @@ export function compactDecision(messages: Message[], options: CompactOptions = {
 }
 
 /** Each assistant/tool-result group is one indivisible planning unit. */
-function messageGroups(messages: Message[]): Message[][] {
+export function compactMessageGroups(messages: Message[]): Message[][] {
   const groups: Message[][] = [];
   for (let i = 0; i < messages.length; i++) {
     const message = messages[i]!;
@@ -102,6 +102,24 @@ function messageGroups(messages: Message[]): Message[][] {
   return groups;
 }
 
+export function protectedCompactGroups(groups: Message[][], protectedUserText?: string): Set<number> {
+  const kept = new Set<number>();
+  if (!groups.length) return kept;
+  kept.add(groups.length - 1);
+  const lastUser = groups.findLastIndex(group => group[0]?.role === "user");
+  if (lastUser >= 0) kept.add(lastUser);
+  // Keep the actual current user request, even when host observations occur later.
+  let userIndex = -1;
+  for (let i = 0; i < groups.length; i++) {
+    if (groups[i]![0]!.role === "user" && (protectedUserText === undefined
+    || groups[i]![0]!.content === protectedUserText)) userIndex = i;
+  }
+  if (userIndex >= 0) kept.add(userIndex);
+  const latestTool = groups.findLastIndex(group => group[0]?.role === "assistant" && !!group[0]?.toolCalls?.length);
+  if (latestTool > userIndex) kept.add(latestTool);
+  return kept;
+}
+
 export function planCompact(messages: Message[], options: CompactOptions = {}): CompactPlan {
   const counter = options.counter ?? new TokenCounter();
   const measure = (candidate: Message[]) => compactRequestTokens(candidate, options, counter);
@@ -117,21 +135,10 @@ export function planCompact(messages: Message[], options: CompactOptions = {}): 
   let systemEnd = 0;
   while (messages[systemEnd]?.role === "system") systemEnd++;
   const system = messages.slice(0, systemEnd);
-  const groups = messageGroups(messages.slice(systemEnd));
+  const groups = compactMessageGroups(messages.slice(systemEnd));
   const kept = new Set<number>();
   if (budget && groups.length) {
-    kept.add(groups.length - 1);
-    const lastUser = groups.findLastIndex(group => group[0]?.role === "user");
-    if (lastUser >= 0) kept.add(lastUser);
-    // Keep the actual current user request, even when host observations occur later.
-    let userIndex = -1;
-    for (let i = 0; i < groups.length; i++) {
-      if (groups[i]![0]!.role === "user" && (options.protectedUserText === undefined
-        || groups[i]![0]!.content === options.protectedUserText)) userIndex = i;
-    }
-    if (userIndex >= 0) kept.add(userIndex);
-    const latestTool = groups.findLastIndex(group => group[0]?.role === "assistant" && !!group[0]?.toolCalls?.length);
-    if (latestTool > userIndex) kept.add(latestTool);
+    for (const index of protectedCompactGroups(groups, options.protectedUserText)) kept.add(index);
     const protectedGroups = new Set(kept);
     const restoreReserve = options.restoreFiles ? Math.min(2048, Math.floor(targetTokens * 0.1)) : 0;
     const tailLimit = Math.max(0, targetTokens - summaryOutputTokens - restoreReserve - 32);

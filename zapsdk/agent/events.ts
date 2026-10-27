@@ -139,6 +139,10 @@ type ContentFinalToolResult = {
 // as part of the conversation; agent-logger and metrics consume them.
 
 export type ObservationKind =
+  | "prune_start"
+  | "prune_done"
+  | "prune_skipped"
+  | "request_cache_shape"
   | "autocompact_start"
   | "autocompact_done"
   | "reactive_compact"
