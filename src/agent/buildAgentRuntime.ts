@@ -83,6 +83,8 @@ export function buildAgentRuntime(deps: BuildAgentRuntimeDeps): AgentRuntime {
       autoCompactThreshold: deps.autoCompactThreshold,
       autoCompactTokenThreshold: deps.autoCompactTokenThreshold,
       autoCompactEnabled: deps.config.compaction.auto,
+      pruneEnabled: deps.config.compaction.prune,
+      requestCacheScope: getActiveProvider(deps.config)?.id,
       contextWindow: contextLimits.contextWindow,
       inputTokenLimit: contextLimits.inputLimit,
       outputTokenCeiling: getActiveMaxOutputTokens(deps.config),

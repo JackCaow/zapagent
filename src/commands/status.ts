@@ -383,7 +383,16 @@ export function buildStatusText(
     if (memoryUtility) lines.push(`Memory utility:  ${memoryUtility}`)
   }
   lines.push(`Auto-compact:    ${config.compaction.auto ? "on" : "off"}`)
-  lines.push("Prune:           not active (reserved setting; overflow recovery is independent)")
+  lines.push(`Prune:           ${config.compaction.prune ? "on · pressure-gated old outputs" : "off"} (overflow recovery is independent)`)
+  const latestMaintenance = diagnostics.cacheMemoryAudit?.entries.slice().reverse().find(entry =>
+    !currentCacheScope || samePromptCacheScope(entry.cacheScope, currentCacheScope))
+  if (latestMaintenance?.compaction.pruneSucceeded) {
+    lines.push(`Last prune:      ${latestMaintenance.compaction.prunedMessages ?? 0} outputs · ~${formatTokens(latestMaintenance.compaction.prunedTokens ?? 0)} tokens removed locally`)
+  }
+  if (latestMaintenance?.requestCache) {
+    const shape = latestMaintenance.requestCache
+    lines.push(`Wire prefix:     ${shape.change}${shape.reason ? ` (${shape.reason})` : ""} · ${shape.commonPrefixMessages} shared messages${shape.sampled ? " · sampled" : ""}; provider hit rate is separate`)
+  }
   lines.push(`Memory dir:      ${shortPath(autoMemory.memoryDir)}`)
   lines.push(`Global memory:   ${shortPath(globalMemoryDir)}`)
   lines.push("")

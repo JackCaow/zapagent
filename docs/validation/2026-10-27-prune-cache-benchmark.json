@@ -1,0 +1,174 @@
+{
+  "mockOnly": true,
+  "scenarios": [
+    {
+      "prune": false,
+      "accounting": "synthetic provider fixture",
+      "totalInput": 73233,
+      "fresh": 15257,
+      "cacheRead": 57976,
+      "cacheWrite": 0,
+      "maintenanceCalls": 0,
+      "mainCalls": 5,
+      "durationMs": 32,
+      "maintenanceInput": 0,
+      "maintenanceOutput": 0,
+      "tools": 4,
+      "quality": true,
+      "prefixChanges": [
+        {
+          "kind": "request_cache_shape",
+          "change": "initial",
+          "commonPrefixMessages": 0,
+          "previousMessages": 0,
+          "messages": 18,
+          "sampled": false,
+          "afterHash": "c4fc6bbaeec8be2ec128f721a59c60ebebb8ef086cafc13cf1e08a19bf28ec1a",
+          "scopeHash": "87d6c1026253e52008f474f5eb3c939ab407524b0dd62761ba36fb1ae4a00423",
+          "staticHash": "41c97052c53cb30d6563fa153ff2f655141bd72679cd465b05b697d24f7ac5ff"
+        },
+        {
+          "kind": "request_cache_shape",
+          "change": "append",
+          "commonPrefixMessages": 18,
+          "previousMessages": 18,
+          "messages": 20,
+          "sampled": false,
+          "beforeHash": "c4fc6bbaeec8be2ec128f721a59c60ebebb8ef086cafc13cf1e08a19bf28ec1a",
+          "afterHash": "f42bd536e31f0b7a8ad5a07e4aeb5a1053e097eed8face0162a49e41e4696db6",
+          "scopeHash": "87d6c1026253e52008f474f5eb3c939ab407524b0dd62761ba36fb1ae4a00423",
+          "staticHash": "41c97052c53cb30d6563fa153ff2f655141bd72679cd465b05b697d24f7ac5ff"
+        },
+        {
+          "kind": "request_cache_shape",
+          "change": "append",
+          "commonPrefixMessages": 20,
+          "previousMessages": 20,
+          "messages": 22,
+          "sampled": false,
+          "beforeHash": "f42bd536e31f0b7a8ad5a07e4aeb5a1053e097eed8face0162a49e41e4696db6",
+          "afterHash": "2835134e333b4f089207dcccaf813343c6f0e0a3c3808d13eea8fa5a29523081",
+          "scopeHash": "87d6c1026253e52008f474f5eb3c939ab407524b0dd62761ba36fb1ae4a00423",
+          "staticHash": "41c97052c53cb30d6563fa153ff2f655141bd72679cd465b05b697d24f7ac5ff"
+        },
+        {
+          "kind": "request_cache_shape",
+          "change": "append",
+          "commonPrefixMessages": 22,
+          "previousMessages": 22,
+          "messages": 24,
+          "sampled": false,
+          "beforeHash": "2835134e333b4f089207dcccaf813343c6f0e0a3c3808d13eea8fa5a29523081",
+          "afterHash": "1ee6b6f4a056facfa58a4b032f3d3b82f0a0d1a1ae0e8c1e4df9d04239c4503f",
+          "scopeHash": "87d6c1026253e52008f474f5eb3c939ab407524b0dd62761ba36fb1ae4a00423",
+          "staticHash": "41c97052c53cb30d6563fa153ff2f655141bd72679cd465b05b697d24f7ac5ff"
+        },
+        {
+          "kind": "request_cache_shape",
+          "change": "append",
+          "commonPrefixMessages": 24,
+          "previousMessages": 24,
+          "messages": 26,
+          "sampled": false,
+          "beforeHash": "1ee6b6f4a056facfa58a4b032f3d3b82f0a0d1a1ae0e8c1e4df9d04239c4503f",
+          "afterHash": "ce47254fb3f702f7c989415faabb3583144c79765ef55e951883b60b89990ffe",
+          "scopeHash": "87d6c1026253e52008f474f5eb3c939ab407524b0dd62761ba36fb1ae4a00423",
+          "staticHash": "41c97052c53cb30d6563fa153ff2f655141bd72679cd465b05b697d24f7ac5ff"
+        }
+      ],
+      "pruneEvents": []
+    },
+    {
+      "prune": true,
+      "accounting": "synthetic provider fixture",
+      "totalInput": 47183,
+      "fresh": 21494,
+      "cacheRead": 25689,
+      "cacheWrite": 0,
+      "maintenanceCalls": 0,
+      "mainCalls": 5,
+      "durationMs": 16,
+      "maintenanceInput": 0,
+      "maintenanceOutput": 0,
+      "tools": 4,
+      "quality": true,
+      "prefixChanges": [
+        {
+          "kind": "request_cache_shape",
+          "change": "initial",
+          "commonPrefixMessages": 0,
+          "previousMessages": 0,
+          "messages": 18,
+          "sampled": false,
+          "afterHash": "c4fc6bbaeec8be2ec128f721a59c60ebebb8ef086cafc13cf1e08a19bf28ec1a",
+          "scopeHash": "87d6c1026253e52008f474f5eb3c939ab407524b0dd62761ba36fb1ae4a00423",
+          "staticHash": "41c97052c53cb30d6563fa153ff2f655141bd72679cd465b05b697d24f7ac5ff"
+        },
+        {
+          "kind": "request_cache_shape",
+          "change": "rewrite",
+          "reason": "prune",
+          "commonPrefixMessages": 2,
+          "previousMessages": 18,
+          "messages": 20,
+          "sampled": false,
+          "beforeHash": "c4fc6bbaeec8be2ec128f721a59c60ebebb8ef086cafc13cf1e08a19bf28ec1a",
+          "afterHash": "89e3ee582b7ef01f897717716d10b70cc5db8abc3756cbf7cc7638cfe2ed59d8",
+          "scopeHash": "87d6c1026253e52008f474f5eb3c939ab407524b0dd62761ba36fb1ae4a00423",
+          "staticHash": "41c97052c53cb30d6563fa153ff2f655141bd72679cd465b05b697d24f7ac5ff"
+        },
+        {
+          "kind": "request_cache_shape",
+          "change": "append",
+          "commonPrefixMessages": 20,
+          "previousMessages": 20,
+          "messages": 22,
+          "sampled": false,
+          "beforeHash": "89e3ee582b7ef01f897717716d10b70cc5db8abc3756cbf7cc7638cfe2ed59d8",
+          "afterHash": "f7cd525eb9f9e8b049bf92bddf0434f048df3d657185d11c6b5126d2a0f2f6d2",
+          "scopeHash": "87d6c1026253e52008f474f5eb3c939ab407524b0dd62761ba36fb1ae4a00423",
+          "staticHash": "41c97052c53cb30d6563fa153ff2f655141bd72679cd465b05b697d24f7ac5ff"
+        },
+        {
+          "kind": "request_cache_shape",
+          "change": "append",
+          "commonPrefixMessages": 22,
+          "previousMessages": 22,
+          "messages": 24,
+          "sampled": false,
+          "beforeHash": "f7cd525eb9f9e8b049bf92bddf0434f048df3d657185d11c6b5126d2a0f2f6d2",
+          "afterHash": "3021cc43bd1c28e9e5a620ef905e7b7b7330db65cb09d775ec535c84a2307d12",
+          "scopeHash": "87d6c1026253e52008f474f5eb3c939ab407524b0dd62761ba36fb1ae4a00423",
+          "staticHash": "41c97052c53cb30d6563fa153ff2f655141bd72679cd465b05b697d24f7ac5ff"
+        },
+        {
+          "kind": "request_cache_shape",
+          "change": "append",
+          "commonPrefixMessages": 24,
+          "previousMessages": 24,
+          "messages": 26,
+          "sampled": false,
+          "beforeHash": "3021cc43bd1c28e9e5a620ef905e7b7b7330db65cb09d775ec535c84a2307d12",
+          "afterHash": "6703927aa0642bb53daf3b9716ba9de1667e53bdf277f08f17ccdcd47a6d76ef",
+          "scopeHash": "87d6c1026253e52008f474f5eb3c939ab407524b0dd62761ba36fb1ae4a00423",
+          "staticHash": "41c97052c53cb30d6563fa153ff2f655141bd72679cd465b05b697d24f7ac5ff"
+        }
+      ],
+      "pruneEvents": [
+        {
+          "kind": "prune_done",
+          "status": "pruned",
+          "inputTokens": 14661,
+          "outputTokens": 8146,
+          "messagesPruned": 5,
+          "bytesBefore": 24269,
+          "bytesAfter": 13974,
+          "firstChangedMessage": 2,
+          "beforeHash": "d96864db2576362319a1bf25ad02efedfe1f1cfadb7733ce1fb94d8d13fbabc8",
+          "afterHash": "f654d7f7788493338f94ea1afd8ae61323755af89335aff3a02afe80fd6b360c",
+          "reason": "context_pressure"
+        }
+      ]
+    }
+  ]
+}

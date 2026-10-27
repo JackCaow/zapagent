@@ -41,6 +41,7 @@ export class AnthropicProvider implements LLMProvider {
   private client: Anthropic;
   private maxTokens: number;
   private maxRequestBytes?: number;
+  private requestCacheScope: string;
   private promptCaching: boolean;
   private streamIdleMs?: number;
 
@@ -49,6 +50,7 @@ export class AnthropicProvider implements LLMProvider {
     this.imageTokenRule = options.imageTokenRule;
     this.canonicalModelIds = { ...options.canonicalModelIds };
     this.maxRequestBytes = options.maxRequestBytes;
+    this.requestCacheScope = `anthropic:${options.client?.baseURL ?? "default"}`;
     this.client = options.client ?? new Anthropic({ maxRetries: 0 });
     this.maxTokens = options.maxTokens ?? 4096;
     this.promptCaching = options.promptCaching ?? true;
@@ -96,7 +98,7 @@ export class AnthropicProvider implements LLMProvider {
 
     const request = new ProviderRequest(opts);
     try {
-      request.measureBody(params, this.maxRequestBytes);
+      request.measureBody(params, this.maxRequestBytes, this.requestCacheScope);
       const response = await request.wait(this.client.messages.create(params as any, {
         signal: request.signal, maxRetries: 0,
       }));
@@ -112,7 +114,7 @@ export class AnthropicProvider implements LLMProvider {
     opts?: LLMCallOptions,
   ): AsyncIterable<LLMChunk> {
     const request = new ProviderRequest(opts);
-    yield* request.watch(this.streamResponse(messages, tools, { ...opts, signal: request.signal }, request.responseReceived, body => request.measureBody(body, this.maxRequestBytes)));
+    yield* request.watch(this.streamResponse(messages, tools, { ...opts, signal: request.signal }, request.responseReceived, body => request.measureBody(body, this.maxRequestBytes, this.requestCacheScope)));
   }
 
   private async *streamResponse(

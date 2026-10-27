@@ -597,6 +597,8 @@ export async function runHeadless(args: HeadlessArgs, host: HeadlessHost = {}): 
       autoCompactThreshold: thresholds.triggerAt * 4,
       autoCompactTokenThreshold: thresholds.triggerAt,
       autoCompactEnabled: config.compaction.auto,
+      pruneEnabled: config.compaction.prune,
+      requestCacheScope: getActiveProvider(config)?.id,
       contextWindow: ctxWin,
       inputTokenLimit: contextLimits.inputLimit,
       outputTokenCeiling: getActiveMaxOutputTokens(config),

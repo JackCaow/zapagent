@@ -1,3 +1,4 @@
+import type { RequestCacheShape } from "../context/request-cache.js";
 import type { ImageTokenContext } from "../context/image-tokens.js";
 import type { LLMResponse, LLMChunk, Message } from "./types.js";
 import type { ToolDefinition } from "../tools/types.js";
@@ -14,6 +15,8 @@ export interface ProviderRequestEvent {
   /** Actual JSON UTF-8 body bytes, measured by the adapter before SDK I/O. */
   requestBytes?: number;
   requestFingerprint?: string;
+  /** Bounded digests of the adapter-serialized request; never provider hit data. */
+  cacheShape?: RequestCacheShape;
   delayMs?: number;
   /** Snapshot of streamed output observed in this attempt. Times are measured
    * from request start; counts use JS string lengths, not tokens or bytes.

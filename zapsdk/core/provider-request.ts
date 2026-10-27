@@ -1,3 +1,4 @@
+import { requestCacheShape } from "../context/request-cache.js";
 import type { LLMCallOptions, ProviderRequestEvent } from "./llm.js";
 import type { LLMChunk } from "./types.js";
 import { assertProviderRequestAllowed } from "./provider-deadline.js";
@@ -41,6 +42,8 @@ export class ProviderRequest {
   private output?: ProviderRequestEvent["output"];
   private requestBytes?: number;
   private requestFingerprint?: string;
+  private cacheShape?: ProviderRequestEvent["cacheShape"];
+  private cacheShapeEmitted = false;
   private rejectWait!: (error: Error) => void;
   private failure = new Promise<never>((_, reject) => { this.rejectWait = reject; });
   private abort = () => this.fail(new DOMException("Provider request cancelled", "AbortError"));
@@ -59,15 +62,22 @@ export class ProviderRequest {
     if (this.closed) return;
     const at = Date.now();
     if (phase === "streaming") this.lastOutputEventAt = at;
+    // Prefix digests are bounded but still sizeable. Send them once per
+    // serialized request, not on every streaming progress/audit event.
+    const cacheShape = this.cacheShapeEmitted ? undefined : this.cacheShape;
+    if (cacheShape) this.cacheShapeEmitted = true;
     notifyProviderRequest(this.opts, { phase, attempt: this.opts?.requestAttempt?.attempt ?? 1,
       maxAttempts: this.opts?.requestAttempt?.maxAttempts ?? 1,
       startedAt: this.startedAt, at, elapsedMs: at - this.startedAt, reason,
       ...(this.requestBytes !== undefined ? { requestBytes: this.requestBytes, requestFingerprint: this.requestFingerprint } : {}),
+      ...(cacheShape ? { cacheShape } : {}),
       ...(this.output ? { output: { ...this.output } } : {}) });
   }
 
-  measureBody(body: unknown, maxRequestBytes?: number): void {
+  measureBody(body: unknown, maxRequestBytes?: number, transport?: string): void {
     const json = JSON.stringify(body);
+    this.cacheShape = requestCacheShape(body, transport);
+    this.cacheShapeEmitted = false;
     this.requestBytes = Buffer.byteLength(json);
     this.requestFingerprint = createHash("sha256").update(json).digest("hex");
     if (maxRequestBytes !== undefined && Number.isFinite(maxRequestBytes) && maxRequestBytes > 0 && this.requestBytes > maxRequestBytes) {

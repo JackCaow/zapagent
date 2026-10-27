@@ -1,3 +1,5 @@
+import { PruneGate } from "../context/prune.js";
+import { RequestCacheTracker } from "../context/request-cache.js";
 import type { Message, ToolCallRequest } from "../core/types.js";
 import type { LLMProvider } from "../core/llm.js";
 import { HistoricalImageRetention, type HistoricalImagePolicy } from "../context/historical-images.js";
@@ -87,6 +89,8 @@ interface PendingToolTurn {
  */
 export class ConversationManager {
   private revision = 0;
+  readonly pruneGate = new PruneGate();
+  readonly requestCacheTracker = new RequestCacheTracker();
   private compactionContext: CompactOptions = {};
   private turns: Turn[] = [];
   private pending: PendingToolTurn | null = null;
@@ -454,6 +458,7 @@ export class ConversationManager {
       this._lastCompressionFailureReason = "Context changed during compaction (revision conflict)";
       return null;
     }
+    this.requestCacheTracker.markMaintenance("summary");
     let systemCount = 0;
     while (snapshot.messages[systemCount]?.role === "system") systemCount++;
     const before = snapshot.messages.length - systemCount;
@@ -500,6 +505,8 @@ export class ConversationManager {
   }
 
   clear(): void {
+    this.requestCacheTracker.clear();
+    this.pruneGate.clear();
     this.revision++;
     this.compactionContext = {};
     this.historicalImages?.reset();

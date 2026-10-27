@@ -559,6 +559,13 @@ export function createRunHandlers(deps: RunHandlersDeps): RunHandlers {
 
     agent.on("observation", (e: AgentEvent) => {
       if (e.type !== "observation") return
+      if (e.kind === "prune_done" && !e.path?.length) {
+        const d = e.detail
+        const before = Number(d?.inputTokens ?? 0), after = Number(d?.outputTokens ?? 0)
+        deps.setContextTokens(after, "estimated", null)
+        deps.addLog("system", `Pruned ${d?.messagesPruned ?? 0} historical outputs · ~${Math.max(0, before - after)} tokens saved locally; provider cache may rebuild.`,
+          undefined, undefined, undefined, { restore: false })
+      }
       if (e.kind === "autocompact_start") {
         deps.setStatus("compacting")
         const d = e.detail as

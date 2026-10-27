@@ -138,6 +138,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
   private client: OpenAI;
   private maxTokens: number;
   private maxRequestBytes?: number;
+  private requestCacheScope: string;
   private extraRequestParams: Record<string, unknown>;
   private supportsVision?: boolean;
   private streamIdleMs?: number;
@@ -147,6 +148,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
     this.imageTokenRule = options.imageTokenRule;
     this.canonicalModelIds = { ...options.canonicalModelIds };
     this.maxRequestBytes = options.maxRequestBytes;
+    this.requestCacheScope = `chat:${options.baseURL ?? options.client?.baseURL ?? "default"}`;
     this.client =
       options.client ??
       new OpenAI({
@@ -214,7 +216,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
 
     const request = new ProviderRequest(opts);
     try {
-      request.measureBody(params, this.maxRequestBytes);
+      request.measureBody(params, this.maxRequestBytes, this.requestCacheScope);
       const response = await request.wait(this.client.chat.completions.create(params as any, {
         signal: request.signal, maxRetries: 0,
       }));
@@ -230,7 +232,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
     opts?: LLMCallOptions,
   ): AsyncIterable<LLMChunk> {
     const request = new ProviderRequest(opts);
-    yield* request.watch(this.streamResponse(messages, tools, { ...opts, signal: request.signal }, request.responseReceived, body => request.measureBody(body, this.maxRequestBytes)));
+    yield* request.watch(this.streamResponse(messages, tools, { ...opts, signal: request.signal }, request.responseReceived, body => request.measureBody(body, this.maxRequestBytes, this.requestCacheScope)));
   }
 
   private async *streamResponse(
