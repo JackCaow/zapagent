@@ -2,8 +2,8 @@
 import { useRef, useState } from "react"
 import { Box, Text, useInput } from "ink"
 import { randomUUID } from "node:crypto"
-import { buildConnectedProvider, presetForConnection, removeProvider, upsertProvider,
-  type AppConfig, type Provider, type ProviderProtocol } from "../config.js"
+import { buildConnectedProvider, inferLegacyContextWindowMode, presetForConnection, removeProvider, upsertProvider,
+  type AppConfig, type ContextWindowMode, type Provider, type ProviderProtocol } from "../config.js"
 import { ProviderDirectory } from "./provider-directory.js"
 import { DialogFrame } from "./dialog-frame.js"
 import { PickerDialog } from "./dialog-picker.js"
@@ -11,11 +11,13 @@ import { TextField } from "./text-field.js"
 import { commandInput, isReturnInput } from "./controlled-input.js"
 import { c } from "./theme.js"
 import { ModelDialog } from "./dialog-model.js"
+import { ContextWindowDialog } from "./dialog-context-window.js"
 
 interface Props { config: AppConfig; onSave: (next: AppConfig) => void; onCommit: (next: AppConfig) => void; onCancel: () => void }
 type Draft = { name: string; baseURL: string; apiKey: string; protocol: ProviderProtocol;
-  authMode: "none" | "api-key"; catalogProviderId?: string; existing?: Provider }
-type Step = "connections" | "preset" | "name" | "endpoint" | "protocol" | "auth" | "key" | "review"
+  authMode: "none" | "api-key"; catalogProviderId?: string; existing?: Provider;
+  contextWindow?: number; contextWindowMode?: ContextWindowMode }
+type Step = "connections" | "preset" | "name" | "endpoint" | "protocol" | "auth" | "key" | "context" | "review"
 
 export function saveConnection(config: AppConfig, draft: Draft): AppConfig {
   const existing = draft.existing
@@ -29,14 +31,15 @@ export function saveConnection(config: AppConfig, draft: Draft): AppConfig {
     name: draft.name.trim(), baseURL: draft.baseURL.trim(),
     apiKey: draft.authMode === "none" ? "" : draft.apiKey.trim(),
     models: existing?.models ?? [], modelMetadata: existing?.modelMetadata,
-    contextWindowInput: existing?.contextWindow ?? 128000 })
+    contextWindowInput: draft.contextWindow ?? existing?.contextWindow ?? preset?.contextWindow ?? 128000,
+    contextWindowMode: draft.contextWindowMode ?? (existing
+      ? existing.contextWindowMode ?? inferLegacyContextWindowMode(existing) : "auto") })
   provider.id = existing?.id ?? `sp_${randomUUID()}`
   provider.protocol = draft.protocol
   provider.authMode = draft.authMode
   provider.catalogProviderId = catalogProviderId
   // Catalog identity is explicit, never inferred from a brand/URL heuristic.
   provider.sourcePresetId = existing?.sourcePresetId ?? preset?.id
-  if (!existing && provider.catalogProviderId) provider.contextWindowMode = "auto"
   return upsertProvider(config, provider)
 }
 
@@ -78,7 +81,7 @@ export function ConnectDialog({ config, onSave, onCommit, onCancel }: Props) {
   })
 
   if (modelTarget) return <ModelDialog key={modelTarget.id} config={config}
-    initialProviderId={modelTarget.id} setup={modelTarget.setup} onCommit={onCommit}
+    initialProviderId={modelTarget.id} setup={modelTarget.setup} onSave={onSave} onCommit={onCommit}
     onCancel={() => { if (modelTarget.setup) onCancel(); else setModelTarget(null) }} />
 
   if (step === "connections") return <DialogFrame title="Connections · /connect"
@@ -110,13 +113,19 @@ export function ConnectDialog({ config, onSave, onCommit, onCancel }: Props) {
       { id: "none", label: "No authentication", meta: "local or explicitly keyless endpoints" }]}
     onCancel={() => setStep("protocol")} onSelect={id => {
       setDraft({ ...draft, authMode: id as Draft["authMode"] })
-      setStep(id === "none" ? "review" : "key")
+      setStep(id === "none" ? "context" : "key")
     }} />
+  if (step === "context") return <ContextWindowDialog
+    mode={draft.contextWindowMode ?? draft.existing?.contextWindowMode
+      ?? (draft.existing ? inferLegacyContextWindowMode(draft.existing) : "auto")}
+    contextWindow={draft.contextWindow ?? draft.existing?.contextWindow ?? 128000}
+    onCancel={() => setStep(draft.authMode === "none" ? "auth" : "key")}
+    onSave={(mode, tokens) => { setDraft({ ...draft, contextWindowMode: mode, contextWindow: tokens }); setStep("review") }} />
   if (step === "review") return <PickerDialog key={step} title={draft.existing ? "Review connection" : "Review connection · next: choose a model"}
     options={[{ id: "save", label: draft.existing ? `Save ${draft.name}` : `Save ${draft.name} and choose a model`, meta: `${draft.protocol} · ${draft.authMode} · ${draft.baseURL}` },
       { id: "edit", label: "Edit settings" }]}
     hint={draft.existing ? "enter save · esc back · current model is kept" : "enter save and continue · esc back"}
-    onCancel={() => setStep("auth")} onSelect={id => {
+    onCancel={() => setStep("context")} onSelect={id => {
       if (id === "edit") setStep("name")
       else {
         const next = saveConnection(config, draft)
@@ -146,7 +155,7 @@ export function ConnectDialog({ config, onSave, onCommit, onCancel }: Props) {
           catch { setError("Use an HTTP(S) base URL without embedded credentials, query or fragment."); return }
         }
         setDraft({ ...draft, [field]: trimmed }); setError("")
-        setStep(step === "name" ? "endpoint" : step === "endpoint" ? "protocol" : "review")
+        setStep(step === "name" ? "endpoint" : step === "endpoint" ? "protocol" : "context")
       }} />
   </DialogFrame>
 }

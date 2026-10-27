@@ -89,8 +89,8 @@ describe("LoopAgent: 401/403/429 not misclassified as context overflow", () => {
   it("still classifies a genuine token-limit error as context overflow", async () => {
     // Both stream AND call() throw the same overflow message so every
     // recovery path (reactiveCompact, autoCompact retry) hits the same
-    // error. The final wrap should fire makeFriendlyOverflowError →
-    // "Context length exceeded after compaction" + /new hint.
+    // error. With no removable history, recovery must ask for input reduction
+    // rather than shorten the current user request or retry indefinitely.
     const overflow = "This model's maximum context length is 128000 tokens, however your messages resulted in 145000 tokens"
     const provider: LLMProvider = {
       async call() { throw new Error(overflow) },
@@ -108,8 +108,8 @@ describe("LoopAgent: 401/403/429 not misclassified as context overflow", () => {
       // Tightening didn't kill the legit overflow detection: `token +
       // maximum + context` still matches.
       const msg = (err as Error).message
-      expect(msg).toContain("Context length exceeded after compaction")
-      expect(msg).toContain("no smaller valid context")
+      expect(msg).toContain("Protected input")
+      expect(msg).toContain("Reduce the input")
     }
   })
 })

@@ -62,7 +62,8 @@ import { maybePersistToolResult, PERSIST_THRESHOLD_CHARS } from "../utils/tool-r
 import { countCodePoints, sliceHeadCodePoints } from "../utils/logical-lines.js";
 import { createHash, randomUUID } from "node:crypto";
 import { TokenCounter } from "../context/token-counter.js";
-import { restoreRecentFiles } from "../context/restore-files.js";
+import { compactBudget } from "../context/compact-budget.js";
+import { CompactInputReductionError, compactDecision, compactRequestTokens, planCompact, type CompactOptions } from "../context/compact.js";
 import {
   ContextOverflowError,
   isLikelyContextLimitErrorMessage,
@@ -216,6 +217,7 @@ export interface SubagentConfig {
  * `subagentTool` from `zapsdk/builtin-tools/subagent.ts` satisfies this shape.
  */
 export interface SubagentFactoryArgs {
+  autoCompactEnabled?: boolean;
   inheritedInstructions?: string;
   promptProfile?: PromptProfile;
   getResultSchema?: () => "outcome-v1" | "legacy";
@@ -251,6 +253,8 @@ export interface SubagentFactoryArgs {
 export type SubagentFactory = (args: SubagentFactoryArgs) => Tool;
 
 export interface LoopAgentOptions {
+  /** Disable proactive summaries; manual and bounded overflow recovery remain available. */
+  autoCompactEnabled?: boolean;
   /** Already metered host maintenance for this run; never charged twice. */
   initialUsage?: TokenUsage;
   provider: LLMProvider;
@@ -435,7 +439,7 @@ function forceFinishInstruction(reason: ForceFinishReason): string {
 type AddMessage = (msg: Message) => void;
 type CommitTurn = (turn: Turn) => void;
 type GetMessages = () => Message[];
-type ReplaceMessages = (msgs: Message[]) => void;
+type ReplaceMessages = (msgs: Message[], expectedRevision?: number) => void;
 type ErrorTracker = Map<string, Map<string, number>>;
 type SeenFiles = Map<string, string>;
 
@@ -477,6 +481,9 @@ export class LoopAgent {
   private autoCompact: AutoCompact;
   private autoCompactCharThreshold: number;
   private autoCompactTokenThreshold?: number;
+  private autoCompactEnabled: boolean;
+  private compactTransientMessages: Message[] = [];
+  private protectedUserText?: string;
   private storageSessionId: string;
   private storageProjectCwd: string;
   private sessionId: string;
@@ -556,6 +563,7 @@ export class LoopAgent {
       keepRecent: 10,
     });
     this.autoCompactTokenThreshold = options.autoCompactTokenThreshold;
+    this.autoCompactEnabled = options.autoCompactEnabled ?? true;
     this.storageSessionId = options.storageSessionId ?? randomUUID();
     this.storageProjectCwd = options.storageProjectCwd ?? process.cwd();
     this.sessionId = options.sessionId ?? "default";
@@ -610,6 +618,7 @@ export class LoopAgent {
       maxSteps: this.maxSteps, budget: this.budget, fallbackProvider: this.fallbackProvider,
       contextWindow: this.contextWindow, inputTokenLimit: this.inputTokenLimit,
       outputTokenCeiling: this.outputTokenCeiling, reservedOutputTokens: this.reservedOutputTokens,
+      autoCompactEnabled: this.autoCompactEnabled,
       storageProjectCwd: this.storageProjectCwd,
       subagent: options.subagent, factory: options.subagentFactory,
       promptProfile: options.promptProfile,
@@ -683,6 +692,7 @@ export class LoopAgent {
   private resultSchema: "outcome-v1" | "legacy" = "legacy";
 
   async run(input: string, options?: RunOptions): Promise<LoopAgentResult> {
+    this.protectedUserText = input;
     this.resultSchema = options?.resultSchema ?? "legacy";
     const signal = options?.signal;
     const allToolResults: ToolResult[] = [];
@@ -818,7 +828,14 @@ export class LoopAgent {
     // getMessagesRaw returns the budgeted provider view of the persistent
     // conversation, excluding transient per-turn context.
     const getMessagesRaw: GetMessages = () => {
-      return this.conversation ? this.conversation.getMessages() : localMessages;
+      if (!this.conversation) return localMessages;
+      const view = this.conversation.getMessages();
+      // A bounded view must never silently omit this run's user intent. Fall
+      // back to backing history so normal admission/recovery can decide safely.
+      if (this.contextWindow && !view.some(message => message.role === "user" && message.content === input)) {
+        return this.conversation.getAllMessages();
+      }
+      return view;
     };
 
     // getMessagesForMaintenance returns the full persisted conversation,
@@ -901,11 +918,11 @@ export class LoopAgent {
       return [...providerMessages, transientView(deltaMessage)];
     };
 
-    const replaceMessages: ReplaceMessages = (msgs) => {
+    const replaceMessages: ReplaceMessages = (msgs, expectedRevision) => {
       contextInsertionIndex = rebaseMessageBoundary(getMessagesForMaintenance(), msgs, contextInsertionIndex);
       if (this.conversation) {
-        this.conversation.clear();
-        msgs.forEach((m) => this.conversation!.add(m));
+        const revision = expectedRevision ?? this.conversation.getSnapshot().revision;
+        if (!this.conversation.compareAndReplace(msgs, revision)) throw new Error("Context revision conflict");
       } else {
         localMessages = msgs;
       }
@@ -914,6 +931,7 @@ export class LoopAgent {
       let revision: string | undefined;
       let canonical: Message[] = [];
       return {
+        protectedUserText: input,
         recoveryMessages: () => {
           canonical = getMessagesForMaintenance();
           revision = contextFingerprint(canonical);
@@ -1067,7 +1085,12 @@ export class LoopAgent {
           workspaceChanged,
           timeBudget: this.runtimeTimeBudget(startedAt),
         }, addMessage, budgetHints);
-        await this.tryAutoCompact(state, getMessagesForMaintenance, replaceMessages, { signal, startedAt });
+        // Capture the actual schemas/transient messages before maintenance.
+        // Full backing history, not a truncated provider view, is summarized.
+        const maintenanceRequest = getMessages();
+        this.compactTransientMessages = maintenanceRequest.filter(message => message.cache?.transient);
+        this.conversation?.setCompactionContext(this.compactOptions(tools));
+        let maintenanceChanged = await this.tryAutoCompact(state, getMessagesForMaintenance, replaceMessages, { signal, startedAt, protectedUserText: input });
 
         // Maintenance may await a remote summarizer past cancellation or the
         // finalization deadline. Do not claim pending input after either one.
@@ -1089,13 +1112,14 @@ export class LoopAgent {
               const message = createUserMessage(input.text, input.images);
               message.cache = { skipBreakpoint: true };
               addMessage(message);
+              maintenanceChanged = true;
               acceptedSteeringIds.add(input.id);
             }
             options.onSteeringAccepted?.(input);
           }
         }
 
-        const messages = getMessages();
+        const messages = maintenanceChanged ? getMessages() : maintenanceRequest;
         this.emitter.emit({
           type: "run_step",
           step: steps + 1,
@@ -1130,7 +1154,7 @@ export class LoopAgent {
               state,
               getMessagesForMaintenance,
               replaceMessages,
-              { force: true, signal: stepSignal, startedAt },
+              { force: true, signal: stepSignal, startedAt, protectedUserText: input },
             );
             if (stepDeadline.timedOut() && !signal?.aborted) {
               stopped = "timeout";
@@ -1766,8 +1790,9 @@ export class LoopAgent {
     state: LoopState,
     getMessages: GetMessages,
     replaceMessages: ReplaceMessages,
-    options: { force?: boolean; signal?: AbortSignal; startedAt?: number } = {},
+    options: { force?: boolean; signal?: AbortSignal; startedAt?: number; protectedUserText?: string } = {},
   ): Promise<boolean> {
+    if (!options.force && !this.autoCompactEnabled) return false;
     // Circuit breaker: after N consecutive failures, stop trying. Otherwise
     // a flaky summarizer wedges the agent in an infinite "try to compact,
     // fail, hit ceiling again" loop.
@@ -1776,19 +1801,18 @@ export class LoopAgent {
     }
 
     const msgs = getMessages();
+    const snapshot = this.conversation?.getSnapshot();
+    const originalFingerprint = contextFingerprint(msgs);
 
     // Char threshold catches English-heavy / code conversations; the
     // token threshold catches CJK-heavy conversations where 1 token can be
     // <2 chars — without the second check, Chinese conversations hit the
     // model's real token ceiling before the char threshold trips, and the
     // next API call fails with `context length exceeded`.
-    const byChars = this.autoCompact.shouldCompact(msgs);
-    const tokenEstimate = this.currentAutoCompactTokenEstimate(msgs);
-    const byTokens =
-      this.autoCompactTokenThreshold !== undefined &&
-      tokenEstimate > this.autoCompactTokenThreshold;
-
-    if (!options.force && !byChars && !byTokens) return false;
+    const compactOptions = this.compactOptions();
+    const decision = compactDecision(msgs, { ...compactOptions, force: options.force });
+    const tokenEstimate = decision.tokens;
+    if (!decision.shouldCompact) return false;
     if (!this.shouldAttemptAutoCompactAgain(state, tokenEstimate, this.autoCompact.totalChars(msgs))) {
       return false;
     }
@@ -1801,31 +1825,37 @@ export class LoopAgent {
     this.emitter.emit({
       type: "observation",
       kind: "autocompact_start",
-      detail: { charCount, tokenEstimate, messageCount, trigger: byTokens ? "tokens" : "chars" },
+      detail: { charCount, tokenEstimate, messageCount, trigger: decision.trigger },
     });
 
     const deadline = options.startedAt === undefined ? undefined : this.createStepDeadlineSignal(options.startedAt, options.signal);
     const compactSignal = deadline?.signal ?? options.signal;
     try {
-      const { messages: compacted, summary, failureReason } = await this.autoCompact.compact(
+      const result = await this.autoCompact.compact(
         msgs,
         this.meterProvider(this.summarizer ?? this.provider, "maintenance"),
         { signal: compactSignal, deadline: compactSignal ? this.providerDeadlines.get(compactSignal) : undefined },
+        { ...compactOptions, force: options.force, protectedUserText: options.protectedUserText },
       );
+      const { messages: finalMessages, summary, failureReason } = result;
+      if (result.status === "needs_input_reduction") {
+        const plan = planCompact(msgs, compactOptions);
+        const withoutTransient = compactRequestTokens([...plan.system, ...plan.retained],
+          { ...compactOptions, transientMessages: [] }, this.budgetTokenCounter);
+        // Oversized host context can still use the existing transient-only
+        // recovery route. Protected user/tool content may never take that route.
+        if (this.compactTransientMessages.length && plan.hardLimit !== undefined && withoutTransient <= plan.hardLimit) {
+          throw new Error("Transient host context requires bounded request recovery");
+        }
+        throw new CompactInputReductionError(failureReason);
+      }
       if (!summary.trim()) {
         throw new Error(failureReason ?? "autocompact produced no usable summary");
       }
 
-      // Reuse successful historical read results within remaining headroom.
-      // Fresh filesystem reads always go through the authorized tool boundary.
-      const restored = await restoreRecentFiles(msgs, { counter: this.budgetTokenCounter,
-        maxTokens: Math.min(2048, Math.max(0, (this.autoCompactTokenThreshold ?? this.contextWindow ?? 0)
-          - this.reservedOutputTokens - this.budgetTokenCounter.countMessages(compacted))) });
-      const finalMessages = restored
-        ? [...compacted, createRunLocalUserMessage(restored)]
-        : compacted;
-
-      replaceMessages(finalMessages);
+      if (compactSignal?.aborted) throw compactSignal.reason ?? new Error("Compact cancelled");
+      if (contextFingerprint(getMessages()) !== originalFingerprint) throw new Error("Context changed during compaction (revision conflict)");
+      replaceMessages(finalMessages, snapshot?.revision);
       state.lastAutoCompactAfterTokens = this.currentAutoCompactTokenEstimate(finalMessages);
       state.lastAutoCompactAfterChars = this.autoCompact.totalChars(finalMessages);
       state.consecutiveAutoCompactFailures = 0; // success — reset breaker
@@ -1836,7 +1866,9 @@ export class LoopAgent {
           summary,
           messagesBefore: messageCount,
           messagesAfter: finalMessages.length,
-          filesRestored: restored ? (restored.match(/^### /gm)?.length ?? 0) : 0,
+          filesRestored: result.filesRestored ?? 0,
+          status: result.status, inputTokens: result.inputTokens, outputTokens: result.outputTokens,
+          sourceTruncated: result.sourceTruncated,
         },
       });
     } catch (err) {
@@ -1857,6 +1889,7 @@ export class LoopAgent {
             state.consecutiveAutoCompactFailures >= MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES,
         },
       });
+      if (err instanceof CompactInputReductionError) throw err;
       // Don't re-throw — let the next LLM call try, possibly hitting
       // ReactiveCompact as a last resort.
     } finally {
@@ -1891,7 +1924,7 @@ export class LoopAgent {
     replaceMessages: ReplaceMessages,
   ): boolean {
     const before = getMessagesForMaintenance();
-    const { messages: compacted, compacted: didCompact } = this.reactiveCompact.compactMessages(before, this.budgetTokenCounter);
+    const { messages: compacted, compacted: didCompact } = this.reactiveCompact.compactMessages(before, this.budgetTokenCounter, this.protectedUserText);
     if (!didCompact) return false;
     replaceMessages(compacted);
     this.emitter.emit({
@@ -1922,7 +1955,7 @@ export class LoopAgent {
     }
 
     const providerView = getMessages();
-    const { messages: compacted, compacted: didCompact } = this.reactiveCompact.compactMessages(providerView, this.budgetTokenCounter);
+    const { messages: compacted, compacted: didCompact } = this.reactiveCompact.compactMessages(providerView, this.budgetTokenCounter, this.protectedUserText);
     if (!didCompact) return null;
     this.emitter.emit({
       type: "observation",
@@ -1941,7 +1974,20 @@ export class LoopAgent {
   }
 
   private currentAutoCompactTokenEstimate(messages: Message[]): number {
-    return this.conversation?.estimatedTokens ?? this.budgetTokenCounter.countMessages(messages);
+    return compactRequestTokens(messages, this.compactOptions(), this.budgetTokenCounter);
+  }
+
+  private compactOptions(tools = this.registry.definitions()): CompactOptions {
+    const limits = { contextWindow: this.contextWindow, inputTokenLimit: this.inputTokenLimit,
+      reservedOutputTokens: this.reservedOutputTokens, outputTokenCeiling: this.outputTokenCeiling };
+    const budget = compactBudget(limits);
+    const triggerTarget = this.autoCompactTokenThreshold !== undefined
+      ? Math.floor(this.autoCompactTokenThreshold * 0.5) : Math.floor(this.autoCompactCharThreshold / 8);
+    return { ...limits, counter: this.budgetTokenCounter, tools,
+      triggerAtTokens: this.autoCompactTokenThreshold, charThreshold: this.autoCompactCharThreshold,
+      autoEnabled: this.autoCompactEnabled,
+      transientMessages: this.compactTransientMessages,
+      targetTokens: budget ? Math.min(budget.keepFloorTokens, Math.max(1, triggerTarget)) : undefined, restoreFiles: true };
   }
 
   /**
@@ -2466,7 +2512,7 @@ export class LoopAgent {
    *  the (400 + json) heuristic and got mis-labeled as context overflow,
    *  triggering a useless compaction retry that always fails the same way. */
   private isContextError(err: unknown): boolean {
-    if (err instanceof RequestRecoveryError) return false;
+    if (err instanceof RequestRecoveryError || err instanceof CompactInputReductionError) return false;
     if (err instanceof ContextOverflowError) return true;
     const msg = err instanceof Error ? err.message : String(err);
     return isLikelyContextLimitErrorMessage(msg);

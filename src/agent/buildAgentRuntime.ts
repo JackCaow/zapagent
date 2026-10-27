@@ -82,6 +82,7 @@ export function buildAgentRuntime(deps: BuildAgentRuntimeDeps): AgentRuntime {
       maxToolRetries: 2,
       autoCompactThreshold: deps.autoCompactThreshold,
       autoCompactTokenThreshold: deps.autoCompactTokenThreshold,
+      autoCompactEnabled: deps.config.compaction.auto,
       contextWindow: contextLimits.contextWindow,
       inputTokenLimit: contextLimits.inputLimit,
       outputTokenCeiling: getActiveMaxOutputTokens(deps.config),

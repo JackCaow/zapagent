@@ -46,12 +46,26 @@ export function pickModelMetadata(
 /** Apply one catalog provider to a connected provider without changing model
  * availability. Only ids already returned/selected by the provider survive. */
 export function enrichProviderMetadata(provider: Provider, catalog: ModelsDevProvider): Provider {
-  const remote = modelsDevMetadata(catalog)
+  const catalogMetadata = modelsDevMetadata(catalog)
+  const directoryId = resolveCatalogProviderId(provider)
+  const directoryMatches = directoryId === catalog.id || (!directoryId
+    && !Object.values(provider.modelMetadata ?? {}).some(metadata => metadata.catalogRef))
+  const remote = directoryMatches ? { ...catalogMetadata } : {}
+  for (const id of provider.models) {
+    const ref = provider.modelMetadata?.[id]?.catalogRef
+    if (!ref) continue
+    // An explicit alias binding wins over coincidentally equal endpoint IDs.
+    const metadata = ref.providerId === catalog.id ? catalogMetadata[ref.modelId] : undefined
+    delete remote[id]
+    if (metadata) remote[id] = { ...metadata, catalogRef: ref }
+  }
   const merged = mergeModelMetadata(provider.modelMetadata ?? {}, remote)
   // A successful provider snapshot also retires identities for removed model
   // entries. Keep offline facts/capabilities, but do not keep claiming a precise
   // identity that the catalog no longer publishes for this endpoint alias.
   for (const [id, metadata] of Object.entries(merged)) {
+    if (metadata.catalogRef && metadata.catalogRef.providerId !== catalog.id) continue
+    if (!metadata.catalogRef && !directoryMatches) continue
     if (metadata.source !== "models.dev" || Object.hasOwn(remote, id) || !metadata.canonicalModelId) continue
     merged[id] = { ...metadata }
     delete merged[id].canonicalModelId
@@ -68,14 +82,11 @@ export function enrichProviderMetadata(provider: Provider, catalog: ModelsDevPro
 /** Best-effort startup refresh. Network failures leave the config untouched. */
 export async function refreshModelsDevMetadata(config: AppConfig): Promise<AppConfig> {
   const providers = await Promise.all(config.providers.map(async provider => {
-    const modelsDevProviderId = resolveCatalogProviderId(provider)
-    if (!modelsDevProviderId || provider.models.length === 0) return provider
-    try {
-      const catalog = await getModelsDevProvider(modelsDevProviderId)
-      return catalog ? enrichProviderMetadata(provider, catalog) : provider
-    } catch {
-      return provider
-    }
+    if (provider.models.length === 0) return provider
+    const ids = new Set([resolveCatalogProviderId(provider), ...provider.models.map(id =>
+      provider.modelMetadata?.[id]?.catalogRef?.providerId)].filter((id): id is string => !!id))
+    const catalogs = await Promise.all([...ids].map(id => getModelsDevProvider(id).catch(() => null)))
+    return catalogs.reduce((current, catalog) => catalog ? enrichProviderMetadata(current, catalog) : current, provider)
   }))
   return providers.every((provider, index) => provider === config.providers[index])
     ? config

@@ -5,6 +5,18 @@ import type { Message } from "../../core/types.js";
 import { countCodePoints } from "../../utils/logical-lines.js";
 
 describe("ReactiveCompact", () => {
+  it("rejects an in-place custom reducer without mutating protected source input", async () => {
+    const prompt = "HEAD " + "a ".repeat(10000) + " MUST_KEEP_MIDDLE " + "b ".repeat(10000) + " TAIL";
+    const messages: Message[] = [{ role: "user", content: prompt }];
+    let calls = 0;
+    const provider: LLMProvider = { call: async () => { calls++; throw new Error("context length exceeded"); } };
+    const compact = new ReactiveCompact({ onCompact: draft => { draft[0]!.content = "SHORT"; return draft; } });
+    await expect(compact.callWithCompaction(provider, messages, undefined, undefined,
+      { protectedUserText: prompt })).rejects.toThrow("Protected input");
+    expect(calls).toBe(1);
+    expect(messages[0]!.content).toBe(prompt);
+  });
+
   it("drops old oversized messages on retry even when history has fewer than 11 messages", async () => {
     const calls: Message[][] = [];
     const provider: LLMProvider = {

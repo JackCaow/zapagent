@@ -566,21 +566,15 @@ export function createRunHandlers(deps: RunHandlersDeps): RunHandlers {
           | undefined
         const msgs = d?.messageCount ?? 0
         const tok = d?.tokenEstimate ?? 0
-        const reason = d?.trigger === "tokens" ? "token threshold" : "char threshold"
+        const reason = d?.trigger === "force" ? "overflow recovery" : d?.trigger === "tokens" ? "token threshold" : "char threshold"
         deps.addLog(
           "system",
           `🗜 Compacting context — ${msgs} messages / ~${Math.round(tok / 1000)}k tokens (${reason})`,
         )
-        // Sync the Footer / TokenWarning / /status to the value that
-        // actually fired the compact. Without this the indicator keeps
-        // displaying the last API-truth (104K in the user repro that
-        // motivated this fix) even though the next call is already
-        // 155K + overhead — making it look like compact triggered with
-        // plenty of room left. Use the same `estimate + promptOverhead`
-        // shape the fallback paths use so the displayed total stays
-        // self-consistent across pre-turn / in-loop / restore.
+        // The shared planner already counted schemas and transient context.
+        // Do not add the previous provider-calibrated overhead a second time.
         if (tok > 0) {
-          deps.setContextTokens(tok + tokenAccounting.promptOverhead, "estimated", null)
+          deps.setContextTokens(tok, "estimated", null)
         }
       } else if (e.kind === "image_strip_self_heal") {
         deps.addLog(
@@ -627,6 +621,9 @@ export function createRunHandlers(deps: RunHandlersDeps): RunHandlers {
               error?: string
               breakerTripped?: boolean
               consecutiveFailures?: number
+              outputTokens?: number
+              status?: string
+              sourceTruncated?: boolean
             }
           | undefined
         if (d?.failed) {
@@ -649,11 +646,14 @@ export function createRunHandlers(deps: RunHandlersDeps): RunHandlers {
             )
           }
         } else {
+          if (typeof d?.outputTokens === "number") deps.setContextTokens(d.outputTokens, "estimated", null)
           const before = d?.messagesBefore ?? 0
           const after = d?.messagesAfter ?? 0
           const summary = d?.summary ?? ""
           if (summary && before > 0) {
             deps.compactLogs(summary, before, after, extractFilesFromSummary(summary))
+            if (d?.status === "target_not_met") deps.addLog("system", "⚠ Compacted; protected recent input exceeds the soft target but fits the context limit.")
+            if (d?.sourceTruncated) deps.addLog("system", "⚠ Compact used bounded history previews; some historical detail was omitted.")
             // Persist durable sections (decisions / errors / files) so they
             // survive compact-of-compact decay. Fire-and-forget — matches the
             // pre-turn and manual /compact paths.

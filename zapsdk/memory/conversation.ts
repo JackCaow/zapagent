@@ -3,7 +3,9 @@ import type { LLMProvider } from "../core/llm.js";
 import { HistoricalImageRetention, type HistoricalImagePolicy } from "../context/historical-images.js";
 import { mergeRecoveredProviderView } from "../context/request-recovery.js";
 import { TokenCounter } from "../context/token-counter.js";
-import { STRUCTURED_COMPACT_PROMPT, compactSummaryFailureReason, previewMessageForCompact, sanitizeCompactSummary } from "../context/autocompact.js";
+import { compactDecision, executeCompact, type CompactOptions, type CompactResult } from "../context/compact.js";
+import { contextFingerprint } from "../context/request-recovery.js";
+import { compactBudget } from "../context/compact-budget.js";
 import {
   type Turn,
   type CompletedCall,
@@ -19,6 +21,11 @@ export interface CompressResult {
   before: number;
   /** Surviving non-system messages (tail kept), excluding the new summary message. */
   after: number;
+  status?: CompactResult["status"];
+  inputTokens?: number;
+  outputTokens?: number;
+  filesRestored?: number;
+  sourceTruncated?: boolean;
 }
 
 export interface ConversationManagerOptions {
@@ -46,7 +53,7 @@ export interface ConversationManagerOptions {
   autoCompress?: boolean;
 }
 
-interface CompressOptions {
+export interface CompressOptions extends CompactOptions {
   force?: boolean;
   targetTokens?: number;
   signal?: AbortSignal;
@@ -79,6 +86,8 @@ interface PendingToolTurn {
  * to keep these in sync" bugs (issue #12 was one of them).
  */
 export class ConversationManager {
+  private revision = 0;
+  private compactionContext: CompactOptions = {};
   private turns: Turn[] = [];
   private pending: PendingToolTurn | null = null;
   /** Recovery keeps omitted history readable without reintroducing it into requests. */
@@ -374,114 +383,84 @@ export class ConversationManager {
     return this._lastCompressionFailureReason;
   }
 
+  /** Request metadata only, never changes/persists conversation contents. */
+  setCompactionContext(context: CompactOptions): void {
+    this.compactionContext = { ...context, transientMessages: structuredClone(context.transientMessages ?? []) };
+  }
+
+  getCompactionContext(): CompactOptions {
+    return { ...this.compactionContext, tools: this.compactionContext.tools?.slice(),
+      transientMessages: structuredClone(this.compactionContext.transientMessages ?? []) };
+  }
+
+  getSnapshot(): { messages: Message[]; revision: number } {
+    this.flushPending();
+    return { messages: structuredClone(this.getAllMessages()), revision: this.revision };
+  }
+
+  compareAndReplace(messages: Message[], expectedRevision: number, counter = this.counter): boolean {
+    this.flushPending();
+    if (this.revision !== expectedRevision) return false;
+    const turns = rederiveTurns(messages);
+    const tokens = counter.countMessages(turnsToMessages(turns));
+    this.turns = turns;
+    this.counter = counter;
+    this.providerViewFloor = 0;
+    this.historicalImages?.reset();
+    this._estimatedTokens = tokens;
+    this.revision++;
+    return true;
+  }
+
   /**
    * Compress conversation by LLM summarization. Keeps the most recent turns
    * whose total token count fits under `targetTokens` (defaults to
    * `targetTokensAfterCompress`, which defaults to 50% of the trigger);
    * earlier turns become a single summary turn.
    */
-  async compress(
-    provider?: LLMProvider,
-    options: CompressOptions = {},
-  ): Promise<CompressResult | null> {
+  async compress(provider?: LLMProvider, options: CompressOptions = {}): Promise<CompressResult | null> {
     this.flushPending();
     this._lastCompressionFailureReason = undefined;
-
-    const force = options.force ?? false;
-    const targetTokens = nonNegativeInteger(options.targetTokens)
-      ?? this.targetTokensAfterCompress
-      ?? (this.triggerAtTokens ? Math.floor(this.triggerAtTokens * 0.5) : undefined);
-
     const summarizer = provider ?? this.summarizer;
     if (!summarizer) return null;
-
-    const allMessages = turnsToMessages(this.turns);
-
-    const overMessages = allMessages.length > this.maxMessages;
-    const overTokens = this.maxTokens ? this._estimatedTokens > this.maxTokens : false;
-    const overSoftTrigger = this.triggerAtTokens ? this._estimatedTokens > this.triggerAtTokens : false;
-
-    if (!force && !overMessages && !overTokens && !overSoftTrigger) return null;
+    const snapshot = this.getSnapshot();
+    const context = { ...this.compactionContext, ...options, counter: options.counter ?? this.counter };
+    const targetTokens = options.targetTokens ?? this.targetTokensAfterCompress
+      ?? compactBudget(context)?.keepFloorTokens
+      ?? (this.triggerAtTokens ? Math.floor(this.triggerAtTokens * 0.5) : undefined);
     if (targetTokens === undefined) return null;
-
-    // Preserve only the leading system prefix. Non-leading system turns are
-    // historical content and must not be hoisted ahead of earlier user turns.
-    const { systemTurns, nonSystemTurns: nonSystem } = splitLeadingSystemPrefix(this.turns);
-
-    // Greedy keep-from-tail: include turns at the end while we fit under
-    // targetTokens. Each turn is treated as an indivisible unit (matches
-    // the wire-level pairing invariant — never split an assistant from
-    // its tool_results).
-    const systemMsgsTokens = systemTurns.reduce((sum, t) => sum + countTurnTokens(this.counter, t), 0);
-    let keepStart = nonSystem.length;
-    let keepTokens = systemMsgsTokens;
-    while (keepStart > 0) {
-      const next = keepStart - 1;
-      const t = nonSystem[next];
-      const tTokens = countTurnTokens(this.counter, t);
-      if (keepTokens + tTokens > targetTokens) break;
-      keepStart = next;
-      keepTokens += tTokens;
-    }
-    if (!force && keepStart === nonSystem.length && nonSystem.length > 0) {
-      keepStart = nonSystem.length - 1;
-    }
-    if (force && nonSystem.length > 1) {
-      const cap = Math.max(0, nonSystem.length - 10);
-      if (keepStart < cap) keepStart = cap;
-    }
-
-    const toSummarize = nonSystem.slice(0, keepStart);
-    const toKeep = nonSystem.slice(keepStart);
-
-    if (toSummarize.length === 0) return null;
-
-    // Convert summarized turns to messages for the LLM input. Counting
-    // before/after at the message level keeps backward-compat with the
-    // CompressResult shape consumers display.
-    const summarizedMsgs = toSummarize.flatMap((t) => turnToMessages(t));
-    const before = nonSystem.flatMap((t) => turnToMessages(t)).length;
-
-    const historyText = summarizedMsgs
-      .map((m) => {
-        const role = m.role === "tool_result" ? "tool_result" : m.role;
-        return `[${role}]: ${previewMessageForCompact(role, m.content)}`;
-      })
-      .join("\n\n");
-
-    let response: Awaited<ReturnType<LLMProvider["call"]>>;
+    const over = snapshot.messages.length > this.maxMessages
+      || (this.maxTokens !== undefined && this._estimatedTokens > this.maxTokens)
+      || (this.triggerAtTokens !== undefined && this._estimatedTokens > this.triggerAtTokens);
+    if (context.contextWindow !== undefined) {
+      if (!compactDecision(snapshot.messages, { ...context, force: options.force,
+        triggerAtTokens: context.triggerAtTokens ?? this.triggerAtTokens }).shouldCompact) return null;
+    } else if (!options.force && !over) return null;
+    let result: CompactResult;
     try {
-      response = await summarizer.call([
-        { role: "system", content: STRUCTURED_COMPACT_PROMPT },
-        { role: "user", content: historyText },
-      ], undefined, { signal: options.signal });
+      result = await executeCompact(snapshot.messages, summarizer, { ...context, targetTokens,
+        legacyForce: options.force, restoreFiles: context.contextWindow !== undefined && context.restoreFiles !== false });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this._lastCompressionFailureReason = `summarizer failed: ${message}`;
+      this._lastCompressionFailureReason = `summarizer failed: ${err instanceof Error ? err.message : String(err)}`;
       throw err;
     }
-    if (options.signal?.aborted) {
-      throw options.signal.reason ?? new Error("compression aborted");
-    }
-    const summary = sanitizeCompactSummary(response.text);
-    const failureReason = compactSummaryFailureReason(summary);
-    if (failureReason) {
-      this._lastCompressionFailureReason = failureReason;
+    if (!result.summary) {
+      this._lastCompressionFailureReason = result.failureReason;
       return null;
     }
-
-    const summaryTurn: Turn = {
-      kind: "user",
-      content: `[Context compacted — ${summarizedMsgs.length} earlier messages summarized]\n${summary}`,
-    };
-
-    this.turns = [...systemTurns, summaryTurn, ...toKeep];
-    this.providerViewFloor = 0;
-    this.recalculateTokens();
-
-    const after = toKeep.flatMap((t) => turnToMessages(t)).length;
-
-    return { summary, before, after };
+    if (options.signal?.aborted) throw options.signal.reason ?? new Error("compression aborted");
+    if (contextFingerprint(this.getAllMessages()) !== contextFingerprint(snapshot.messages)
+      || !this.compareAndReplace(result.messages, snapshot.revision, context.counter)) {
+      this._lastCompressionFailureReason = "Context changed during compaction (revision conflict)";
+      return null;
+    }
+    let systemCount = 0;
+    while (snapshot.messages[systemCount]?.role === "system") systemCount++;
+    const before = snapshot.messages.length - systemCount;
+    return { summary: result.summary, before,
+      after: result.messages.length - systemCount - 1, status: result.status,
+      inputTokens: result.inputTokens, outputTokens: result.outputTokens,
+      filesRestored: result.filesRestored, sourceTruncated: result.sourceTruncated };
   }
 
   async waitForCompression(provider?: LLMProvider, options: { signal?: AbortSignal } = {}): Promise<void> {
@@ -521,6 +500,8 @@ export class ConversationManager {
   }
 
   clear(): void {
+    this.revision++;
+    this.compactionContext = {};
     this.historicalImages?.reset();
     this.providerViewFloor = 0;
     this.turns = [];
@@ -680,6 +661,7 @@ export class ConversationManager {
   }
 
   private recalculateTokens(): void {
+    this.revision++;
     const msgs = turnsToMessages(this.turns);
     this._estimatedTokens = this.counter.countMessages(msgs);
   }

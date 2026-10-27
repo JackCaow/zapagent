@@ -24,7 +24,10 @@ ptyTest("real App guides connection creation into model selection, skip and repa
     compaction: { auto: false, prune: false, reserved: 20000 } }))
   // Keep this test offline except for our own discovery endpoint.
   writeFileAtomic(join(root, "cache/models-dev-v1.json"), JSON.stringify({ version: 1, fetchedAt: Date.now(),
-    catalog: { fixture: { id: "fixture", name: "Fixture directory", models: {} } } }))
+    catalog: { fixture: { id: "fixture", name: "Fixture directory", models: {
+      "actual-catalog-model": { id: "actual-catalog-model", name: "Fixture 1M", limit: { context: 1048576, output: 65536 },
+        canonical_model_id: "fixture/actual-catalog-model", tool_call: true },
+    } } } }))
   const config = () => JSON.parse(readFileSync(join(root, "config.json"), "utf8")) as AppConfig
   const tmux = (...args: string[]) => {
     const result = spawnSync("tmux", ["-L", socket, "-f", "/dev/null", ...args], { encoding: "utf8" })
@@ -51,7 +54,7 @@ ptyTest("real App guides connection creation into model selection, skip and repa
     await key("Enter")
   }
   const openConnect = async () => { await command("/connect"); await visible("Connections · /connect") }
-  const newConnection = async (name: string, path = "/v1", withKey = false) => {
+  const newConnection = async (name: string, path = "/v1", withKey = false, manualContext?: string) => {
     await openConnect()
     for (let i = 0; i < config().providers.length; i++) await key("Down")
     await key("Enter"); await visible("Provider directory · models.dev")
@@ -63,6 +66,12 @@ ptyTest("real App guides connection creation into model selection, skip and repa
       await key("Enter"); await visible("Connection · API key")
       await command("fixture-key")
     } else { await key("Down"); await key("Enter") }
+    await visible("Context window")
+    if (manualContext) {
+      await key("Down"); await key("Enter"); await visible("Manual context window")
+      for (let i = 0; i < 6; i++) await key("BSpace")
+      await command(manualContext)
+    } else await key("Enter")
     await visible("Review connection · next: choose a model")
     await key("Enter")
     frames[name] = await visible(`Choose a model · ${name}`)
@@ -84,6 +93,19 @@ ptyTest("real App guides connection creation into model selection, skip and repa
 
     await newConnection("First", "/v1", true)
     await visible("alpha-model")
+    expect(config().providers[0]?.contextWindowMode).toBe("auto")
+    // An endpoint alias can explicitly use a different catalog model, even
+    // from a directory whose inference adapter is not supported by Zap.
+    await literal("m"); frames.metadataDirectory = await visible("Provider directory · models.dev")
+    expect(frames.metadataDirectory).not.toContain("Custom endpoint")
+    await key("Enter"); await visible("Model metadata · Fixture directory")
+    await key("Down"); await key("Enter")
+    frames.linked = await visible("context 1,048,576")
+    expect(config().active.model).toBe("")
+    expect(config().providers[0]?.models).toEqual(["alpha-model"])
+    expect(config().providers[0]?.modelMetadata?.["alpha-model"]?.catalogRef)
+      .toEqual({ providerId: "fixture", modelId: "actual-catalog-model" })
+    expect(config().providers[0]?.baseURL).toBe(`http://127.0.0.1:${server.port}/v1`)
     await key("Escape"); await closed()
     expect(config().providers).toHaveLength(1)
     expect(config().active.model).toBe("")
@@ -91,9 +113,33 @@ ptyTest("real App guides connection creation into model selection, skip and repa
     await key("Enter"); await closed()
     const first = config().active
     expect(first.model).toBe("alpha-model")
+    await command("/status"); frames.autoStatus = await visible("Auto-compact at: 831.5K")
+    expect(frames.autoStatus).toContain("1.05M")
+    expect(frames.autoStatus).toContain("Limit source:    models-dev")
+    await key("Escape")
+    await command("/model"); await visible("Models · First"); await literal("c")
+    await visible("Context window"); await key("Down"); await key("Enter")
+    await visible("Manual context window")
+    for (let i = 0; i < 7; i++) await key("BSpace")
+    await command("0"); await visible("Enter a positive whole number")
+    expect(config().providers[0]?.contextWindowMode).toBe("auto")
+    await key("BSpace"); await command("262144")
+    frames.manual = await visible("Manual context: 262,144")
+    expect(config().providers[0]?.contextWindowMode).toBe("manual")
+    await key("Escape"); await closed()
+    await command("/status"); frames.manualStatus = await visible("Auto-compact at: 202.4K")
+    expect(frames.manualStatus).toContain("Limit source:    manual")
+    await key("Escape")
+    await command("/model"); await visible("Models · First"); await literal("c")
+    await visible("Context window"); await key("Up"); await key("Enter")
+    await visible("Automatic context")
+    expect(config().providers[0]?.contextWindowMode).toBe("auto")
+    await key("Escape"); await closed()
 
     // New connection must target itself, not the existing active provider.
-    await newConnection("Second")
+    await newConnection("Second", "/v1", false, "262144")
+    expect(config().providers[1]?.contextWindow).toBe(262144)
+    expect(config().providers[1]?.contextWindowMode).toBe("manual")
     await visible("beta-model")
     expect(config().active).toEqual(first)
     await key("Down"); await key("Enter"); await closed()
@@ -129,6 +175,7 @@ ptyTest("real App guides connection creation into model selection, skip and repa
     await key("Enter"); await visible("Connection · wire protocol")
     await key("Enter"); await visible("Connection · authentication")
     await key("Enter"); await visible("Connection · API key")
+    await key("Enter"); await visible("Context window")
     await key("Enter"); await visible("current model is kept")
     await key("Enter"); frames.edited = await closed()
     expect(frames.edited).not.toContain("Choose a model")
@@ -142,4 +189,4 @@ ptyTest("real App guides connection creation into model selection, skip and repa
     server.stop()
     rmSync(root, { recursive: true, force: true })
   }
-}, 60000)
+}, 90000)

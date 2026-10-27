@@ -49,6 +49,7 @@ export function assembleSubagentTool(input: AssemblyInput): { registry: ToolRegi
     inputTokenLimit: input.inputTokenLimit,
     outputTokenCeiling: input.outputTokenCeiling,
     reservedOutputTokens: input.reservedOutputTokens,
+    autoCompactEnabled: input.autoCompactEnabled,
     storageProjectCwd: input.storageProjectCwd,
     workspaceManager: config.workspaceManager,
     mergeCoordinator: config.mergeCoordinator,

@@ -7,6 +7,7 @@ import { contextFingerprint, measureRecoveryInput, recoveryReason, reduceHistori
 import { Microcompact } from "./microcompact.js";
 import { redactTextSecrets } from "../utils/redact.js";
 import { countCodePoints, sliceHeadCodePoints, sliceTailCodePoints } from "../utils/logical-lines.js";
+import { CompactInputReductionError } from "./compact.js";
 
 const MAX_REACTIVE_MESSAGE_CHARS = 12_000;
 const REACTIVE_MESSAGE_EDGE_CHARS = 3_000;
@@ -23,6 +24,8 @@ export interface RecoveryNotice {
 }
 
 export interface RecoveryCallOptions {
+  /** The active user request is not a disposable historical preview. */
+  protectedUserText?: string;
   /** A stream already failed. Transform before making another request. */
   initialError?: unknown;
   /** Snapshot the actual failed provider view before preparing a retry. */
@@ -56,12 +59,21 @@ export class ReactiveCompact {
     this.onRetry = options.onRetry;
   }
 
-  compactMessages(messages: Message[], counter = new TokenCounter()): { messages: Message[]; compacted: boolean } {
+  compactMessages(messages: Message[], counter = new TokenCounter(), protectedUserText?: string): { messages: Message[]; compacted: boolean } {
     const before = measureRecoveryInput(messages, counter);
     const beforeLength = messages.length;
+    const protectedFingerprints = protectedRecoveryMessages(messages, protectedUserText)
+      .map(message => contextFingerprint([message]));
     const compactedMessages = this.onCompact
-      ? this.onCompact([...messages])
-      : this.defaultCompact(messages);
+      // A custom reducer must not mutate the source or the protection baseline.
+      // The spread retains local origin symbols used to position transient data.
+      ? this.onCompact(messages.map(message => ({ ...message, ...structuredClone(message) })))
+      : this.defaultCompact(messages, protectedUserText);
+    for (const fingerprint of protectedFingerprints) {
+      if (!compactedMessages.some(candidate => contextFingerprint([candidate]) === fingerprint)) {
+        throw new CompactInputReductionError();
+      }
+    }
     return {
       messages: compactedMessages,
       compacted:
@@ -98,7 +110,7 @@ export class ReactiveCompact {
         const source = attempt === 0 ? recovery.recoveryMessages?.() ?? currentMessages : currentMessages;
         const candidate = reason === "request_body"
           ? reduceHistoricalImages(source)
-          : this.compactWithTransientAnchors(source, counter);
+          : this.compactWithTransientAnchors(source, counter, recovery.protectedUserText);
         assertProviderRequestAllowed(opts);
         const before = measureRecoveryInput(currentMessages, counter);
         const after = measureRecoveryInput(candidate, counter);
@@ -107,6 +119,7 @@ export class ReactiveCompact {
           ? after.messageBytes < before.messageBytes
           : after.estimatedTokens < before.estimatedTokens;
         if (!improved || attempted.has(fingerprint)) {
+          if (reason === "context_tokens" && recovery.protectedUserText !== undefined) throw new CompactInputReductionError();
           throw new RequestRecoveryError(reason, failure,
             reason === "request_body"
               ? "no further safe media reduction; latest images and user attachments retained"
@@ -137,14 +150,14 @@ export class ReactiveCompact {
     }
   }
 
-  private compactWithTransientAnchors(messages: Message[], counter: TokenCounter): Message[] {
+  private compactWithTransientAnchors(messages: Message[], counter: TokenCounter, protectedUserText?: string): Message[] {
     // Symbols survive object spreads inside compaction but never enter JSON.
     // This lets transient host messages retain their position even when their
     // neighbouring persistent message was shortened or an earlier range dropped.
     const origin = Symbol("recovery-origin");
     const tagged = messages.map((message, index) => ({ ...message, [origin]: index }));
     const persistent = tagged.filter(m => !m.cache?.transient);
-    const result = this.compactMessages(persistent, counter).messages as Array<Message & { [origin]?: number }>;
+    const result = this.compactMessages(persistent, counter, protectedUserText).messages as Array<Message & { [origin]?: number }>;
     for (const message of tagged.filter(m => m.cache?.transient)) {
       const compacted = this.compactMessages([message], counter).messages[0] as Message & { [origin]?: number };
       const next = result.findIndex(m => m[origin] !== undefined && m[origin]! > message[origin]);
@@ -156,16 +169,18 @@ export class ReactiveCompact {
     });
   }
 
-  private defaultCompact(messages: Message[]): Message[] {
+  private defaultCompact(messages: Message[], protectedUserText?: string): Message[] {
     const result = [...messages];
+    const protectedMessages = new Set(protectedRecoveryMessages(messages, protectedUserText));
 
     // Step 1: Microcompact all tool results aggressively
     new Microcompact({ keepRecent: 2 }).compact(result);
+    messages.forEach((message, index) => { if (protectedMessages.has(message)) result[index] = message; });
 
     // Step 2: Shrink any single oversized narrative message, including the
     // latest user paste. Dropping the middle cannot help when the overflow is
     // caused by the tail message itself, so preserve its head/tail and retry.
-    this.compactOversizedMessages(result);
+    this.compactOversizedMessages(result, protectedMessages);
 
     // Step 3: If still overflowing, drop middle messages.
     // Keep: leading system messages, last 6 messages, drop the middle. Trigger whenever
@@ -181,10 +196,14 @@ export class ReactiveCompact {
         tailStart--;
       }
       const tail = result.slice(tailStart);
-      const droppedMessages = result.slice(system.length, tailStart);
+      const middle = result.slice(system.length, tailStart);
+      const droppedMessages = middle.filter(message => !protectedMessages.has(message));
+      const pinned = middle.filter(message => protectedMessages.has(message));
+      if (!droppedMessages.length) return result;
       return [
         ...system,
         { role: "user" as const, content: summarizeDroppedMessages(droppedMessages) },
+        ...pinned,
         ...tail,
       ];
     }
@@ -192,12 +211,12 @@ export class ReactiveCompact {
     return result;
   }
 
-  private compactOversizedMessages(messages: Message[]): number {
+  private compactOversizedMessages(messages: Message[], protectedMessages = new Set<Message>()): number {
     const systemLen = leadingSystemMessageCount(messages);
     let compacted = 0;
     for (let i = systemLen; i < messages.length; i++) {
       const msg = messages[i];
-      if (!msg || msg.role === "tool_result") continue;
+      if (!msg || msg.role === "tool_result" || protectedMessages.has(msg)) continue;
       const contentChars = countCodePoints(msg.content);
       if (contentChars <= MAX_REACTIVE_MESSAGE_CHARS) continue;
       const head = sliceHeadCodePoints(msg.content, REACTIVE_MESSAGE_EDGE_CHARS);
@@ -213,6 +232,20 @@ export class ReactiveCompact {
     }
     return compacted;
   }
+}
+
+function protectedRecoveryMessages(messages: Message[], protectedUserText?: string): Message[] {
+  if (protectedUserText === undefined) return [];
+  const persistent = messages.filter(message => !message.cache?.transient);
+  const user = persistent.findLast(message => message.role === "user" && message.content === protectedUserText);
+  const lastUser = persistent.findLast(message => message.role === "user");
+  const protectedMessages = [user, lastUser].filter((message): message is Message => !!message);
+  const lastTool = persistent.findLastIndex(message => message.role === "assistant" && !!message.toolCalls?.length);
+  if (user && lastTool > persistent.indexOf(user)) {
+    protectedMessages.push(persistent[lastTool]!);
+    for (let i = lastTool + 1; persistent[i]?.role === "tool_result"; i++) protectedMessages.push(persistent[i]!);
+  }
+  return protectedMessages;
 }
 
 function leadingSystemMessageCount(messages: Message[]): number {

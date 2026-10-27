@@ -290,7 +290,7 @@ export function App() {
   }, [updateConfig])
 
   // ── Conversation state ──
-  const { logs, addLog, replaceLog, peekNextLogId, getUiLogCount, compactLogs, setLogs, setStaticCommitFrozen, getIsFrozen, registerStaticFlushCallback } = useLogs()
+  const { logs, addLog, replaceLog, peekNextLogId, getUiLogCount, compactLogs: replaceWithCompactLog, setLogs, setStaticCommitFrozen, getIsFrozen, registerStaticFlushCallback } = useLogs()
   const logsRef = useRef(logs)
   logsRef.current = logs
 
@@ -298,6 +298,12 @@ export function App() {
   // scratch — session restore / rewind / /clear / /new all need this.
   const [transcriptEpoch, setTranscriptEpoch] = useState(0)
   const bumpTranscript = useCallback(() => setTranscriptEpoch((e) => e + 1), [])
+  const compactLogs = useCallback((...args: Parameters<typeof replaceWithCompactLog>) => {
+    replaceWithCompactLog(...args)
+    // Ink Static remembers its emitted item count. Replacing a long history
+    // with one compact marker must reset that cursor before subsequent logs.
+    bumpTranscript()
+  }, [replaceWithCompactLog, bumpTranscript])
 
   // ── Input ──
   const [inputValue, setInputValue] = useState("")
@@ -780,9 +786,9 @@ export function App() {
         },
         onCompactFailure: setCompactFailure,
         onMemoryFailure: setMemoryFailure,
-        onContextChanged: () => {
+        onContextChanged: (requestTokens) => {
           setContextTokens(
-            conversation.estimatedTokens + tokenAccounting.promptOverhead,
+            requestTokens ?? conversation.estimatedTokens + tokenAccounting.promptOverhead,
             "estimated",
             null,
           )
@@ -1174,7 +1180,7 @@ export function App() {
         if (persistence.pendingWrites || persistence.lastFailure) throw new Error("Save the current session successfully before updating.")
       }} onCancel={closeDialog} onRestart={request => { readCurrentSessionLogs(); requestUpdateRestart(request); exit() }} />}
       {dialog === "connect"     && <ConnectDialog     config={config} onSave={updateConfig} onCommit={commitConfig} onCancel={closeDialog} />}
-      {dialog === "model"       && <ModelDialog       config={config} onCommit={commitConfig} onCancel={closeDialog} />}
+      {dialog === "model"       && <ModelDialog       config={config} onSave={updateConfig} onCommit={commitConfig} onCancel={closeDialog} />}
       {dialog === "mode"        && <ModeDialog        config={config} onCommit={commitConfig} onCancel={closeDialog} />}
       {dialog === "effort"      && <EffortDialog      config={config} onCommit={commitConfig} onCancel={closeDialog} />}
       {dialog === "status"      && (

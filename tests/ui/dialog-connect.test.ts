@@ -19,6 +19,24 @@ describe("connection persistence before model selection", () => {
     expect(next.providers[0]?.models).toEqual([])
     expect(next.active.model).toBe("")
     expect(hasApiKey(next)).toBe(true)
+    expect(next.providers[0]?.contextWindowMode).toBe("auto")
+  })
+
+  it("persists an explicit manual context for new custom connections", () => {
+    const config = { ...getDefaultConfig(), providers: [], active: { providerId: "", model: "" } }
+    const next = saveConnection(config, { name: "Gateway", baseURL: "https://gateway.example/v1", apiKey: "k",
+      protocol: "openai-responses", authMode: "api-key", contextWindowMode: "manual", contextWindow: 1048576 })
+    expect(next.providers[0]).toMatchObject({ contextWindow: 1048576, contextWindowMode: "manual", protocol: "openai-responses" })
+  })
+
+  it("keeps manual limits on edit and permits an explicit return to automatic", () => {
+    const existing = createCustomProvider({ name: "Gateway", baseURL: "https://gateway.example/v1", apiKey: "k",
+      models: ["alias"], contextWindow: 256000 })
+    const config = { ...getDefaultConfig(), providers: [existing] }
+    const draft = { existing, name: existing.name, baseURL: existing.baseURL, apiKey: "k",
+      protocol: "openai" as const, authMode: "api-key" as const }
+    expect(saveConnection(config, draft).providers[0]?.contextWindowMode).toBe("manual")
+    expect(saveConnection(config, { ...draft, contextWindowMode: "auto" }).providers[0]?.contextWindowMode).toBe("auto")
   })
 
   it("edits an inactive connection without changing the active model or preferences", () => {

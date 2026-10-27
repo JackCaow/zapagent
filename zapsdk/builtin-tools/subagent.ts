@@ -61,6 +61,7 @@ export interface SubagentToolOptions {
   /** Char threshold for auto-compaction inside the subagent run. Defaults
    *  to 200_000 chars (~50k tokens). Set to 0 to disable. */
   subagentAutoCompactThreshold?: number;
+  autoCompactEnabled?: boolean;
   /** Context window + ceiling inherited from parent LoopAgent for per-call
    *  budget planning. Subagents typically use a narrower slice of the full
    *  context but the absolute bounds are shared with the parent provider. */
@@ -835,6 +836,7 @@ function createDirectSubagentTool(options: SubagentToolOptions): Tool {
           // Char-based autocompact inside the subagent so long explorations
           // with big file reads don't blow past the context window. 0 disables.
           autoCompactThreshold: autoCompactThreshold > 0 ? autoCompactThreshold : undefined,
+          autoCompactEnabled: options.autoCompactEnabled !== false && autoCompactThreshold > 0,
         });
 
         if (options.onEvent) {

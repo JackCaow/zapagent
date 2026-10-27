@@ -1,3 +1,4 @@
+import { deriveCompactionThresholds } from "../zapsdk/context/compact-budget.js"
 import { canonicalModelId } from "../zapsdk/core/model-identity.js"
 import { existsSync, readFileSync } from "node:fs"
 import { sandboxTemporaryDirectoryDescription } from "./prompts/execution-facts.js"
@@ -64,6 +65,8 @@ export const DEFAULT_EFFORT_VALUES = ["minimal", "low", "medium", "high", "xhigh
  *  Keeping this local means normal startup and model switching never depend on
  *  network access after /connect has completed. */
 export interface ProviderModelMetadata {
+  /** Explicit metadata source for an endpoint alias; never changes its wire ID. */
+  catalogRef?: { providerId: string; modelId: string }
   /** Underlying lab/model identity; never replaces the endpoint request model. */
   canonicalModelId?: string
   name?: string
@@ -131,23 +134,7 @@ export interface CompactionThresholds {
 }
 
 export function deriveCompaction(contextWindow: number): CompactionThresholds {
-  const normalizedWindow = positiveIntegerOrDefault(contextWindow, 128000)
-  // Bytes the provider needs to reserve for the model's response. These
-  // aren't available for input — clamping at 1k floor + 8k ceiling matches
-  // most provider's expected response sizes (the 8k cap covers most replies
-  // including long code edits; pinning at 10% of window so 1M-context
-  // models don't waste 100k of headroom on a number that's actually constant
-  // in practice).
-  const reserveForOutput = Math.min(8192, Math.max(1024, Math.floor(normalizedWindow * 0.10)))
-  // Effective window for input is the headroom we actually have. Used as
-  // the basis for compact + warning thresholds so they fire on time even
-  // for narrow context windows where the reservation is a meaningful slice.
-  const effectiveWindow = normalizedWindow - reserveForOutput
-  return {
-    triggerAt: Math.floor(effectiveWindow * 0.80),
-    keepFloorTokens: Math.floor(effectiveWindow * 0.40),
-    reserveForOutput,
-  }
+  return deriveCompactionThresholds(contextWindow)
 }
 
 export interface TokenWarningState {
@@ -530,6 +517,12 @@ function normalizeModelMetadata(value: unknown): Record<string, ProviderModelMet
   for (const [modelId, raw] of Object.entries(value)) {
     if (!modelId || !isRecord(raw)) continue
     const metadata: ProviderModelMetadata = {}
+    if (isRecord(raw.catalogRef)) {
+      const { providerId, modelId: catalogModelId } = raw.catalogRef
+      const validId = (id: unknown): id is string => typeof id === "string" && id.length > 0
+        && id.length <= 256 && !/[\u0000-\u001f\u007f]/.test(id)
+      if (validId(providerId) && validId(catalogModelId)) metadata.catalogRef = { providerId, modelId: catalogModelId }
+    }
     if (typeof raw.name === "string" && raw.name) metadata.name = raw.name
     const identity = canonicalModelId(raw.canonicalModelId)
     if (identity) metadata.canonicalModelId = identity

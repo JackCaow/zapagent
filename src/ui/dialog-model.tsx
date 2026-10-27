@@ -1,8 +1,8 @@
 /** @jsxImportSource react */
 import { useEffect, useRef, useState } from "react"
 import { Box, Text, useInput } from "ink"
-import type { AppConfig } from "../config.js"
-import { discoverProviderModels, describeCatalogRow, selectCatalogModel, type CatalogRow } from "../provider-catalog.js"
+import { inferLegacyContextWindowMode, resolveProviderContextWindow, upsertProvider, type AppConfig } from "../config.js"
+import { associateModelMetadata, discoverProviderModels, describeCatalogRow, selectCatalogModel, type CatalogRow } from "../provider-catalog.js"
 import { DialogFrame } from "./dialog-frame.js"
 import { PickerDialog } from "./dialog-picker.js"
 import { TextField } from "./text-field.js"
@@ -10,10 +10,12 @@ import { commandInput, isReturnInput } from "./controlled-input.js"
 import { c } from "./theme.js"
 import { useTermWidth } from "./term-width.js"
 import { truncateToWidth } from "./truncate.js"
+import { ModelMetadataDialog } from "./dialog-model-metadata.js"
+import { ContextWindowDialog } from "./dialog-context-window.js"
 
-interface Props { config: AppConfig; initialProviderId?: string; setup?: boolean; onCommit: (next: AppConfig) => void; onCancel: () => void }
+interface Props { config: AppConfig; initialProviderId?: string; setup?: boolean; onSave: (next: AppConfig) => void; onCommit: (next: AppConfig) => void; onCancel: () => void }
 
-export function ModelDialog({ config, initialProviderId, setup = false, onCommit, onCancel }: Props) {
+export function ModelDialog({ config, initialProviderId, setup = false, onSave, onCommit, onCancel }: Props) {
   const width = Math.max(10, useTermWidth() - 2)
   const [height, setHeight] = useState(process.stdout.rows ?? 24)
   useEffect(() => {
@@ -23,7 +25,8 @@ export function ModelDialog({ config, initialProviderId, setup = false, onCommit
   }, [])
   const [providerId, setProviderId] = useState(initialProviderId ?? (config.active.providerId || config.providers[0]?.id || ""))
   const provider = config.providers.find(item => item.id === providerId)
-  const [phase, setPhase] = useState<"models" | "providers" | "manual" | "search">("models")
+  const [phase, setPhase] = useState<"models" | "providers" | "manual" | "search" | "metadata" | "context">("models")
+  const [metadataTarget, setMetadataTarget] = useState<CatalogRow | null>(null)
   const [rows, setRows] = useState<CatalogRow[]>([])
   const [index, setIndex] = useState(0)
   const [query, setQuery] = useState("")
@@ -68,6 +71,12 @@ export function ModelDialog({ config, initialProviderId, setup = false, onCommit
     if (cmd === "t") { setManual(""); setPhase("manual"); return }
     if (cmd === "/") { setPhase("search"); return }
     if (cmd === "r") { setRefresh(value => value + 1); return }
+    if (cmd === "c") { setPhase("context"); return }
+    if (cmd === "m") {
+      const row = state.shown[state.selectedIndex]
+      if (row) { setMetadataTarget(row); setPhase("metadata") }
+      return
+    }
     if (key.upArrow) { setIndex(Math.max(0, state.selectedIndex - 1)); return }
     if (key.downArrow) { setIndex(Math.min(Math.max(0, state.shown.length - 1), state.selectedIndex + 1)); return }
     if (isReturnInput(input, key)) {
@@ -79,6 +88,18 @@ export function ModelDialog({ config, initialProviderId, setup = false, onCommit
   if (!provider) return <DialogFrame title="Models · /model" hint="esc close">
     <Text>No connection configured. Use /connect to create one first.</Text>
   </DialogFrame>
+  if (phase === "metadata" && metadataTarget) return <ModelMetadataDialog modelId={metadataTarget.id}
+    onCancel={() => setPhase("models")} onSelect={metadata => {
+      onSave(associateModelMetadata(config, providerId, metadataTarget.id, metadata))
+      setPhase("models")
+    }} />
+  if (phase === "context") return <ContextWindowDialog
+    mode={provider.contextWindowMode ?? inferLegacyContextWindowMode(provider)}
+    contextWindow={resolveProviderContextWindow(provider, config.active.model)}
+    onCancel={() => setPhase("models")} onSave={(mode, tokens) => {
+      onSave({ ...upsertProvider(config, { ...provider, contextWindowMode: mode, contextWindow: tokens }), active: config.active })
+      setPhase("models")
+    }} />
   if (phase === "providers") return <PickerDialog title="Models · choose connection"
     options={config.providers.map(item => ({ id: item.id, label: item.name || item.baseURL, meta: item.baseURL }))}
     initialIndex={Math.max(0, config.providers.findIndex(item => item.id === providerId))}
@@ -97,11 +118,13 @@ export function ModelDialog({ config, initialProviderId, setup = false, onCommit
   const count = Math.max(1, Math.min(7, Math.floor((height - 14) / 3)))
   const start = Math.max(0, selectedIndex - Math.floor(count / 2))
   return <DialogFrame title={`${setup ? "Choose a model" : "Models"} · ${provider.name || provider.baseURL}`}
-    hint={setup ? "↑↓ navigate · enter select and finish · / filter · r refresh · t manual · esc choose later" : "↑↓ navigate · enter select · / filter · p connection · r refresh · t manual · esc close"}>
+    hint={setup ? "↑↓ navigate · enter select and finish · m metadata · c context · / filter · t manual · esc choose later" : "↑↓ navigate · enter select · m metadata · c context · / filter · p connection · r refresh · t manual · esc close"}>
     {setup && <Text color={c.accent}>Connection saved. Choose a model to use it, or press esc to choose later with /model.</Text>}
     <Text color={c.text.faint}>{truncateToWidth(provider.baseURL, width)}</Text>
     <Text color={c.text.faint}>{truncateToWidth(`Current: ${config.active.providerId === providerId ? config.active.model || "none" : "none on this connection"} · ${shown.length} models${loading ? " · discovering…" : ""}${query ? ` · filter: ${query}` : ""}`, width)}</Text>
-    <Text color={c.text.faint}>{truncateToWidth("Metadata is not proof of account access.", width)}</Text>
+    <Text color={c.text.faint}>{truncateToWidth((provider.contextWindowMode ?? inferLegacyContextWindowMode(provider)) === "manual"
+      ? `Manual context: ${provider.contextWindow.toLocaleString("en-US")} tokens · c to change`
+      : `Automatic context · m to link metadata · unknown models use fallback ${provider.contextWindow.toLocaleString("en-US")} tokens (unverified)`, width)}</Text>
     {error && <Text color={c.warning}>{truncateToWidth(error, width)}</Text>}
     <Box flexDirection="column" marginTop={1}>
       {shown.slice(start, start + count).map((row, i) => <Box key={row.id} flexDirection="column">

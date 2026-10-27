@@ -640,9 +640,10 @@ describe("ConversationManager.compress return value", () => {
 
     const failed = await cm.compress(fakeProvider, { force: true, targetTokens: 100 });
     expect(failed).toBeNull();
-    expect(cm.lastCompressionFailureReason).toBe(
+    expect(cm.lastCompressionFailureReason).toContain(
       "summarizer returned an unusable compact summary (empty required sections: All user messages (verbatim))",
     );
+    expect(cm.lastCompressionFailureReason).toContain("repair attempt still invalid");
 
     responseText = structuredSummary("RECOVERED");
     const recovered = await cm.compress(fakeProvider, { force: true, targetTokens: 100 });

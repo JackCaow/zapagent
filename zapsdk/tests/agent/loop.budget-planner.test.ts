@@ -287,7 +287,7 @@ describe("LoopAgent budget planner", () => {
       expect(lastMaxOutputTokens()).toBeUndefined()
     })
 
-    it("uses reactive compaction when local budget overflows and autocompact cannot summarize", async () => {
+    it("preserves oversized current input instead of silently shortening it during recovery", async () => {
       const streamMessages: Message[][] = []
       const hugeInput = `BEGIN ${"x".repeat(80_000)} END`
       const provider: LLMProvider = {
@@ -314,16 +314,10 @@ describe("LoopAgent budget planner", () => {
         outputTokenCeiling: 1_000,
       })
 
-      const result = await agent.run(hugeInput)
-
-      expect(result.text).toBe("recovered")
-      expect(streamMessages).toHaveLength(1)
-      const sentUser = streamMessages[0].find((m) => m.role === "user" && m.content.includes("BEGIN"))
-      expect(sentUser?.content).toContain("chars compacted to fit context limit")
-      expect(sentUser?.content).toContain("END")
-      expect(sentUser?.content).not.toBe(hugeInput)
-      const persistedUser = conversation.getMessages().find((m) => m.role === "user" && m.content.includes("BEGIN"))
-      expect(persistedUser?.content).toContain("chars compacted to fit context limit")
+      await expect(agent.run(hugeInput)).rejects.toThrow("Protected input")
+      expect(streamMessages).toHaveLength(0)
+      const persistedUser = conversation.getAllMessages().find((m) => m.role === "user" && m.content.includes("BEGIN"))
+      expect(persistedUser?.content).toBe(hugeInput)
     })
 
     it("reactively compacts oversized transient context without persisting it", async () => {
