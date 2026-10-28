@@ -23,6 +23,14 @@ const fixture = `
   const { useTurnDispatcher, blockedPastedInputLabels } = await import("./src/hooks/useTurnDispatcher.ts");
   const { getMessageQueue } = await import("./src/queue/inputQueue.ts");
   const queue = getMessageQueue();
+  let goalStore, ownGoal, otherGoal;
+  if (mode === "goal") {
+    const { GoalStore } = await import("./zapsdk/goal/store.ts");
+    const { goalDatabasePath } = await import("./src/goal-command.ts");
+    goalStore = new GoalStore(goalDatabasePath());
+    ownGoal = goalStore.create({ objective: "mine", cwd: process.cwd(), sessionId: queue.getSessionId() });
+    otherGoal = goalStore.create({ objective: "other", cwd: process.cwd(), sessionId: "another-chat" });
+  }
   const markers = "[Pasted #1 · 1 lines · 7 chars] [Image #1]";
   const raw = mode === "recovery" ? "/connect" : recovery ? "/model [Pasted #1 · 1 lines · 7 chars]" : mode === "prompt" ? "/mcp.demo.ask " + markers : markers + " @demo:resource";
   let input = raw;
@@ -49,7 +57,9 @@ const fixture = `
   const before = { input, pasteIds: [...pasteStore.current.keys()], imageIds: images.map(image => image.id),
     blocked: blockedPastedInputLabels(input, pasteStore.current), queue: queue.getSnapshot(), commands: [...commands], errors: [...errors], histories, logs };
   if (!recovery) await handleSubmit(input);
-  console.log(JSON.stringify({ before, after: { input, queue: queue.getSnapshot(), errors } }));
+  console.log(JSON.stringify({ before, after: { input, queue: queue.getSnapshot(), errors },
+    goalStates: goalStore ? [goalStore.get(ownGoal.id).status, goalStore.get(otherGoal.id).status] : undefined }));
+  goalStore?.close();
 `
 
 describe("background wake-up dispatch", () => {
@@ -102,7 +112,7 @@ describe("background wake-up dispatch", () => {
 })
 
 describe("queued input resolution through the real submit hook", () => {
-  for (const mode of ["resource", "prompt", "recovery", "model", "missing-model"]) {
+  for (const mode of ["resource", "prompt", "recovery", "model", "missing-model", "goal"]) {
     it(`${mode} preserves draft ownership or permits provider repair`, () => {
       const directory = mkdtempSync(join(tmpdir(), "zap-queue-hook-"))
       try {
@@ -111,6 +121,7 @@ describe("queued input resolution through the real submit hook", () => {
         expect(child.stderr).toBe("")
         expect(child.status).toBe(0)
         const result = JSON.parse(child.stdout)
+        if (mode === "goal") expect(result.goalStates).toEqual(["paused", "created"])
         if (["recovery", "model", "missing-model"].includes(mode)) {
           expect(result.before.queue.map((entry: { text: string; state: string }) => [entry.text, entry.state])).toEqual([["hi", "failed"]])
           if (mode === "missing-model") {

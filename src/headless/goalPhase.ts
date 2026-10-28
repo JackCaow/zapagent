@@ -8,6 +8,7 @@ import type { PermissionMode } from "../config.js"
 import type { HeadlessFormatter, RunSummary } from "./formatter.js"
 import type { AgentOutcomeV1 } from "../../zapsdk/runtime/outcome.js"
 import { GoalBudgetLedger, type GoalBudgetRole } from "../../zapsdk/goal/budget.js"
+import { GoalPhaseError, goalPhaseFailureCode } from "../../zapsdk/goal/errors.js"
 import { meterGoalProvider } from "../../zapsdk/goal/metered-provider.js"
 import { getAppDataDir } from "../../zapsdk/utils/platform.js"
 import type { AgentEvent } from "../../zapsdk/agent/events.js"
@@ -78,7 +79,7 @@ export interface GoalPhaseInput {
 }
 
 type WorkerInput = Omit<GoalPhaseInput, "signal" | "onSpawn" | "onStopped"> & { allowSealedShell?: boolean }
-type WorkerResult = { type: "result"; summary: RunSummary; exitCode: number; dependencyHash?: string } | { type: "machine"; result: ToolResult } | { type: "fatal"; message: string }
+type WorkerResult = { type: "result"; summary: RunSummary; exitCode: number; processSealed: true; toolCalls: number; failureCode?: string; dependencyHash?: string } | { type: "machine"; result: ToolResult } | { type: "fatal"; message: string; code: string }
 
 /** Check only concrete existing directories. A Host-owned ledger must not sit
  * underneath a model-writable workspace. */
@@ -199,17 +200,20 @@ async function runGoalPhaseProcess(input: GoalPhaseInput): Promise<WorkerResult>
     if (cancelled) throw new Error("GOAL_PHASE_CANCELLED")
     let response: WorkerResult
     try { response = JSON.parse(output) as WorkerResult } catch { throw new Error(`Goal phase process returned invalid output (exit ${exitCode})`) }
-    if (response.type === "fatal") throw new Error(`Goal phase failed: ${response.message}`)
+    if (response.type === "fatal") throw new GoalPhaseError(response.code ?? goalPhaseFailureCode(response.message))
     if (response.type === "machine") {
       if (!input.machineCheck || exitCode !== 0 || response.result.runtime?.processSeal?.state !== "sealed") throw new Error("GOAL_SEAL_UNCONFIRMED")
       if (allowSealedShell) onStopped?.(pid)
       return response
     }
     if (response.type !== "result" || !response.summary?.outcome) throw new Error(`Goal phase produced no structured outcome (exit ${exitCode})`)
-    if (exitCode !== 0 || response.exitCode !== 0 || response.summary.outcome.execution.status !== "finished") {
-      throw new Error(`Goal phase did not finish (exit ${exitCode}, status ${response.summary.outcome.execution.status})`)
-    }
+    // A failed model call can still finish with every tool/process sealed.
+    // Only this worker-owned receipt, never model text, may clear ownership.
+    if (response.processSealed !== true) throw new GoalPhaseError("GOAL_SEAL_UNCONFIRMED")
     if (allowSealedShell) onStopped?.(pid)
+    if (exitCode !== 0 || response.exitCode !== 0 || response.summary.outcome.execution.status !== "finished") {
+      throw new GoalPhaseError(response.failureCode ?? "GOAL_PHASE_FAILED")
+    }
     return response
   } finally {
     signal?.removeEventListener("abort", abort)
@@ -218,10 +222,10 @@ async function runGoalPhaseProcess(input: GoalPhaseInput): Promise<WorkerResult>
   }
 }
 
-export async function runGoalPhase(input: GoalPhaseInput): Promise<{ text: string; outcome: AgentOutcomeV1; dependencyHash?: string }> {
+export async function runGoalPhase(input: GoalPhaseInput): Promise<{ text: string; outcome: AgentOutcomeV1; toolCalls: number; dependencyHash?: string }> {
   const response = await runGoalPhaseProcess(input)
   if (response.type !== "result" || !response.summary.outcome) throw new Error("Unexpected Goal phase response")
-  return { text: response.summary.text, outcome: response.summary.outcome, ...(response.dependencyHash ? { dependencyHash: response.dependencyHash } : {}) }
+  return { text: response.summary.text, outcome: response.summary.outcome, toolCalls: response.toolCalls, ...(response.dependencyHash ? { dependencyHash: response.dependencyHash } : {}) }
 }
 
 export async function runGoalMachinePhase(input: GoalPhaseInput & { machineCheck: "bun" | "npm" | "pytest" | "go" }): Promise<ToolResult> {
@@ -305,12 +309,16 @@ export async function runGoalPhaseWorker(): Promise<number> {
       }
       let summary: RunSummary | undefined
       let failure: { code: string; message: string } | undefined
+      let toolCalls = 0
+      let runtimeError = ""
       let permissionDenied = false
       let unavailableTool = false
       const sealTracker = new GoalPhaseSealTracker()
       const formatter: HeadlessFormatter = {
         init() {}, onEvent(event) {
           if (event.type === "content_final" && event.kind === "tool_call" && !permitted(event.toolName)) unavailableTool = true
+          if (event.type === "content_final" && event.kind === "tool_call") toolCalls++
+          if (event.type === "error") runtimeError = event.error
           sealTracker.observe(event, permitted("bash"))
         }, progress() {},
         finalize(value) { summary = value },
@@ -360,12 +368,13 @@ export async function runGoalPhaseWorker(): Promise<number> {
       }
       if (unavailableTool) throw new Error("GOAL_UNMETERED_TOOL_UNAVAILABLE")
       if (!summary) throw new Error(failure?.code ?? `Headless phase failed (${exitCode})`)
-      process.stdout.write(JSON.stringify({ type: "result", summary, exitCode, dependencyHash: dependencyProof?.dependencyHash } satisfies WorkerResult))
+      process.stdout.write(JSON.stringify({ type: "result", summary, exitCode, processSealed: true, toolCalls,
+        ...(exitCode !== 0 ? { failureCode: goalPhaseFailureCode(runtimeError || summary.error || summary.outcome?.execution.error?.code || "") } : {}), dependencyHash: dependencyProof?.dependencyHash } satisfies WorkerResult))
       return exitCode
     } finally { ledger.close() }
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown Goal phase failure"
-    process.stdout.write(JSON.stringify({ type: "fatal", message } satisfies WorkerResult))
+    process.stdout.write(JSON.stringify({ type: "fatal", message: goalPhaseFailureCode(message), code: goalPhaseFailureCode(message) } satisfies WorkerResult))
     return 2
   }
 }

@@ -1,3 +1,4 @@
+import { pauseGoalsForUserInput } from "../goal-command.js"
 import { useCallback, useEffect, useRef } from "react"
 import {
   enqueue as enqueueCommand,
@@ -507,6 +508,8 @@ export function useTurnDispatcher(
     || hasPendingManualCompact(getQueueSnapshot(), opts.editingMessageId)
 
   const submitCommand = (command: QueuedCommand, editVersion?: string): boolean => {
+    const interrupted = pauseGoalsForUserInput(process.cwd(), getMessageQueue().getSessionId(), command.text)
+    if (interrupted.length) addToast("Goal will pause at the next safe boundary · /goal resume to continue", { duration: 3500 })
     if (opts.editingMessageId) {
       if (!getMessageQueue().replace(opts.editingMessageId, command, editVersion)) {
         addLog("error", "Queued message changed while editing; draft was kept.")

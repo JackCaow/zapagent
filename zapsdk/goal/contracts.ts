@@ -1,5 +1,5 @@
 /** Goal control records are Host-owned. Agent output is a proposal, never a state transition. */
-export type GoalStatus = "created" | "running" | "paused" | "blocked" | "awaiting_acceptance" | "ready_for_delivery" | "completed" | "cancelled" | "failed";
+export type GoalStatus = "created" | "running" | "paused" | "blocked" | "awaiting_acceptance" | "budget_limited" | "ready_for_delivery" | "completed" | "cancelled" | "failed";
 export type GoalPhase = "planning" | "executing" | "verifying" | "repairing" | "integrating" | "final_verifying" | "delivering" | "sealing";
 export interface GoalTask {
   id: string;
@@ -22,6 +22,8 @@ export interface GoalReceipt {
   /** Immutable record returned by the host verifier; never the worker's claim. */
   evidence: unknown;
   detail?: string;
+  /** Stable failed-check identity, excluding model prose and timestamps. */
+  failureFingerprint?: string;
 }
 export interface GoalRecord {
   id: string;
@@ -31,6 +33,8 @@ export interface GoalRecord {
   /** User-authorized, host-managed dependency preparation. */
   dependencyInstall?: "npm";
   permissionMode: "default" | "acceptEdits" | "plan" | "bypassPermissions";
+  /** Present for TUI-created Goals; foreground input in another chat cannot pause it. */
+  sessionId?: string;
   cwd: string;
   stateRevision: number;
   specRevision: number;
@@ -40,15 +44,22 @@ export interface GoalRecord {
   stopReason?: string;
   createdAt: number;
   updatedAt: number;
-  deadlineAt: number;
+  /** Optional user-imposed deadline; absent Goals run until accepted or interrupted. */
+  deadlineAt?: number;
   ownerEpoch: number;
   owner?: { instanceId: string; pid: number };
   /** Intent persisted before external work. Recovery must reconcile before retry. */
   inFlight?: { operationId: string; phase: GoalPhase; taskId?: string; opaqueBefore?: number };
   control?: "pause" | "cancel";
+  /** Foreground input yields at a sealed phase boundary, without killing a live tool. */
+  yieldRequested?: boolean;
   tasks: GoalTask[];
   integration?: unknown;
+  finalCandidate?: GoalCandidate;
   finalReceipt?: GoalReceipt;
+  /** Host-observed progress across failed attempts; persists across runner restarts. */
+  progress?: Record<string, { fingerprint: string; stalled: number; checks: number }>;
+  failure?: { code: string; phase?: GoalPhase; operationId?: string; taskId?: string; candidateId?: string; snapshotId?: string };
   delivery?: unknown;
 }
 export interface GoalPlanProposal {
@@ -59,6 +70,7 @@ export interface GoalCandidate {
   snapshotId: string;
   specDigest: string;
   value: unknown;
+  activity?: { toolCalls: number; changed: boolean; fingerprint: string };
 }
 export interface GoalOperationContext {
   goal: Readonly<GoalRecord>;

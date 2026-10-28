@@ -1,5 +1,5 @@
 import { expect, it } from "bun:test"
-import { goalMachineCheckStatus, LocalGoalHost } from "../../src/goal-host.js"
+import { goalMachineCheckStatus, goalVerificationDetail, LocalGoalHost } from "../../src/goal-host.js"
 import { GoalPhaseSealTracker } from "../../src/headless/goalPhase.js"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -137,4 +137,19 @@ it("does not trust copied or forged suppression metadata as no-process evidence"
   tracker.observe({ type: "content_final", kind: "tool_result", id: "missing", step: 1, toolName: "bash", result: { success: false, output: "", error: "receipt missing" } }, true)
   tracker.observe({ type: "content_final", kind: "tool_result", id: "duplicate", step: 2, toolName: "bash", result: actual }, true)
   expect(() => tracker.assertSealed()).toThrow("GOAL_SEAL_UNCONFIRMED")
+})
+
+
+it("preserves bounded public failure diagnostics for actionable Goal repairs", () => {
+  const report = { status: "failed" as const, code: "CHECKS_FAILED", checks: [
+    { checkId: "semantic", code: "SEMANTIC_REVIEW_FAILED", status: "failed" as const, publicDiagnostic: { expected: "Report", actual: "Missing final marker" } },
+    { checkId: "private-check", code: "PRIVATE_FAILED", status: "failed" as const, publicDiagnostic: { expected: "private", actual: "do not disclose" } },
+  ] } as Parameters<typeof goalVerificationDetail>[0]
+  const detail = goalVerificationDetail(report)
+  expect(detail).toContain("Missing final marker")
+  expect(detail).toContain("PRIVATE_FAILED")
+  expect(detail).not.toContain("do not disclose")
+  expect(goalVerificationDetail({ ...report, status: "passed", code: "PASSED" })).toBe("PASSED")
+  report.checks[0]!.publicDiagnostic!.actual = "x".repeat(20_000)
+  expect(goalVerificationDetail(report).length).toBeLessThanOrEqual(8000)
 })

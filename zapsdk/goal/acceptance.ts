@@ -18,12 +18,14 @@ export interface GoalAcceptanceReceipt {
   planRevision: number;
   taskSpecRevision: number;
   verifierVersion: string;
+  verificationId?: string;
 }
 export interface GoalAcceptanceBinding {
   goalSpecRevision: number;
   planRevision: number;
   taskSpecRevision: number;
   verifierVersion: string;
+  verificationId?: string;
 }
 
 /** Host-only: the supplied verifiers must execute independently under the

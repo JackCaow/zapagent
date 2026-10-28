@@ -21,7 +21,7 @@ export async function runGoalRunner(id: string): Promise<number> {
         return 1
       }
     }
-    const outcome = await controller.run()
+    const outcome = await controller.run({ automatic: true })
     process.stdout.write(JSON.stringify({ id: outcome.id, status: outcome.status, phase: outcome.phase, reason: outcome.stopReason, delivery: outcome.delivery }) + "\n")
     return outcome.status === "completed" || outcome.status === "ready_for_delivery" ? 0 : 1
   } catch (error) {

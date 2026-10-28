@@ -153,6 +153,7 @@ also skip CI, headless output and ACP; explicit `zap update` still checks.
 | `/review` | Review code for bugs & security |
 | `/commit` | Stage changes and create a conventional commit |
 | `/init` | Generate AGENTS.md for this project |
+| `/goal` | Run until independent acceptance and delivery, with no default usage or time limit; use `/goal help` for status, pause, resume, cancel, and budget controls |
 | `/supertask` | Start, resume, abort, status, or watch a long-horizon task |
 | `/exit` | Exit zapAgent (`/quit` and `/q` also work) |
 
@@ -257,3 +258,17 @@ not images with an embedded Agent. Cloud/Web deployments are a separate delivery
 mode and must supply their own Resident Agent runtime and validate its execution
 contract. The normal local `zap` command remains host-orchestrated.
 
+
+## Goal completion
+
+Goal is objective-driven: a worker response or a green self-test does not complete the Goal. Failed task checks trigger another repair; failed final acceptance creates corrective work from the integrated result and repeats independent acceptance before delivery. Accepted tasks are retained.
+
+New Goals have no default cumulative token, model-call, tool-call or elapsed-time limit. Usage is still recorded across planning, workers, children, repairs and verifiers. Use `/goal status`, `/goal pause` or `/goal cancel` to inspect or interrupt a run. Existing Goals retain their previously configured limits; `budget extend` continues to apply to those bounded runs.
+
+Execution errors, missing permissions, uncertain process sealing and indeterminate verification remain explicit blocked or awaiting-acceptance states. They never count as completion or authorize an unsafe retry. Individual requests and commands still have execution timeouts.
+
+Optional user limits can be set when starting a Goal, for example `/goal Produce the report --tokens=2000000 --minutes=120`. Omit these flags for no cumulative limit. Token-limited Goals reserve up to 5% (at most 50,000 tokens) for verification/finalization. Limits also support `--model-calls`, `--provider-attempts`, and `--tool-calls`. A limit is not evidence of completion.
+
+A new foreground message pauses a TUI Goal from the same chat at its next sealed phase boundary. Use `/goal resume` to continue. Other chats and standalone CLI Goals are unaffected. Plan-only permissions stop after planning.
+
+Goals stop automatic continuation on repeated unchanged failed evidence (`GOAL_NO_PROGRESS`). The frozen result is retained for inspection. Structured-result formatting failures receive at most two read-only correction attempts; indeterminate verification can be explicitly resumed against the same candidate without rerunning development. Previous verification records remain immutable. See [Goal architecture](architecture/61-goal-continuation.md).

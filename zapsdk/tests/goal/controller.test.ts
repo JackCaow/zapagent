@@ -110,6 +110,99 @@ describe("GoalController", () => {
   });
 });
 
+describe("objective-driven Goal completion", () => {
+  it("persists an unlimited Goal without inventing a deadline", async () => {
+    const { dir, store } = fixture();
+    const goal = store.create({ objective: "Finish the report", cwd: dir });
+    expect(goal.deadlineAt).toBeUndefined();
+    store.close();
+    const reopened = new GoalStore(join(dir, "state.sqlite"));
+    expect(reopened.get(goal.id)?.deadlineAt).toBeUndefined();
+    const result = await new GoalController(reopened, host(), goal.id).run();
+    expect(result.status).toBe("completed"); reopened.close();
+  });
+  it("continues repairing beyond two failures until the independent verifier passes", async () => {
+    const { store, goal } = fixture(); let checks = 0;
+    const result = await new GoalController(store, host({
+      async plan() { return { tasks: [{ id: "one", description: "Write", acceptance: "Correct" }] }; },
+      async execute(_ctx, t, previous) {
+        if (t.attempt > 1) expect(previous?.status).toBe("failed");
+        return candidate(`attempt-${t.attempt}`);
+      },
+      async verify(_ctx, t, c, final) { return receipt(c, t, final || ++checks > 4 ? "passed" : "failed"); },
+    }), goal.id).run();
+    expect(result.status).toBe("completed"); expect(result.tasks[0]?.attempt).toBe(5);
+    expect(result.finalReceipt?.status).toBe("passed"); store.close();
+  });
+  it("repairs final acceptance failures from integration without replaying accepted tasks", async () => {
+    const { store, goal } = fixture(); let finalChecks = 0; const executed: string[] = [];
+    const result = await new GoalController(store, host({
+      async execute(ctx, t, previous) {
+        executed.push(t.id);
+        if (finalChecks > 0) {
+          expect(t.description).toContain(`Missing requirement ${finalChecks}`);
+          expect(t.acceptance).toBe(goal.objective);
+          expect(previous).toBeUndefined(); // The final snapshot is not a worker repair candidate.
+          expect(ctx.goal.tasks.filter(task => task.status === "passed").length).toBeGreaterThanOrEqual(2);
+        }
+        return candidate(t.id);
+      },
+      async verify(_ctx, t, c, final) {
+        if (!final) return receipt(c, t);
+        const status = ++finalChecks < 3 ? "failed" : "passed";
+        return { ...receipt(c, t, status), detail: `Missing requirement ${finalChecks}` };
+      },
+      async deliver(ctx) {
+        expect(finalChecks).toBe(3); expect(ctx.goal.finalReceipt?.status).toBe("passed");
+        return { status: "delivered" };
+      },
+    }), goal.id).run();
+    expect(result.status).toBe("completed"); expect(executed).toHaveLength(4);
+    expect(new Set(executed).size).toBe(4); expect(result.tasks.every(t => t.status === "passed")).toBe(true);
+    expect(result.planRevision).toBe(3); store.close();
+  });
+  for (const status of ["unverified", "error"] as const) {
+    it(`keeps an indeterminate final ${status} blocked from delivery`, async () => {
+      const { store, goal } = fixture(); let deliveries = 0;
+      const result = await new GoalController(store, host({
+        async verify(_ctx, t, c, final) { return receipt(c, t, final ? status : "passed"); },
+        async deliver() { deliveries++; return { status: "delivered" }; },
+      }), goal.id).run();
+      expect(result.status).toBe("awaiting_acceptance"); expect(deliveries).toBe(0);
+      expect(result.tasks).toHaveLength(2); store.close();
+    });
+  }
+  it("still honors user cancellation while repeatedly repairing", async () => {
+    const { store, goal } = fixture(); let sealed = false;
+    const result = await new GoalController(store, host({
+      async verify(_ctx, t, c) {
+        if (t.attempt === 4) store.requestControl(goal.id, "cancel");
+        return receipt(c, t, "failed");
+      },
+      async seal() { sealed = true; },
+    }), goal.id).run();
+    expect(result.status).toBe("cancelled"); expect(sealed).toBe(true);
+    expect(result.stopReason).toBe("USER_CANCEL"); store.close();
+  });
+  it("honors an explicit deadline while Goals without one remain unlimited", async () => {
+    const { dir, store } = fixture();
+    const goal = store.create({ objective: "Explicitly timed", cwd: dir, deadlineAt: Date.now() + 30 });
+    let executed = false, sealed = false;
+    const result = await new GoalController(store, host({
+      async plan() { await new Promise(resolve => setTimeout(resolve, 50)); return { tasks: [{ id: "one", description: "x", acceptance: "y" }] }; },
+      async execute() { executed = true; return candidate("x"); },
+      async seal() { sealed = true; },
+    }), goal.id).run();
+    expect(result.status).toBe("paused"); expect(result.stopReason).toBe("DEADLINE_EXCEEDED");
+    expect(executed).toBe(false); expect(sealed).toBe(true); store.close();
+  });
+  it("preserves explicitly configured repair limits for SDK callers", async () => {
+    const { store, goal } = fixture();
+    const result = await new GoalController(store, host({ async verify(_ctx, t, c) { return receipt(c, t, "failed"); } }), goal.id, 1).run();
+    expect(result.status).toBe("blocked"); expect(result.tasks[0]?.attempt).toBe(2); store.close();
+  });
+});
+
 describe("Goal budget extension", () => {
   it("updates ledger and deadline atomically across reopening and preserves prior usage", async () => {
     const { GoalBudgetLedger } = await import("../../goal/budget.js");
@@ -120,7 +213,7 @@ describe("Goal budget extension", () => {
     ledger.close(); store.close();
     const reopened = new GoalBudgetLedger(db); const snap = reopened.snapshot(goal.id);
     expect(snap.limits.maxTokens).toBe(150); expect(snap.limits.maxModelCalls).toBe(5); expect(snap.limits.maxProviderAttempts).toBe(8);
-    expect(snap.limits.deadlineAt).toBe(goal.deadlineAt + 300_000); expect(state.deadlineAt).toBe(snap.limits.deadlineAt);
+    expect(snap.limits.deadlineAt).toBe(goal.deadlineAt! + 300_000); expect(state.deadlineAt).toBe(snap.limits.deadlineAt);
     reopened.close();
   });
 });
@@ -181,4 +274,103 @@ describe("atomic Goal ownership and budget epochs", () => {
     expect(() => reopened.claim(goal.id, "owner", 1)).toThrow("GOAL_BUDGET_ACCOUNT_MISSING");
     expect(reopened.get(goal.id)?.ownerEpoch).toBe(0); reopened.close();
   });
+});
+
+it("suppresses unchanged repeated failures and preserves the frozen candidate for explicit recovery", async () => {
+  const { dir, store, goal } = fixture(); let executions = 0;
+  const h = host({
+    async plan() { return { tasks: [{ id: "one", description: "Report", acceptance: "Cited" }] }; },
+    async execute() { executions++; return candidate("same-content"); },
+    async verify(_ctx, t, c) { return { ...receipt(c, t, "failed"), detail: "Missing citations" }; },
+  });
+  const result = await new GoalController(store, h, goal.id).run();
+  expect(result.status).toBe("blocked"); expect(result.stopReason).toContain("GOAL_NO_PROGRESS");
+  expect(executions).toBe(4); expect(result.inFlight).toBeUndefined(); expect(result.tasks[0]?.candidate).toBeDefined();
+  store.close();
+  const reopened = new GoalStore(join(dir, "state.sqlite"));
+  expect(reopened.get(goal.id)?.progress?.one?.stalled).toBe(3);
+  reopened.prepareResume(goal.id); expect(reopened.get(goal.id)?.progress).toBeUndefined(); reopened.close();
+});
+it("stops a failed narrative-only attempt without falsely completing the Goal", async () => {
+  const { store, goal } = fixture();
+  const result = await new GoalController(store, host({
+    async execute() { return { ...candidate("text-only"), activity: { toolCalls: 0, changed: false, fingerprint: "text" } }; },
+    async verify(_ctx, t, c) { return receipt(c, t, "failed"); },
+  }), goal.id).run();
+  expect(result.status).toBe("blocked"); expect(result.stopReason).toContain("GOAL_NO_PROGRESS"); expect(result.delivery).toBeUndefined(); store.close();
+});
+it("resumes final verification after a confirmed read-only interruption without repeating development or snapshot creation", async () => {
+  const { store, goal } = fixture(); let workers = 0, snapshots = 0, checks = 0;
+  const h = host({
+    async execute(_ctx, t) { workers++; return candidate(t.id); },
+    async snapshotIntegration() { snapshots++; return candidate("final"); },
+    async verify(_ctx, t, c, final) {
+      if (final && checks++ === 0) throw new Error("read-only verifier lost connection");
+      return receipt(c, t);
+    },
+    async reconcile() { return { kind: "retry" }; },
+  });
+  const blocked = await new GoalController(store, h, goal.id).run();
+  expect(blocked.inFlight?.phase).toBe("final_verifying"); expect(blocked.finalCandidate?.candidateId).toBe("final");
+  await new GoalController(store, h, goal.id).recover();
+  const result = await new GoalController(store, h, goal.id).run();
+  expect(result.status).toBe("completed"); expect(workers).toBe(2); expect(snapshots).toBe(1); store.close();
+});
+it("pauses only this chat's Goals for foreground input and keeps standalone Goals running", () => {
+  const { dir, store } = fixture();
+  const mine = store.create({ objective: "mine", cwd: dir, sessionId: "chat-a" });
+  const other = store.create({ objective: "other", cwd: dir, sessionId: "chat-b" });
+  const standalone = store.create({ objective: "cli", cwd: dir });
+  expect(store.pauseForInput(dir, "chat-a")).toEqual([mine.id]);
+  expect(store.get(mine.id)?.status).toBe("paused");
+  expect(store.get(other.id)?.status).toBe("created"); expect(store.get(standalone.id)?.status).toBe("created"); store.close();
+});
+it("records a bounded stop separately from completion and retains operation/candidate diagnostics", async () => {
+  const { store, goal } = fixture();
+  const { GoalPhaseError } = await import("../../goal/errors.js");
+  const result = await new GoalController(store, host({ async execute() { throw new GoalPhaseError("GOAL_BUDGET_LIMITED"); } }), goal.id).run();
+  expect(result.status).toBe("budget_limited"); expect(result.failure?.code).toBe("GOAL_BUDGET_LIMITED");
+  expect(result.failure?.phase).toBe("executing"); expect(result.inFlight).toBeDefined(); expect(result.delivery).toBeUndefined(); store.close();
+});
+it("yields to foreground input after sealing a phase and resumes verification without replaying the worker", async () => {
+  const { dir, store } = fixture(); const goal = store.create({ objective: "Report", cwd: dir, sessionId: "chat" });
+  let executions = 0;
+  const h = host({
+    async execute(ctx, t) {
+      executions++;
+      store.pauseForInput(dir, "chat");
+      await new Promise(resolve => setTimeout(resolve, 250));
+      expect(ctx.signal.aborted).toBe(false); // Foreground input must not kill a live tool.
+      return candidate(t.id);
+    },
+  });
+  const paused = await new GoalController(store, h, goal.id).run();
+  expect(paused.status).toBe("paused"); expect(paused.stopReason).toBe("USER_INPUT_PENDING");
+  expect(paused.inFlight).toBeUndefined(); expect(paused.tasks[0]?.status).toBe("verifying");
+  store.prepareResume(goal.id);
+  const result = await new GoalController(store, host({ async execute(_ctx, t) { executions++; return candidate(t.id); } }), goal.id).run();
+  expect(result.status).toBe("completed"); expect(executions).toBe(2); expect(result.tasks[0]?.attempt).toBe(1); store.close();
+});
+it("does not let an already-dispatched automatic runner override a user pause", async () => {
+  const { dir, store } = fixture(); const goal = store.create({ objective: "Report", cwd: dir, sessionId: "chat" });
+  store.pauseForInput(dir, "chat"); let planned = false;
+  await expect(new GoalController(store, host({ async plan() { planned = true; return { tasks: [] }; } }), goal.id).run({ automatic: true })).rejects.toThrow("GOAL_AUTOMATIC_CONTINUATION_SUPPRESSED");
+  expect(planned).toBe(false); expect(store.get(goal.id)?.status).toBe("paused"); store.close();
+});
+it("keeps plan-only work paused before invoking development or acceptance", async () => {
+  const { dir, store } = fixture(); const goal = store.create({ objective: "Propose a report", cwd: dir, permissionMode: "plan" }); let effects = 0;
+  const result = await new GoalController(store, host({ async execute() { effects++; return candidate("x"); } }), goal.id).run();
+  expect(result.status).toBe("paused"); expect(result.stopReason).toBe("GOAL_PLAN_REQUIRES_EXECUTION_AUTHORIZATION"); expect(effects).toBe(0); store.close();
+});
+
+it("treats prototype-shaped model task ids as ordinary progress keys", async () => {
+  const { store, goal } = fixture();
+  const result = await new GoalController(store, host({
+    async plan() { return { tasks: [{ id: "__proto__", description: "Report", acceptance: "Cited" }] }; },
+    async execute() { return candidate("same"); },
+    async verify(_ctx, t, c) { return receipt(c, t, "failed"); },
+  }), goal.id).run();
+  expect(result.status).toBe("blocked"); expect(result.stopReason).toContain("GOAL_NO_PROGRESS");
+  expect(Object.hasOwn(result.progress!, "__proto__")).toBe(true);
+  expect(result.progress?.["__proto__"]?.stalled).toBe(3); store.close();
 });
