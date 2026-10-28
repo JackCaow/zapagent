@@ -807,10 +807,16 @@ func (server *daemonServer) handle(connection net.Conn) {
 		}
 		response, _ := daemonrpc.NewEnvelope(envelope.ID, daemonrpc.TypeStopped, daemonrpc.Empty{})
 		_ = codec.Write(response)
-	case daemonrpc.TypeExec:
+	case daemonrpc.TypeExec, daemonrpc.TypeExecSealed:
 		request, err := daemonrpc.DecodeExec(envelope.Payload)
 		if err != nil {
 			writeError(err)
+			return
+		}
+		if envelope.Type == daemonrpc.TypeExecSealed {
+			request.Command.RequireProcessSeal = true
+		} else if request.Command.RequireProcessSeal {
+			writeError(errors.New("sealed execution requires exec.sealed.v1"))
 			return
 		}
 		if err := server.handleExec(connection, codec, envelope.ID, request); err != nil {
@@ -1132,6 +1138,8 @@ func runDaemonExec(args []string) error {
 	workspaceReadOnly := flags.Bool("workspace-read-only", false, "share workspace read-only")
 	network := flags.String("network", "unrestricted", "off, restricted, or unrestricted")
 	sessionID := flags.String("session-id", "cli-session", "logical Session identity")
+	explicitRequestID := flags.String("request-id", "", "host-authored unique command identity")
+	requireProcessSeal := flags.Bool("require-process-seal", false, "require verified guest process containment")
 	cwd := flags.String("cwd", ".", "guest command working directory")
 	timeout := flags.Duration("exec-timeout", time.Minute, "guest command timeout")
 	resultFile := flags.String("result-file", "", "write structured terminal result to a new file")
@@ -1171,9 +1179,13 @@ func runDaemonExec(args []string) error {
 			return err
 		}
 	}
-	requestID, err := randomDaemonID()
-	if err != nil {
-		return err
+	requestID := *explicitRequestID
+	if requestID == "" {
+		var err error
+		requestID, err = randomDaemonID()
+		if err != nil {
+			return err
+		}
 	}
 	request := daemonrpc.ExecRequest{
 		Workspace: *workspace, WorkspaceReadOnly: *workspaceReadOnly, Network: platform.NetworkMode(*network),
@@ -1183,18 +1195,41 @@ func runDaemonExec(args []string) error {
 			CredentialIDs: credentialIDs, ProtectedWorkspacePaths: protectedWorkspacePaths,
 			DeniedWorkspacePatterns: deniedWorkspacePatterns,
 			TimeoutMillis:           uint64(timeout.Milliseconds()),
+			RequireProcessSeal:      *requireProcessSeal,
 		},
 	}
 	if err := request.Validate(); err != nil {
 		return err
 	}
-	terminal, streamErr := daemonClientStreamResultTo(*endpoint, requestID, daemonrpc.TypeExec, request, os.Stdout, os.Stderr)
-	if *resultFile != "" && terminal != nil {
-		if err := writeDaemonExecResult(*resultFile, *terminal); err != nil {
+	requestType := daemonrpc.TypeExec
+	if *requireProcessSeal {
+		requestType = daemonrpc.TypeExecSealed
+	}
+	terminal, streamErr := daemonClientStreamResultTo(*endpoint, requestID, requestType, request, os.Stdout, os.Stderr)
+	if *requireProcessSeal {
+		if err := validateDaemonSealReceipt(terminal, requestID); err != nil {
 			return errors.Join(streamErr, err)
 		}
 	}
+	if *resultFile != "" && terminal != nil {
+		if err := writeDaemonExecResult(*resultFile, *terminal, requestID, *sessionID); err != nil {
+			return errors.Join(streamErr, err)
+		}
+	}
+	// Strict sealed callers need both an independently verifiable receipt and
+	// the real guest exit status. Legacy structured callers retain their
+	// existing exit-zero behavior and interpret the result file themselves.
+	if *requireProcessSeal {
+		return streamErr
+	}
 	return daemonExecClientError(*resultFile, terminal, streamErr)
+}
+
+func validateDaemonSealReceipt(event *daemonrpc.Event, requestID string) error {
+	if event == nil || event.CommandID != requestID || event.ExitCode == nil || event.Seal == nil || event.Seal.Mechanism != "cgroup-v2" || event.Seal.State != "empty" {
+		return errors.New("missing or invalid process seal receipt")
+	}
+	return nil
 }
 
 // A structured caller owns Guest exit-code interpretation. Returning the same
@@ -1291,7 +1326,7 @@ func daemonClientStreamResultTo(endpoint, requestID, requestType string, payload
 	}
 }
 
-func writeDaemonExecResult(path string, event daemonrpc.Event) error {
+func writeDaemonExecResult(path string, event daemonrpc.Event, requestID, sessionID string) error {
 	if !filepath.IsAbs(path) {
 		return errors.New("daemon exec result file must be absolute")
 	}
@@ -1300,8 +1335,11 @@ func writeDaemonExecResult(path string, event daemonrpc.Event) error {
 		return fmt.Errorf("create daemon exec result file: %w", err)
 	}
 	encodeErr := json.NewEncoder(file).Encode(struct {
-		ExitCode *int `json:"exit_code,omitempty"`
-	}{ExitCode: event.ExitCode})
+		ExitCode  *int                   `json:"exit_code,omitempty"`
+		RequestID string                 `json:"request_id"`
+		SessionID string                 `json:"session_id"`
+		Seal      *daemonrpc.ProcessSeal `json:"seal,omitempty"`
+	}{ExitCode: event.ExitCode, RequestID: requestID, SessionID: sessionID, Seal: event.Seal})
 	return errors.Join(encodeErr, file.Close())
 }
 

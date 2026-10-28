@@ -22,10 +22,14 @@ export async function futureRealpath(path: string): Promise<string> {
 
 /** Only absence of Git or a repository selects copy isolation. Permission,
  * corrupt repository and other Git failures must retain their diagnostics. */
-export async function workspaceContext(root: string, tempRoot?: string, copy = false) {
+export async function workspaceContext(root: string, tempRoot?: string, copy = false, trustedGit = false) {
   const realRoot = await realpath(root);
-  const git = (cwd: string, args: string[]) => exec("git", args, {
-    cwd, encoding: "utf8", env: { ...process.env, LC_ALL: "C" },
+  // Goal must not resolve a repository-controlled executable via PATH or
+  // inherit Git configuration injection variables during repository discovery.
+  const git = (cwd: string, args: string[]) => exec(trustedGit ? "/usr/bin/git" : "git", args, {
+    cwd, encoding: "utf8", env: trustedGit
+      ? { PATH: "/usr/bin:/bin", HOME: "/nonexistent", LC_ALL: "C", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" }
+      : { ...process.env, LC_ALL: "C" },
   });
   if (!copy) {
     let repo: string | undefined;
@@ -33,7 +37,7 @@ export async function workspaceContext(root: string, tempRoot?: string, copy = f
       repo = (await git(realRoot, ["rev-parse", "--show-toplevel"])).stdout.trim();
     } catch (error) {
       const failure = error as NodeJS.ErrnoException & { stderr?: string };
-      if (failure.code !== "ENOENT" && !failure.stderr?.includes("not a git repository")) throw error;
+      if ((trustedGit || failure.code !== "ENOENT") && !failure.stderr?.includes("not a git repository")) throw error;
     }
     if (repo) {
       const repoRoot = await realpath(repo);

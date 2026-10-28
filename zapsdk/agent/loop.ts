@@ -22,6 +22,7 @@ import {
 import type { Tool, ToolDefinition, ToolResult } from "../tools/types.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import { ToolExecutor, type ApprovalCallback, type PostProcessCallback, type ToolExecutorOptions } from "../tools/executor.js";
+import { isEffectivelyReadOnly, unknownToolEffects } from "../tools/effects.js";
 import { formatToolResultForModel, formatToolResultContent, normalizeToolFailure, operationFailure } from "../execution/failure.js";
 import {
   AgentEventEmitter,
@@ -210,6 +211,9 @@ export interface SubagentConfig {
   mergeCoordinator?: MergeCoordinator;
   createRegistryForCwd?: (cwd: string) => ToolRegistry;
   requireWriteIsolation?: boolean;
+  /** Host preparation after an isolated child lease is created. */
+  prepareWorkspace?: (cwd: string, signal?: AbortSignal) => Promise<void>;
+  validateWorkspace?: (cwd: string, signal?: AbortSignal) => Promise<void>;
   coordinator?: AgentCoordinator;
   coordinatorExecutorBridge?: DeferredAgentCoordinatorExecutor;
 }
@@ -252,6 +256,8 @@ export interface SubagentFactoryArgs {
   mergeCoordinator?: MergeCoordinator;
   createRegistryForCwd?: (cwd: string) => ToolRegistry;
   requireWriteIsolation?: boolean;
+  prepareWorkspace?: (cwd: string, signal?: AbortSignal) => Promise<void>;
+  validateWorkspace?: (cwd: string, signal?: AbortSignal) => Promise<void>;
   coordinator?: AgentCoordinator;
   coordinatorExecutorBridge?: DeferredAgentCoordinatorExecutor;
 }
@@ -1024,10 +1030,15 @@ export class LoopAgent {
     const REPEAT_LIMIT = 5;
     const observeProgress = (calls: ToolCallRequest[], results: Map<string, ToolResult>) => {
       const observation = progressTracker.observeRound(calls.map((call) => {
-        const effects = this.executor.resolveEffects(call.name, call.arguments);
+        // A workspace gate fences the original effect resolution. Do not
+        // re-read filesystem-derived effects outside that fence when producing
+        // progress observations; missing evidence is conservatively unknown.
+        const effects = this.executor.workspaceGate
+          ? results.get(call.id)?.runtime?.effects ?? unknownToolEffects()
+          : this.executor.resolveEffects(call.name, call.arguments);
         return {
           ...call,
-          readOnly: this.executor.isReadOnly(call.name, call.arguments),
+          readOnly: this.executor.workspaceGate ? isEffectivelyReadOnly(effects) : this.executor.isReadOnly(call.name, call.arguments),
           mayChangeWorkspace: effects.confidence === "unknown"
             || effects.filesystem.some((effect) => effect.operation !== "read")
             || effects.workspace.mode === "root-integration" || effects.workspace.mode === "isolated-write",

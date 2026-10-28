@@ -101,6 +101,23 @@ if (args[0] === "--acp-worker") {
   const { runAcpWorker } = await import("./acp/worker.js")
   process.exit(await runAcpWorker())
 }
+if (args[0] === "--goal-phase-worker") {
+  const { runGoalPhaseWorker } = await import("./headless/goalPhase.js")
+  process.exit(await runGoalPhaseWorker())
+}
+
+if (args[0] === "--goal-runner") {
+  if (args.length !== 2 || !args[1]) { process.stderr.write("Invalid Goal runner request\n"); process.exit(2) }
+  const { runGoalRunner } = await import("./goal-runner.js")
+  process.exit(await runGoalRunner(args[1]))
+}
+if (args[0] === "goal") {
+  const [{ goalCommand }, { loadAppConfig }, { getAppDataDir }] = await Promise.all([
+    import("./goal-command.js"), import("./config.js"), import("../zapsdk/utils/platform.js"),
+  ])
+  try { process.stdout.write(goalCommand(args.slice(1), process.cwd(), loadAppConfig(join(getAppDataDir(), "config.json")).permissionMode) + "\n"); process.exit(0) }
+  catch (error) { process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`); process.exit(1) }
+}
 
 const isHeadless = isHeadlessInvocation(args, process.stdin.isTTY)
 

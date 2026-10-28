@@ -33,6 +33,8 @@ import { futureRealpath, isWithin, workspaceContext } from "./context.js";
 import { changedCopyPaths, copyTreeOid, materializeCopyTree, removeOwnedCopyTree, scanCopyTree } from "./copy.js";
 import { COPY_MERGE_JOURNAL } from "../merge/copy-transaction.js";
 import { agentIndexPaths, copyAgentIndex } from "./git-index.js";
+import { assertPrivateGitHistoryMatches, capturePrivateGitHistory, materializePrivateGitMetadata } from "../goal/git-history-snapshot.js";
+import { withPersistentGitOperation } from "../goal/git-operation-owner.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -103,6 +105,13 @@ async function copySnapshotEntry(sourceRoot: string, targetRoot: string, path: s
 
 export interface WorkspaceManagerOptions {
   root: string;
+  /** Fail closed if initialization discovers a Git backend. */
+  forbidGit?: boolean;
+  /** Host-only Goal hybrid: copy source files and attach independently
+   * reconstructed metadata. Commits stay private and are never delivered. */
+  copyWithPrivateGit?: { ownerDirectory: string; snapshotRepository: string };
+  /** Snapshot the Host-bound parent clone when a Goal child is acquired. */
+  capturePrivateGitFromRoot?: { ownerDirectory: string; sourceBinding: import("./types.js").PrivateGitBinding };
   tempRoot?: string;
   onLifecycle?: WorkspaceLifecycleHandler;
   owner?: WorkspaceOwnerIdentity;
@@ -123,6 +132,9 @@ export interface HydrateWorkspaceInput {
 export class WorkspaceManager {
   readonly root: string;
   private tempRoot?: string;
+  private forbidGit: boolean;
+  private copyWithPrivateGit?: WorkspaceManagerOptions["copyWithPrivateGit"];
+  private capturePrivateGitFromRoot?: WorkspaceManagerOptions["capturePrivateGitFromRoot"];
   private batchRoot?: string;
   private workspaceTempRoot?: string;
   private repoRoot?: string;
@@ -141,6 +153,9 @@ export class WorkspaceManager {
 
   constructor(options: WorkspaceManagerOptions) {
     this.root = resolve(options.root);
+    this.forbidGit = options.forbidGit ?? false;
+    this.copyWithPrivateGit = options.copyWithPrivateGit;
+    this.capturePrivateGitFromRoot = options.capturePrivateGitFromRoot;
     this.tempRoot = options.tempRoot ? resolve(options.tempRoot) : undefined;
     this.onLifecycle = options.onLifecycle;
     this.owner = options.owner ?? {
@@ -179,6 +194,7 @@ export class WorkspaceManager {
       timestamp: Date.now(),
     });
     let repoPath: string;
+    let privateGit: WorkspaceLease["privateGit"];
     try {
       await this.initialize();
       repoPath = join(this.batchRoot!, "runs", workspaceId);
@@ -187,6 +203,7 @@ export class WorkspaceManager {
         const tree = await scanCopyTree(this.templatePath!);
         if (copyTreeOid(tree) !== this.baseOid) throw new Error("Copy workspace baseline was modified");
         await materializeCopyTree(this.templatePath!, repoPath, tree);
+        if (this.copyWithPrivateGit) privateGit = await materializePrivateGitMetadata(this.copyWithPrivateGit.snapshotRepository, repoPath, this.copyWithPrivateGit.ownerDirectory);
       } else {
         await git(this.batchRoot!, ["clone", "--local", "--no-hardlinks", this.templatePath!, repoPath]);
         await git(repoPath, ["checkout", "-b", `zap-agent-${safeRunId(runId)}`]);
@@ -216,6 +233,7 @@ export class WorkspaceManager {
       repoPath,
       baseOid: this.baseOid,
       batchPath: this.batchRoot,
+      ...(privateGit ? { privateGit } : {}),
     };
     this.leases.set(lease.workspaceId, lease);
     await this.onLifecycle?.({ type: "workspace_acquired", lease, timestamp: Date.now() });
@@ -310,6 +328,17 @@ export class WorkspaceManager {
     return artifact;
   }
 
+  /** Repair owns the still-private lease and may restore its frozen Git
+   * history after replacing the file snapshot. Never touches source Git. */
+  async restorePrivateGit(lease: WorkspaceLease, snapshotRepository: string): Promise<WorkspaceLease> {
+    const recorded = this.leases.get(lease.workspaceId);
+    if (!this.copyWithPrivateGit || !recorded || JSON.stringify(recorded) !== JSON.stringify(lease) || lease.mode !== "isolated-copy") throw new Error("Unknown private Git repair lease");
+    const privateGit = await materializePrivateGitMetadata(snapshotRepository, lease.path, this.copyWithPrivateGit.ownerDirectory);
+    const updated = { ...lease, privateGit };
+    this.leases.set(updated.workspaceId, updated);
+    return updated;
+  }
+
   getArtifact(artifactId: string): AgentArtifact | undefined {
     const artifact = this.artifacts.get(artifactId);
     return artifact ? structuredClone(artifact) : undefined;
@@ -323,7 +352,7 @@ export class WorkspaceManager {
     const baseline = await scanCopyTree(this.templatePath!);
     if (copyTreeOid(baseline) !== lease.baseOid) throw new Error("Copy workspace baseline was modified");
     const excludedEnvironments = new Set<string>();
-    const result = await scanCopyTree(lease.path, false, true, true, excludedEnvironments);
+    const result = await scanCopyTree(lease.path, false, true, true, excludedEnvironments, lease.privateGit);
     for (const path of excludedEnvironments) {
       if (Object.hasOwn(baseline, path)) {
         throw new Error(`Cannot exclude existing snapshot path as a Python environment: ${path}. Create the environment in a new directory instead.`);
@@ -340,6 +369,17 @@ export class WorkspaceManager {
     });
     if (!existing) await materializeCopyTree(lease.path, resultPath, result);
     if (copyTreeOid(await scanCopyTree(resultPath)) !== resultOid) throw new Error("Copy artifact was modified");
+    let privateGitHistory: AgentArtifact["privateGitHistory"];
+    if (lease.privateGit && this.copyWithPrivateGit) {
+      const history = join(artifactRoot, "git-history");
+      await withPersistentGitOperation(this.copyWithPrivateGit.ownerDirectory, async () => {
+        await capturePrivateGitHistory(lease.path, history);
+        await assertPrivateGitHistoryMatches(lease.path, join(history, "repository.git"));
+      });
+      if (copyTreeOid(await scanCopyTree(lease.path, false, true, true, undefined, lease.privateGit)) !== resultOid) throw new Error("Copy workspace changed during Git history freezing");
+      const repository = join(history, "repository.git");
+      privateGitHistory = { repository, treeHash: copyTreeOid(await scanCopyTree(repository)) };
+    }
     const changedPaths = changedCopyPaths(baseline, result);
     const artifact: AgentArtifact = {
       mode: "isolated-copy", artifactId, runId: lease.runId, workspaceId: lease.workspaceId,
@@ -347,6 +387,7 @@ export class WorkspaceManager {
       changedPaths,
       // Copy diffs include binary files and directories; line counts are not computed.
       diffStat: { additions: 0, deletions: 0, files: changedPaths.length },
+      ...(privateGitHistory ? { privateGitHistory } : {}),
     };
     this.artifacts.set(artifactId, structuredClone(artifact));
     await this.onLifecycle?.({ type: "artifact_created", lease, artifact, timestamp: Date.now() });
@@ -372,8 +413,9 @@ export class WorkspaceManager {
     }
 
     const copy = input.leases[0].mode === "isolated-copy";
+    if (!copy && this.forbidGit) throw new Error("Goal Git workspaces are unavailable: host Git execution is not sealed");
     if (input.leases.some((lease) => lease.mode !== input.leases[0].mode)) throw new Error("Mixed workspace backends");
-    const context = await workspaceContext(this.root, this.tempRoot, copy);
+    const context = await workspaceContext(this.root, this.tempRoot, copy, this.forbidGit);
     if (context.mode !== input.leases[0].mode) throw new Error("Recorded workspace backend is unavailable");
     await mkdir(context.workspaceTempRoot, { recursive: true, mode: 0o700 });
     const realTempRoot = await realpath(context.workspaceTempRoot);
@@ -397,6 +439,7 @@ export class WorkspaceManager {
       if ((lease.mode !== "isolated-git" && lease.mode !== "isolated-copy") || !lease.repoPath || !lease.baseOid) {
         throw new Error(`Workspace lease ${lease.workspaceId} is not hydratable`);
       }
+      if (copy && this.copyWithPrivateGit && !lease.privateGit) throw new Error("Private Git workspace binding is missing");
       const realRepoPath = await realpath(lease.repoPath);
       if (dirname(realRepoPath) !== runsPath) {
         throw new Error(`Workspace lease ${lease.workspaceId} escaped the recorded batch`);
@@ -405,6 +448,7 @@ export class WorkspaceManager {
       if (await realpath(lease.path) !== expectedWorkspacePath) {
         throw new Error(`Workspace lease ${lease.workspaceId} has an invalid workspace path`);
       }
+      if (lease.privateGit) await scanCopyTree(lease.path, false, true, true, undefined, lease.privateGit);
       // A private clone's metadata is writable by its Agent. Validate commits
       // against the host snapshot/artifact below, never against this directory.
     }
@@ -430,6 +474,11 @@ export class WorkspaceManager {
         if (copyTreeOid(result) !== artifact.resultOid
           || JSON.stringify(changedCopyPaths(baseline, result)) !== JSON.stringify(artifact.changedPaths)) {
           throw new Error("Copy artifact content or changed paths were modified");
+        }
+        if (artifact.privateGitHistory) {
+          const expected = join(realBatch, "artifacts", artifact.artifactId, "git-history", "repository.git");
+          if (artifact.privateGitHistory.repository !== expected || await realpath(expected) !== expected
+            || copyTreeOid(await scanCopyTree(expected)) !== artifact.privateGitHistory.treeHash) throw new Error("Private Git artifact was modified");
         }
       } else {
         if (await realpath(artifact.repoPath) !== artifact.repoPath) throw new Error("Git artifact escaped its recorded path");
@@ -466,6 +515,7 @@ export class WorkspaceManager {
       const baseline = await scanCopyTree(this.templatePath!);
       if (copyTreeOid(baseline) !== this.baseOid) throw new Error("Copy workspace baseline was modified");
       await materializeCopyTree(this.templatePath!, path, baseline);
+      if (this.copyWithPrivateGit) await materializePrivateGitMetadata(this.copyWithPrivateGit.snapshotRepository, path, this.copyWithPrivateGit.ownerDirectory);
     } else await git(this.batchRoot!, ["clone", "--local", "--no-hardlinks", this.templatePath!, path]);
     return { path, baseOid: this.baseOid! };
   }
@@ -533,7 +583,8 @@ export class WorkspaceManager {
   }
 
   private async initializeOnce(): Promise<void> {
-    const context = await workspaceContext(this.root, this.tempRoot);
+    const context = await workspaceContext(this.root, this.tempRoot, !!this.copyWithPrivateGit || !!this.capturePrivateGitFromRoot, this.forbidGit);
+    if (context.mode === "isolated-git" && this.forbidGit) throw new Error("Goal Git workspaces are unavailable: host Git execution is not sealed");
     this.mode = context.mode;
     this.repoRoot = context.repoRoot;
     this.rootRelative = context.rootRelative;
@@ -568,8 +619,21 @@ export class WorkspaceManager {
     });
     this.templatePath = join(this.batchRoot, "snapshot");
     if (this.mode === "isolated-copy") {
+      if (this.capturePrivateGitFromRoot) {
+        const { ownerDirectory, sourceBinding } = this.capturePrivateGitFromRoot;
+        const before = await scanCopyTree(this.repoRoot, true, true, true, undefined, sourceBinding);
+        const history = join(this.batchRoot, "parent-git-history");
+        await withPersistentGitOperation(ownerDirectory, async () => {
+          await capturePrivateGitHistory(this.repoRoot!, history);
+          await assertPrivateGitHistoryMatches(this.repoRoot!, join(history, "repository.git"));
+        });
+        const after = await scanCopyTree(this.repoRoot, true, true, true, undefined, sourceBinding);
+        if (copyTreeOid(before) !== copyTreeOid(after)) throw new Error("Parent workspace changed during child Git capture");
+        this.copyWithPrivateGit = { ownerDirectory, snapshotRepository: join(history, "repository.git") };
+      }
       const tree = await scanCopyTree(this.repoRoot, true);
       await materializeCopyTree(this.repoRoot, this.templatePath, tree);
+      if (copyTreeOid(await scanCopyTree(this.repoRoot, true)) !== copyTreeOid(tree)) throw new Error("Copy workspace changed during snapshot");
       this.baseOid = copyTreeOid(tree);
       return;
     }

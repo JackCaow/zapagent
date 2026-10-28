@@ -135,6 +135,8 @@ export function isToolAuthorization(
 }
 
 export interface ToolExecutorOptions {
+  /** Host-owned workspace execution fence, shared across every participant. */
+  workspaceGate?: WorkspaceExecutionGate;
   /** Fallback for tools without a declared timeout. To impose a hard host
    * ceiling, supply an executionBroker with explicit timeout limits. */
   timeoutMs?: number;
@@ -157,7 +159,7 @@ export interface ToolExecutorOptions {
   onExecutionLifecycle?: ToolExecutionLifecycleHandler;
   /** Synchronous host admission after authorization, before lifecycle/handler.
    * Throwing can only prevent execution; it never grants permission. */
-  admitExecution?: () => void;
+  admitExecution?: (toolName: string) => void;
   /**
    * Compatibility escape hatch for trusted embedders that intentionally run
    * confirm tools without an approval callback. Defaults to false so bare SDK
@@ -176,6 +178,14 @@ export interface ToolExecutorOptions {
    * void callbacks attest coverage by resolving and must throw if unavailable.
    */
   onTrackEdit?: CheckpointEditTracker;
+}
+
+export interface WorkspaceExecutionGate {
+  authorize<T>(workspace: string, action: () => T | Promise<T>, signal?: AbortSignal): Promise<T>;
+  execute(workspace: string, authorization: ToolAuthorization, action: () => Promise<ToolResult>, signal?: AbortSignal): Promise<ToolResult>;
+  /** Mark the current Host-owned execution uncertain before presentation code
+   * can replace its result. This does not depend on tool/model metadata. */
+  markUnconfirmed(): void;
 }
 
 type WriteFingerprint = NonNullable<NonNullable<ToolResult["runtime"]>["writeEvidence"]>["paths"][number]["before"];
@@ -213,7 +223,7 @@ export class ToolExecutor {
   private _onApproval?: ApprovalCallback;
   private _onApprovalLifecycle?: ApprovalLifecycleHandler;
   private _onExecutionLifecycle?: ToolExecutionLifecycleHandler;
-  private _admitExecution?: () => void;
+  private _admitExecution?: (toolName: string) => void;
   private _allowConfirmWithoutApproval: boolean;
   private _postProcess?: PostProcessCallback;
   private readonly _resultGuard?: ToolResultGuard;
@@ -224,6 +234,7 @@ export class ToolExecutor {
   private _actor?: AgentIdentity;
   private _workspace: WorkspaceIdentity;
   private _executionBroker: ExecutionBroker;
+  private _workspaceGate?: WorkspaceExecutionGate;
   private _interactive: boolean;
   /** Serializes concurrent approval requests so UI only shows one at a time. */
   private approvalQueue: ApprovalCoordinator;
@@ -240,6 +251,7 @@ export class ToolExecutor {
     this._policyEngine = options.policyEngine ?? new DefaultToolPolicyEngine();
     this._actor = options.actor;
     this._executionBroker = options.executionBroker ?? new DefaultExecutionBroker();
+    this._workspaceGate = options.workspaceGate;
     const sandboxStatus = this._executionBroker.sandboxStatus();
     this._workspace = {
       root: options.workspace?.root ?? this._cwd,
@@ -247,6 +259,10 @@ export class ToolExecutor {
       mode: options.workspace?.mode ?? "root",
       ...(options.workspace?.privateGitDirectory
         ? { privateGitDirectory: options.workspace.privateGitDirectory } : {}),
+      ...(options.workspace?.privateGitIdentity
+        ? { privateGitIdentity: { ...options.workspace.privateGitIdentity } } : {}),
+      ...(options.workspace?.protectedWorkspacePaths
+        ? { protectedWorkspacePaths: [...options.workspace.protectedWorkspacePaths] } : {}),
       sandbox: options.workspace?.sandbox
         ?? (sandboxStatus.available ? "enforced" : "none"),
     };
@@ -280,6 +296,13 @@ export class ToolExecutor {
   get approvalCoordinator(): ApprovalCoordinator { return this.approvalQueue; }
   get policyEngine(): ToolPolicyEngine { return this._policyEngine; }
   get executionBroker(): ExecutionBroker { return this._executionBroker; }
+  get executionAdmission(): ToolExecutorOptions["admitExecution"] { return this._admitExecution; }
+  get workspaceGate(): WorkspaceExecutionGate | undefined { return this._workspaceGate; }
+  get workspace(): Readonly<WorkspaceIdentity> { return { ...this._workspace,
+    ...(this._workspace.protectedWorkspacePaths ? { protectedWorkspacePaths: [...this._workspace.protectedWorkspacePaths] } : {}) }; }
+
+  /** Bind a Host-owned workspace boundary without changing grants or policy. */
+  withWorkspace(workspace: WorkspaceIdentity): ToolExecutor { return this.clone(this.registry, { workspace }); }
 
   /** Clone while retaining lifecycle hooks, broker and the shared approval queue. */
   withRuntimePolicy(policyEngine: ToolPolicyEngine, checkpointMode: ToolExecutorOptions["checkpointMode"], requireApproval = false): ToolExecutor {
@@ -291,6 +314,7 @@ export class ToolExecutor {
       timeoutMs: this._timeoutMs, checkpointMode: this._checkpointMode,
       cwd: this._cwd, policyEngine: this._policyEngine, actor: this._actor,
       workspace: this._workspace, executionBroker: this._executionBroker,
+      workspaceGate: this._workspaceGate,
       interactive: this._interactive, onApproval: this._onApproval,
       onApprovalLifecycle: this._onApprovalLifecycle, onExecutionLifecycle: this._onExecutionLifecycle,
       admitExecution: this._admitExecution,
@@ -303,9 +327,9 @@ export class ToolExecutor {
   withRegistry(registry: ToolRegistry): ToolExecutor { return this.clone(registry); }
 
   /** Compose restrictive, synchronous admission without creating a started receipt. */
-  withExecutionAdmission(admit: () => void): ToolExecutor {
+  withExecutionAdmission(admit: (toolName: string) => void): ToolExecutor {
     const existing = this._admitExecution;
-    return this.clone(this.registry, { admitExecution: () => { existing?.(); admit(); } });
+    return this.clone(this.registry, { admitExecution: name => { existing?.(name); admit(name); } });
   }
 
   /** Clone this executor while composing a runtime lifecycle observer. */
@@ -319,6 +343,7 @@ export class ToolExecutor {
       actor: this._actor,
       workspace: this._workspace,
       executionBroker: this._executionBroker,
+      workspaceGate: this._workspaceGate,
       interactive: this._interactive,
       onApproval: this._onApproval,
       onApprovalLifecycle: async (event) => {
@@ -344,6 +369,7 @@ export class ToolExecutor {
       actor: this._actor,
       workspace: this._workspace,
       executionBroker: this._executionBroker,
+      workspaceGate: this._workspaceGate,
       interactive: this._interactive,
       onApproval: this._onApproval,
       onApprovalLifecycle: this._onApprovalLifecycle,
@@ -381,6 +407,13 @@ export class ToolExecutor {
       !["isolated-write", "root-integration"].includes(effects.workspace.mode);
   }
 
+  /** Metadata-only planning hint. It never resolves filesystem paths or grants
+   * permission; the Host's gated authorization remains authoritative. */
+  isStaticallyReadOnly(name: string): boolean {
+    const known = this.registry.resolveName(name);
+    return known ? this.registry.get(known)?.definition.readOnly === true : false;
+  }
+
   resolveEffects(name: string, args: Record<string, unknown> = {}): ToolEffects {
     const known = this.registry.resolveName(name);
     return resolveDefinitionEffects(known ? this.registry.get(known)?.definition : undefined, args, this._cwd);
@@ -391,6 +424,14 @@ export class ToolExecutor {
     args: Record<string, unknown>,
     signal?: AbortSignal,
     context?: Readonly<ToolExecutionContext>,
+  ): ToolAuthorization | ToolResult | Promise<ToolAuthorization | ToolResult> {
+    if (this._workspaceGate) return this._workspaceGate.authorize(this._workspace.root,
+      () => this.authorizeUngated(name, args, signal, context), signal);
+    return this.authorizeUngated(name, args, signal, context);
+  }
+
+  private authorizeUngated(
+    name: string, args: Record<string, unknown>, signal?: AbortSignal, context?: Readonly<ToolExecutionContext>,
   ): ToolAuthorization | ToolResult | Promise<ToolAuthorization | ToolResult> {
     // A near-miss spelling is repaired; everything downstream sees the real name.
     const repaired = this.registry.resolveName(name);
@@ -469,6 +510,14 @@ export class ToolExecutor {
     authorization: ToolAuthorization,
     signal?: AbortSignal,
   ): Promise<ToolResult> {
+    if (this._workspaceGate) return this._workspaceGate.execute(this._workspace.root, authorization,
+      () => this.executeAuthorizedUngated(authorization, signal), signal);
+    return this.executeAuthorizedUngated(authorization, signal);
+  }
+
+  private async executeAuthorizedUngated(
+    authorization: ToolAuthorization, signal?: AbortSignal,
+  ): Promise<ToolResult> {
     const { name, args: parsedArgs, grant, context } = authorization;
     if (signal?.aborted) {
       return { success: false, output: "", error: "aborted",
@@ -483,7 +532,7 @@ export class ToolExecutor {
         failure: operationFailure("POLICY_DENIED", "executor", context?.toolCallId) };
     }
 
-    this._admitExecution?.();
+    this._admitExecution?.(name);
 
     const executionId = context?.toolCallId
       ? `execution:${context.toolCallId}`
@@ -705,6 +754,15 @@ export class ToolExecutor {
       ];
 
       let result = await Promise.race(raceTargets);
+      const brokerSeal = result.runtime?.processSeal;
+      // Inspect the authoritative broker result before result guards or
+      // postprocessors can replace it. A timed-out handler may still write.
+      if (this._workspaceGate && (signal?.aborted
+        || ["CANCELLED", "DEADLINE_EXCEEDED"].includes(result.failure?.code ?? "")
+        || (effects.process.length > 0 && (result.runtime?.processSeal?.state !== "sealed"
+          || result.runtime.processSeal.executionId !== executionId)))) {
+        this._workspaceGate.markUnconfirmed();
+      }
       brokerObservation = result.runtime?.execution;
       serviceEvidence = { ...(result.runtime?.service ? { service: result.runtime.service } : {}),
         ...(result.runtime?.serviceOperation ? { serviceOperation: result.runtime.serviceOperation } : {}) };
@@ -728,6 +786,12 @@ export class ToolExecutor {
           ...((brokerObservation || commandReceipt) ? { runtime: { ...result.runtime, ...(brokerObservation ? { execution: brokerObservation } : {}), ...(commandReceipt ? { command: commandReceipt } : {}) } } : {}),
         };
       }
+      // Presentation callbacks may remove or invent fields. For gated process
+      // calls only the exact broker-authored receipt may leave this boundary.
+      if (this._workspaceGate && effects.process.length > 0) {
+        const { processSeal: _formattedSeal, ...rest } = result.runtime ?? {};
+        result.runtime = { ...rest, ...(brokerSeal?.state === "sealed" && brokerSeal.executionId === executionId ? { processSeal: brokerSeal } : {}) };
+      }
       const { service: _service, serviceOperation: _operation, ...formattedRuntime } = result.runtime ?? {};
       result.runtime = {
         ...formattedRuntime,
@@ -749,8 +813,17 @@ export class ToolExecutor {
         };
       }
       // Recheck formatter additions before any result leaves the executor.
-      return normalizeToolFailure(this.guardResult(name, parsedArgs, observations.retain(normalizeToolFailure(result, executionId))), executionId);
+      let final = normalizeToolFailure(this.guardResult(name, parsedArgs, observations.retain(normalizeToolFailure(result, executionId))), executionId);
+      // The final guard runs after postprocessing and may also replace runtime
+      // fields. Restore only the original, correctly bound broker receipt.
+      if (this._workspaceGate && effects.process.length > 0) {
+        const { processSeal: _formattedSeal, ...rest } = final.runtime ?? {};
+        final = { ...final, runtime: { ...rest, ...(brokerSeal?.state === "sealed" && brokerSeal.executionId === executionId ? { processSeal: brokerSeal } : {}) } };
+      }
+      return final;
     } catch (err) {
+      if (this._workspaceGate && (signal?.aborted || (err instanceof ExecutionBoundaryError
+        && ["CANCELLED", "DEADLINE_EXCEEDED"].includes(err.failure.code)))) this._workspaceGate.markUnconfirmed();
       return this.guardResult(name, parsedArgs, observations.retain({ ...executionFailureResult(err, executionId),
         runtime: { effects, ...serviceEvidence, ...(brokerObservation ? { execution: brokerObservation } : {}) },
       }));

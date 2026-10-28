@@ -2,9 +2,25 @@ import type { ToolResult } from "../tools/types.js";
 import type { ToolExecutor } from "../tools/executor.js";
 import type { ToolExecutionHooks } from "./streaming-tool-executor.js";
 import { operationFailure } from "../execution/failure.js";
+import { isEffectivelyReadOnly } from "../tools/effects.js";
 import { canonicalizeJsonSchema } from "../tools/schema.js";
 import { sliceHeadCodePoints } from "../utils/logical-lines.js";
 import { createHash } from "node:crypto";
+
+// Only results created before executor dispatch carry this in-process proof.
+// Serialized metadata (including runtime.suppression) cannot establish that no
+// process ran, and copied/replayed results deliberately lose this authority.
+const hostDuplicateSuppressions = new WeakSet<ToolResult>();
+
+export function isHostDuplicateSuppression(result: ToolResult): boolean {
+  return hostDuplicateSuppressions.has(result);
+}
+
+function duplicateSuppression(output: string): ToolResult {
+  const result: ToolResult = { success: true, runtime: { suppression: "duplicate" }, output };
+  hostDuplicateSuppressions.add(result);
+  return result;
+}
 
 /** Short target label for observations and duplicate-query explanations.
  *  This lossy display value must not be used as an execution identity. */
@@ -231,7 +247,7 @@ export function createRunToolExecutionHooks(
               failure: operationFailure("TASK_PLAN_REQUIRED", "harness") };
           }
         } else if (!planState.ready) {
-          const readOnly = executor.isReadOnly(name, args);
+          const readOnly = executor.workspaceGate ? executor.isStaticallyReadOnly(name) : executor.isReadOnly(name, args);
           const allowUnplanned = readOnly && planState.baselineReads++ < 1;
           if (!allowUnplanned) return taskPlanRequiredResult(taskDecomposition);
         }
@@ -243,13 +259,10 @@ export function createRunToolExecutionHooks(
         const fetchedAt = fetchedUrls.get(fetchKey);
         if (fetchedAt !== undefined && Date.now() - fetchedAt < FETCH_REUSE_WINDOW_MS) {
           onSuppressed(name, args);
-          return {
-            success: true,
-            runtime: { suppression: "duplicate" },
-            output:
-              `[Duplicate http_fetch suppressed for ${String(args.url)}. It was already fetched in the last few minutes; ` +
-              "reuse that result instead of fetching it again, or fetch a different page.]",
-          };
+          return duplicateSuppression(
+            `[Duplicate http_fetch suppressed for ${String(args.url)}. It was already fetched in the last few minutes; ` +
+            "reuse that result instead of fetching it again, or fetch a different page.]",
+          );
         }
         fetchedUrls.set(fetchKey, Date.now());
         return undefined;
@@ -259,14 +272,11 @@ export function createRunToolExecutionHooks(
       if (completedOrInFlight.has(key)) {
         onSuppressed(name, args);
         const target = primaryArgSig(name, args) || "the same arguments";
-        return {
-          success: true,
-          runtime: { suppression: "duplicate" },
-          output:
-            `[Duplicate ${name} suppressed for ${target}. ` +
-            "Reuse the previous result; the workspace has not changed since it was returned. " +
-            "Choose the next concrete action instead of reading/searching it again.]",
-        };
+        return duplicateSuppression(
+          `[Duplicate ${name} suppressed for ${target}. ` +
+          "Reuse the previous result; the workspace has not changed since it was returned. " +
+          "Choose the next concrete action instead of reading/searching it again.]",
+        );
       }
       completedOrInFlight.add(key);
       return undefined;
@@ -284,7 +294,10 @@ export function createRunToolExecutionHooks(
       if (name === "todo_write" && result.success) {
         planState.ready = true;
       }
-      if (result.success && !executor.isReadOnly(name, args)) {
+      const readOnly = executor.workspaceGate
+        ? !!result.runtime?.effects && isEffectivelyReadOnly(result.runtime.effects)
+        : executor.isReadOnly(name, args);
+      if (result.success && !readOnly) {
         completedOrInFlight.clear();
       }
     },

@@ -34,9 +34,12 @@ func ArtifactOutputPath(taskID string) (string, error) {
 }
 
 const (
-	TypePing                           = "ping"
-	TypeStatus                         = "status"
-	TypeExec                           = "exec"
+	TypePing   = "ping"
+	TypeStatus = "status"
+	TypeExec   = "exec"
+	// An older daemon must reject this distinct request rather than silently
+	// ignoring a process-seal requirement on a legacy exec request.
+	TypeExecSealed                     = "exec.sealed.v1"
 	TypePause                          = "pause"
 	TypeResume                         = "resume"
 	TypeShutdown                       = "shutdown"
@@ -115,18 +118,27 @@ type Command struct {
 	ProtectedWorkspacePaths []string `json:"protected_workspace_paths,omitempty"`
 	DeniedWorkspacePatterns []string `json:"denied_workspace_patterns,omitempty"`
 	TimeoutMillis           uint64   `json:"timeout_ms,omitempty"`
+	RequireProcessSeal      bool     `json:"require_process_seal,omitempty"`
+}
+
+// ProcessSeal is a guest-observed process-containment receipt, independent of
+// any Agent or host permission policy. Absence means no proof was supplied.
+type ProcessSeal struct {
+	Mechanism string `json:"mechanism"`
+	State     string `json:"state"`
 }
 
 type Event struct {
-	Timestamp string `json:"timestamp"`
-	CommandID string `json:"command_id,omitempty"`
-	Type      string `json:"type"`
-	Stream    string `json:"stream,omitempty"`
-	Data      []byte `json:"data,omitempty"`
-	PID       int    `json:"pid,omitempty"`
-	OK        *bool  `json:"ok,omitempty"`
-	ExitCode  *int   `json:"exit_code,omitempty"`
-	Error     string `json:"error,omitempty"`
+	Timestamp string       `json:"timestamp"`
+	CommandID string       `json:"command_id,omitempty"`
+	Type      string       `json:"type"`
+	Stream    string       `json:"stream,omitempty"`
+	Data      []byte       `json:"data,omitempty"`
+	PID       int          `json:"pid,omitempty"`
+	OK        *bool        `json:"ok,omitempty"`
+	ExitCode  *int         `json:"exit_code,omitempty"`
+	Seal      *ProcessSeal `json:"seal,omitempty"`
+	Error     string       `json:"error,omitempty"`
 }
 
 type Status struct {

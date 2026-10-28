@@ -83,6 +83,8 @@ func run(args []string) error {
 		return nil
 	}
 	switch args[0] {
+	case "_fs-publish-directory":
+		return runFsPublishDirectory(args[1:])
 	case "_linux-vmm-supervisor":
 		return runLinuxVMMSupervisor(args[1:])
 	case "capabilities":
@@ -1728,7 +1730,7 @@ func validateAgentStartTimeout(timeout time.Duration) error {
 }
 
 func executeGuest(codec *protocol.Codec, argv []string, networkMode platform.NetworkMode, sessionID string, timeout time.Duration, credentials map[string][]byte) error {
-	return executeGuestTo(codec, "cli-exec", argv, ".", networkMode, sessionID, timeout, credentials, nil, nil, os.Stdout, os.Stderr, nil)
+	return executeGuestTo(codec, "cli-exec", argv, ".", networkMode, sessionID, timeout, credentials, nil, nil, os.Stdout, os.Stderr, nil, nil)
 }
 
 type guestCommandExitError struct{ Code int }
@@ -1737,7 +1739,7 @@ func (err *guestCommandExitError) Error() string {
 	return fmt.Sprintf("guest command exited with code %d", err.Code)
 }
 
-func executeGuestTo(codec *protocol.Codec, requestID string, argv []string, cwd string, networkMode platform.NetworkMode, sessionID string, timeout time.Duration, credentials map[string][]byte, protectedWorkspacePaths, deniedWorkspacePatterns []string, stdout, stderr io.Writer, onStarted func(agent.ExecStarted) error) error {
+func executeGuestTo(codec *protocol.Codec, requestID string, argv []string, cwd string, networkMode platform.NetworkMode, sessionID string, timeout time.Duration, credentials map[string][]byte, protectedWorkspacePaths, deniedWorkspacePatterns []string, stdout, stderr io.Writer, onStarted func(agent.ExecStarted) error, onExit func(agent.ExecExit) error) error {
 	environment := map[string]string{}
 	if networkMode == platform.NetworkRestricted {
 		for _, key := range []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"} {
@@ -1763,6 +1765,9 @@ func executeGuestTo(codec *protocol.Codec, requestID string, argv []string, cwd 
 		response, err := codec.Read()
 		if err != nil {
 			return err
+		}
+		if response.ID != requestID || response.SessionID != sessionID {
+			return errors.New("guest response request or session identity mismatch")
 		}
 		switch response.Type {
 		case "exec.started":
@@ -1791,6 +1796,11 @@ func executeGuestTo(codec *protocol.Codec, requestID string, argv []string, cwd 
 			var exit agent.ExecExit
 			if err := json.Unmarshal(response.Payload, &exit); err != nil {
 				return err
+			}
+			if onExit != nil {
+				if err := onExit(exit); err != nil {
+					return err
+				}
 			}
 			if exit.Code != 0 {
 				return &guestCommandExitError{Code: exit.Code}

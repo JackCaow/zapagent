@@ -25,6 +25,8 @@ import type {
 } from "./types.js";
 
 export interface DefaultExecutionBrokerOptions {
+  /** The configured process factory implements the Host seal protocol. */
+  supportsProcessSeal?: boolean;
   /** Host-selected independent owner. No owner or process fallback is created. */
   services?: AuthorizedServiceBackend;
   /** Required to describe a custom process launcher; omission stays unknown. */
@@ -58,6 +60,7 @@ export class DefaultExecutionBroker implements ExecutionBroker {
   private readonly limits: ToolResourceLimits;
   private readonly hardTimeout: boolean;
   private readonly processBrokerFactory?: DefaultExecutionBrokerOptions["processBrokerFactory"];
+  private readonly sealSupported: boolean;
 
   constructor(options: DefaultExecutionBrokerOptions = {}) {
     if (options.services && options.processBrokerFactory) throw new Error("Service ownership must be implemented by the selected backend, not a local process fallback");
@@ -71,7 +74,10 @@ export class DefaultExecutionBroker implements ExecutionBroker {
     this.limits = configureLimits(DEFAULT_TOOL_RESOURCE_LIMITS, options.limits);
     this.hardTimeout = options.limits?.timeoutMs !== undefined;
     this.processBrokerFactory = options.processBrokerFactory;
+    this.sealSupported = options.supportsProcessSeal === true;
   }
+
+  supportsProcessSeal(): boolean { return this.sealSupported; }
 
   serviceCapabilities(workspace: ExecutionBrokerRequest["workspace"]) { return this.services?.capabilities(workspace); }
 
@@ -112,6 +118,7 @@ export class DefaultExecutionBroker implements ExecutionBroker {
     const observe = observeLegacyExecution(request, sandboxStatus, this.sandboxMode, limits);
     let sandbox: SandboxExecutionContext | undefined;
     let processBroker: ExecutionProcessBroker | undefined;
+    let processSealed = false;
     const budget = new DefaultExecutionResourceBudget(limits);
     const finish = (result: ToolResult, outcome: EnforcementReceipt["outcome"]): ToolResult => {
       const denials = processBroker?.networkDenials?.slice(0, 16) ?? [];
@@ -128,10 +135,11 @@ export class DefaultExecutionBroker implements ExecutionBroker {
       }
       const normalized = normalizeToolFailure(result, request.executionId);
       // Ordinary handlers cannot manufacture service-owner evidence.
-      const { service: _service, serviceOperation: _operation, ...runtime } = normalized.runtime ?? {};
+      const { service: _service, serviceOperation: _operation, processSeal: _untrustedSeal, ...runtime } = normalized.runtime ?? {};
       const usage = budget.usage;
       return { ...normalized, runtime: {
         ...runtime, ...serviceEvidence,
+        ...(processSealed ? { processSeal: { state: "sealed" as const, executionId: request.executionId } } : {}),
         ...(denials.length ? { networkDenials: denials } : {}),
         ...(this.sandboxMode !== "disabled" ? { broker: {
           executionId: request.executionId,
@@ -213,6 +221,9 @@ export class DefaultExecutionBroker implements ExecutionBroker {
         ? this.processBrokerFactory?.({ request, sandbox, signal: executionAbort.signal, limits })
           ?? new DefaultExecutionProcessBroker(sandbox, executionAbort.signal)
         : undefined;
+      if (needsProcessSandbox && request.requireProcessSeal && !processBroker?.verifyProcessSeal) {
+        return reject("Selected backend cannot prove process-tree sealing", "CAPABILITY_UNSUPPORTED");
+      }
       if (signal?.aborted) {
         executionAbort.abort(signal.reason);
         return reject("aborted", "CANCELLED");
@@ -258,6 +269,12 @@ export class DefaultExecutionBroker implements ExecutionBroker {
         });
       };
       const result = await Promise.race([invoke(), timeoutPromise, abortPromise]);
+      if (needsProcessSandbox && request.requireProcessSeal) {
+        // The handler may return a failure after it launched a process. Its
+        // descendants still need confirmation before any outcome is trusted.
+        await Promise.race([processBroker!.verifyProcessSeal!(), timeoutPromise, abortPromise]);
+        processSealed = true;
+      }
       if (result.success && needsProcessSandbox && processBroker?.spawnCount === 0) {
         return finish({ ...brokerFailure(
           `process tool ${request.name} returned success without using the broker-owned process launcher`),

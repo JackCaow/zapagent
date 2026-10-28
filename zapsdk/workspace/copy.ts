@@ -3,6 +3,7 @@ import { constants } from "node:fs";
 import { chmod, lstat, mkdir, open, readdir, readlink, realpath, rm, symlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isWithin } from "./context.js";
+import type { PrivateGitBinding } from "./types.js";
 
 export type CopyEntry =
   | { kind: "file"; mode: number; hash: string; bytes: number }
@@ -107,13 +108,24 @@ async function fileEntry(path: string, mode: number): Promise<CopyEntry> {
 /** Never follows directory links. Hashing is streamed, including large inputs.
  * source=true excludes private/control files from the initial snapshot only;
  * introducing one in a child is rejected rather than silently losing edits. */
-export async function scanCopyTree(root: string, source = false, validateLinks = true, omitEnvironments = source, excludedEnvironments?: Set<string>): Promise<CopyTree> {
+export async function scanCopyTree(root: string, source = false, validateLinks = true, omitEnvironments = source, excludedEnvironments?: Set<string>, privateGit?: PrivateGitBinding): Promise<CopyTree> {
   const info = await lstat(root);
   if (!info.isDirectory() || info.isSymbolicLink()) throw new Error(`Unsafe copy workspace root: ${root}`);
+  const validatePrivateGit = async () => {
+    if (!privateGit) return;
+    const expected = join(await realpath(root), ".git");
+    if (privateGit.directory !== expected) throw new Error("Private Git binding does not belong to copy workspace");
+    const stat = await lstat(expected, { bigint: true });
+    if (!stat.isDirectory() || stat.isSymbolicLink() || stat.dev.toString() !== privateGit.device || stat.ino.toString() !== privateGit.inode) {
+      throw new Error("Private Git directory identity changed");
+    }
+  };
+  await validatePrivateGit();
   const tree: CopyTree = Object.create(null);
   async function walk(prefix: string): Promise<void> {
     for (const name of (await readdir(join(root, prefix))).sort()) {
       const path = prefix ? `${prefix}/${name}` : name;
+      if (path === ".git" && privateGit) { await validatePrivateGit(); continue; }
       if (source && name.startsWith(".zap-copy-merge-")) {
         throw new Error(`Interrupted copy merge requires recovery before continuing: ${join(root, path)}`);
       }
@@ -155,6 +167,7 @@ export async function scanCopyTree(root: string, source = false, validateLinks =
     }
   }
   await walk("");
+  await validatePrivateGit();
   return tree;
 }
 

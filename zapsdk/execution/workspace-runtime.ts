@@ -19,6 +19,12 @@ export function privateGitWriteRoot(workspace: WorkspaceIdentity): string | unde
     || !isWithin(repo, root) || realpathSync(path) !== path) {
     throw new Error("Private Agent Git directory must belong to its standalone clone");
   }
+  if (workspace.privateGitIdentity) {
+    const identity = lstatSync(path, { bigint: true });
+    if (identity.dev.toString() !== workspace.privateGitIdentity.device || identity.ino.toString() !== workspace.privateGitIdentity.inode) {
+      throw new Error("Private Agent Git directory identity changed");
+    }
+  }
   return path;
 }
 

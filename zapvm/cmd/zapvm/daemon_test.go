@@ -729,3 +729,41 @@ func repeatHex(value byte, count int) string {
 	}
 	return string(result)
 }
+
+func TestSealedExecIsRejectedByLegacyDaemonBeforeExecution(t *testing.T) {
+	endpoint := daemonTestEndpoint(t)
+	listener, err := localipc.Listen(endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	received := make(chan string, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			received <- "accept-error"
+			return
+		}
+		defer conn.Close()
+		codec := daemonrpc.NewCodec(conn, conn)
+		request, err := codec.Read()
+		if err != nil {
+			received <- "read-error"
+			return
+		}
+		received <- request.Type
+		response, _ := daemonrpc.NewEnvelope(request.ID, daemonrpc.TypeError, daemonrpc.Error{Message: "unsupported daemon request"})
+		_ = codec.Write(response)
+	}()
+	result := filepath.Join(t.TempDir(), "result.json")
+	err = runDaemonExec([]string{"--endpoint", endpoint, "--workspace", t.TempDir(), "--require-process-seal", "--request-id", "sealed-test", "--result-file", result, "--", "touch", "marker"})
+	if err == nil {
+		t.Fatal("legacy daemon accepted sealed execution")
+	}
+	if kind := <-received; kind != daemonrpc.TypeExecSealed {
+		t.Fatalf("sent %q, wanted distinct sealed request", kind)
+	}
+	if _, err := os.Stat(result); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unexpected receipt: %v", err)
+	}
+}

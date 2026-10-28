@@ -1,5 +1,7 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { closeSync, lstatSync, mkdirSync, openSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, realpathSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { resolveZapVmGuestCwd } from "./workspace-path.js";
 import { getAppDataDir } from "../utils/platform.js";
@@ -17,6 +19,8 @@ import { DefaultExecutionBroker } from "./broker.js";
 import { terminateProcessTreeWithGrace } from "./process.js";
 import { operationFailure } from "./failure.js";
 import { observeLegacyExecution } from "./observation.js";
+import { privateGitWriteRoot } from "./workspace-runtime.js";
+import type { WorkspaceIdentity } from "../policy/types.js";
 
 const DEFAULT_START_TIMEOUT_MS = 10_000;
 
@@ -311,6 +315,11 @@ export class TransparentExecutionBroker implements ExecutionBroker {
     return this.vm?.sandboxStatus() ?? this.local.sandboxStatus();
   }
 
+  supportsProcessSeal(tool: { name: string; executionLocation?: "workspace" | "host" }): boolean {
+    const backend = this.usesWorkspaceBackend(tool.name, tool.executionLocation) ? this.vm! : this.local;
+    return backend.supportsProcessSeal?.(tool) === true;
+  }
+
   serviceCapabilities(workspace: import("../policy/types.js").WorkspaceIdentity) {
     return (this.vm ?? this.local).serviceCapabilities?.(workspace);
   }
@@ -370,6 +379,8 @@ export function buildZapVmExecArgs(input: {
   workspaceReadOnly?: boolean;
   protectedWorkspacePaths?: string[];
   networkPolicy?: ZapVmNetworkPolicy;
+  /** Host-only strict process seal result, outside the guest workspace. */
+  processSeal?: { requestId: string; resultFile: string };
 }): string[] {
   if (input.argv.length === 0 || !input.argv[0]) throw new Error("Guest command requires an executable");
   const networkPolicy = input.networkPolicy;
@@ -383,6 +394,7 @@ export function buildZapVmExecArgs(input: {
     "--network", networkPolicy ? "restricted" : "off",
   ];
   if (input.workspaceReadOnly) args.push("--workspace-read-only");
+  if (input.processSeal) args.push("--request-id", input.processSeal.requestId, "--require-process-seal", "--result-file", input.processSeal.resultFile);
   for (const protectedPath of input.protectedWorkspacePaths ?? []) {
     args.push("--protect-workspace-path", protectedPath);
   }
@@ -438,6 +450,7 @@ export function resolveZapVmNetworkPolicy(
 class ZapVmExecutionProcessBroker implements ExecutionProcessBroker {
   private _spawnCount = 0;
   private _sandboxedSpawnCount = 0;
+  private readonly sealResults: Array<{ path: string; directory: string; requestId: string; sessionId: string; closed: Promise<number | null> }> = [];
 
   constructor(
     private readonly installation: ZapVmInstallation,
@@ -468,20 +481,42 @@ class ZapVmExecutionProcessBroker implements ExecutionProcessBroker {
 
   private launch(argv: string[], options: SandboxCommandOptions): ChildProcess {
     if (this.signal.aborted) throw new Error("aborted");
+    const workspaceReadOnly = this.request.effects.workspace.mode === "shared-readonly";
+    const protectedPaths = protectedPathsForVm(this.request.workspace, workspaceReadOnly);
+    // virtiofs presents Host-created private clones with the Host uid rather
+    // than the Guest workload uid. Trust only this one Guest mount, and only
+    // after the Host has bound its standalone private .git directory.
+    if (!workspaceReadOnly && this.request.workspace.privateGitDirectory && !protectedPaths.includes(".git")) {
+      argv = ["/usr/bin/env", "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=safe.directory", "GIT_CONFIG_VALUE_0=/workspace", ...argv];
+    }
+    const sessionId = boundedIdentifier(this.request.context?.agentRun?.runId ?? this.request.context?.sessionId ?? "zap-session", "zap-session");
+    let seal: { requestId: string; resultFile: string; directory: string } | undefined;
+    if (this.request.requireProcessSeal) {
+      // The guest must never see or modify the receipt path. Refuse to put
+      // private Host state beneath a workspace that is mapped into the guest.
+      const parent = realpathSync(tmpdir());
+      const workspace = realpathSync(this.request.workspace.root);
+      const rel = relative(workspace, parent);
+      if (!rel || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel))) {
+        throw new Error("Process seal storage is within the guest workspace");
+      }
+      const directory = mkdtempSync(join(parent, "zap-seal-"));
+      seal = { directory, requestId: randomUUID(), resultFile: join(directory, "result.json") };
+    }
     this._spawnCount += 1;
     this._sandboxedSpawnCount += 1;
-    const child = spawn(this.installation.binaryPath, buildZapVmExecArgs({
+    let child: ChildProcess;
+    try { child = spawn(this.installation.binaryPath, buildZapVmExecArgs({
       endpoint: this.endpoint,
       workspaceRoot: this.request.workspace.root,
       hostCwd: options.cwd,
-      sessionId: this.request.context?.agentRun?.runId
-        ?? this.request.context?.sessionId
-        ?? "zap-session",
+      sessionId,
       timeoutMs: this.limits.timeoutMs,
       argv,
-      workspaceReadOnly: this.request.effects.workspace.mode === "shared-readonly",
-      protectedWorkspacePaths: ensureProtectedWorkspacePaths(this.request.workspace.root),
+      workspaceReadOnly,
+      protectedWorkspacePaths: protectedPaths,
       networkPolicy: resolveZapVmNetworkPolicy(this.request.grant.network),
+      ...(seal ? { processSeal: { requestId: seal.requestId, resultFile: seal.resultFile } } : {}),
     }), {
       cwd: this.request.workspace.root,
       detached: process.platform !== "win32",
@@ -489,7 +524,16 @@ class ZapVmExecutionProcessBroker implements ExecutionProcessBroker {
       shell: false,
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
-    });
+    }); } catch (error) { if (seal) rmSync(seal.directory, { recursive: true, force: true }); throw error; }
+    if (seal) {
+      const expected = seal;
+      const closed = new Promise<number | null>((resolveClose) => {
+        child.once("error", () => resolveClose(null));
+        child.once("close", resolveClose);
+      });
+      this.sealResults.push({ path: expected.resultFile, directory: expected.directory,
+        requestId: expected.requestId, sessionId, closed });
+    }
     child.stdin?.end();
     const onAbort = () => terminateProcessTreeWithGrace(child);
     this.signal.addEventListener("abort", onAbort, { once: true });
@@ -498,10 +542,40 @@ class ZapVmExecutionProcessBroker implements ExecutionProcessBroker {
     child.once("error", cleanup);
     return child;
   }
+
+  async verifyProcessSeal(): Promise<void> {
+    if (!this.request.requireProcessSeal || !this.sealResults.length || this.sealResults.length !== this._spawnCount) {
+      throw new Error("Process seal receipt missing");
+    }
+    try {
+      for (const expected of this.sealResults) {
+        const code = await expected.closed;
+        const fd = openSync(expected.path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+        let receipt: unknown;
+        try {
+          const stat = fstatSync(fd);
+          if (!stat.isFile() || stat.size > 8192 || (process.getuid && stat.uid !== process.getuid())) {
+            throw new Error("Invalid process seal receipt file");
+          }
+          receipt = JSON.parse(readFileSync(fd, "utf8"));
+        } finally { closeSync(fd); }
+        if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) throw new Error("Invalid process seal receipt");
+        const data = receipt as { request_id?: unknown; session_id?: unknown; exit_code?: unknown; seal?: { mechanism?: unknown; state?: unknown } };
+        if (data.request_id !== expected.requestId || data.session_id !== expected.sessionId ||
+          !Number.isSafeInteger(data.exit_code) || (data.exit_code as number) < 0 || (data.exit_code as number) > 255 ||
+          code !== data.exit_code || data.seal?.mechanism !== "cgroup-v2" || data.seal.state !== "empty") {
+          throw new Error("Process seal receipt is missing, unbound, or incompatible");
+        }
+      }
+    } finally {
+      for (const item of this.sealResults) rmSync(item.directory, { recursive: true, force: true });
+    }
+  }
 }
 
 function createZapVmExecutionBroker(runtime: ZapVmRuntimeController, limits?: Partial<ToolResourceLimits>): ExecutionBroker {
   return new DefaultExecutionBroker({
+    supportsProcessSeal: true,
     shellEnvironment: { syntax: "posix", filesystem: "workspace-mapped", workspaceRoot: "/workspace" },
     sandbox: new ZapVmSandbox(),
     sandboxMode: "required",
@@ -526,7 +600,7 @@ class ZapVmSandbox implements OsSandbox {
       enforced: true,
       readablePaths: input.grant.filesystem?.read ?? [],
       writablePaths: input.grant.filesystem?.write ?? [],
-      protectedPaths: ensureProtectedWorkspacePaths(input.workspace.root)
+      protectedPaths: protectedPathsForVm(input.workspace, input.effects.workspace.mode === "shared-readonly")
         .map((path) => join(input.workspace.root, path)),
       networkAllowed: (input.grant.network?.destinations.length ?? 0) > 0,
       prepareCommand: unsupported,
@@ -535,14 +609,42 @@ class ZapVmSandbox implements OsSandbox {
   }
 }
 
-export function ensureProtectedWorkspacePaths(workspaceRoot: string): string[] {
-  const zapcodePath = join(workspaceRoot, ".zapcode");
-  mkdirSync(zapcodePath, { recursive: true, mode: 0o700 });
-  const zapcodeInfo = lstatSync(zapcodePath);
-  if (!zapcodeInfo.isDirectory() || zapcodeInfo.isSymbolicLink()) {
-    throw new Error("Workspace .zapcode control path must be a real directory");
+/** Only Host workspace identity can authorize a private clone's control
+ * directory. Read-only requests always retain the protection. */
+export function protectedPathsForVm(workspace: WorkspaceIdentity, readOnly: boolean): string[] {
+  const paths = ensureProtectedWorkspacePaths(workspace.root, !readOnly);
+  if (!readOnly && workspace.privateGitDirectory) {
+    const git = privateGitWriteRoot(workspace);
+    // A nested Goal workspace does not expose the parent repo's .git through
+    // the single workspace mount, so only a clone at the mount root qualifies.
+    if (git && dirname(git) === realpathSync(workspace.root)) {
+      const index = paths.indexOf(".git");
+      if (index < 0) throw new Error("Private Agent Git directory is unavailable");
+      paths.splice(index, 1);
+    }
   }
-  const protectedPaths = [".zapcode"];
+  for (const path of workspace.protectedWorkspacePaths ?? []) {
+    if (typeof path !== "string" || !path || Buffer.byteLength(path) > 4096 || path.includes("\\") || path.includes("\0") || isAbsolute(path)
+      || path.split("/").some(part => !part || part === "." || part === "..")) throw new Error("Invalid Host protected workspace path");
+    if (!paths.includes(path)) paths.push(path);
+  }
+  if (paths.length > 16) throw new Error("Too many Host protected workspace paths");
+  return paths;
+}
+
+export function ensureProtectedWorkspacePaths(workspaceRoot: string, createControlDirectory = true): string[] {
+  const zapcodePath = join(workspaceRoot, ".zapcode");
+  if (createControlDirectory) mkdirSync(zapcodePath, { recursive: true, mode: 0o700 });
+  const protectedPaths: string[] = [];
+  try {
+    const zapcodeInfo = lstatSync(zapcodePath);
+    if (!zapcodeInfo.isDirectory() || zapcodeInfo.isSymbolicLink()) {
+      throw new Error("Workspace .zapcode control path must be a real directory");
+    }
+    protectedPaths.push(".zapcode");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT" || createControlDirectory) throw error;
+  }
   const gitPath = join(workspaceRoot, ".git");
   try {
     const gitInfo = lstatSync(gitPath);

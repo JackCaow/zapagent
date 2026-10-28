@@ -29,6 +29,7 @@ import type { AgentEventHandler } from "../zapsdk/agent/events.js"
 import { autoMemory, cronHandle, monitorHandle, taskStore, mdStore, globalMdStore, globalMemoryDir, delegateProviders, delegateEventBridge } from "./singletons.js"
 import { memorySaveTool } from "../zapsdk/builtin-tools/memory.js"
 import type { AgentObjects } from "./agent/types.js"
+import type { LLMProvider } from "../zapsdk/core/llm.js"
 import { createMemoryReadPostProcess } from "./agent/memoryReadPostProcess.js"
 import { createExecutionEnvironment, resolveExecutionBackend, type ExecutionEnvironment } from "./execution-environment.js"
 
@@ -61,6 +62,7 @@ export function buildAgentObjects(
   delegateOnEvent?: AgentEventHandler,
   /** Interactive UI only: registers `ask_user_question`. Headless leaves it out. */
   askUserCallbacks?: AskUserCallbacks,
+  providerAdapter?: (provider: LLMProvider) => LLMProvider,
 ): AgentObjects {
   const effectiveCwd = cwdOverride ?? process.cwd()
   const environment = executionEnvironment ?? createExecutionEnvironment(effectiveCwd, sandboxMode, resolveExecutionBackend(config.executionBackend), config.allowUnsandboxedCommands !== false, config.sandboxNetwork, config.sandboxExcludedCommands)
@@ -116,8 +118,7 @@ export function buildAgentObjects(
         "x-stainless-runtime-version": null,
       } as unknown as Record<string, string>
     : undefined
-  const provider = new RetryProvider(
-    isAnthropic
+  const rawProvider = isAnthropic
       ? new AnthropicProvider({
           maxRequestBytes: active?.maxRequestBytes,
           canonicalModelIds: modelCanonicalIds(active),
@@ -139,7 +140,9 @@ export function buildAgentObjects(
           // models.dev modalities and positive name hints. Unknown preserves
           // images until an actual rejection triggers bounded runtime fallback.
           supportsVision: resolveVisionSupport(active, model),
-        }),
+        })
+  const provider = new RetryProvider(
+    providerAdapter ? providerAdapter(rawProvider) : rawProvider,
     { maxRetries: 2, initialDelayMs: 1000 }
   )
 

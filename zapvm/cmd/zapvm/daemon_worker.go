@@ -124,6 +124,7 @@ func (worker *daemonStdioWorker) ExecuteCredentialed(ctx context.Context, comman
 		CredentialIDs: command.CredentialIDs, ProtectedWorkspacePaths: command.ProtectedWorkspacePaths,
 		DeniedWorkspacePatterns: command.DeniedWorkspacePatterns,
 		TimeoutMillis:           command.TimeoutMillis,
+		RequireProcessSeal:      command.RequireProcessSeal,
 	}, CredentialValues: values}
 	worker.writeMu.Lock()
 	err := json.NewEncoder(worker.stdin).Encode(request)
@@ -192,6 +193,7 @@ func daemonEvent(event execPlanEvent) daemonrpc.Event {
 	return daemonrpc.Event{
 		Timestamp: event.Timestamp, CommandID: event.CommandID, Type: event.Type,
 		Stream: event.Stream, Data: event.Data, PID: event.PID, OK: event.OK, ExitCode: event.ExitCode, Error: event.Error,
+		Seal: event.Seal,
 	}
 }
 

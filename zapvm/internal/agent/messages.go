@@ -20,6 +20,13 @@ type ExecOutput struct {
 
 type ExecExit struct {
 	Code int `json:"code"`
+	// Only provided when the guest has proved that its execution container is empty.
+	Seal *ProcessSeal `json:"seal,omitempty"`
+}
+
+type ProcessSeal struct {
+	Mechanism string `json:"mechanism"`
+	State     string `json:"state"`
 }
 
 type ExecSignal struct {
@@ -36,4 +43,6 @@ type Health struct {
 	StateSchema     int    `json:"state_schema"`
 	ActiveCommands  int    `json:"active_commands"`
 	UptimeMillis    int64  `json:"uptime_ms"`
+	// A capability advertisement is a preflight hint, never a per-request receipt.
+	ProcessSeal string `json:"process_seal,omitempty"`
 }

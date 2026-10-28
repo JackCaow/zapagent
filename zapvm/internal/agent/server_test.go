@@ -73,6 +73,10 @@ func TestExecStreamsOutput(t *testing.T) {
 			}
 			output.Write(chunk.Data)
 		case "exec.exit":
+			var exit ExecExit
+			if err := json.Unmarshal(message.Payload, &exit); err != nil || exit.Seal != nil {
+				t.Fatalf("non-isolated execution must not attest a seal: %+v, %v", exit, err)
+			}
 			if !gotStarted || output.String() != "hello zapvm\n" {
 				t.Fatalf("started=%v output=%q", gotStarted, output.String())
 			}
@@ -84,6 +88,112 @@ func TestExecStreamsOutput(t *testing.T) {
 			return
 		case "error":
 			t.Fatalf("unexpected error response: %s", message.Payload)
+		}
+	}
+}
+
+func TestExecSealFailureNeverReportsExitSuccess(t *testing.T) {
+	secret := bytes.Repeat([]byte{0x42}, 32)
+	server, err := NewServer(t.TempDir(), secret, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.sealWorkload = func(processIsolation) (*ProcessSeal, error) { return nil, errors.New("simulated cgroup failure") }
+	client, serverConn := net.Pipe()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	serverErr := make(chan error, 1)
+	go func() { serverErr <- server.Serve(ctx, serverConn) }()
+	codec := protocol.NewCodec(client, client)
+	if err := protocol.AuthenticateClient(codec, secret); err != nil {
+		t.Fatal(err)
+	}
+	request, err := protocol.NewEnvelope("seal-failure", "session", "exec.start", ExecStart{Argv: []string{"/bin/echo", "hello"}, TimeoutMillis: 5000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := codec.Write(request); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		message, err := codec.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if message.Type == "exec.exit" {
+			t.Fatal("seal failure reported as an exit result")
+		}
+		if message.Type == "error" {
+			if !server.degraded.Load() {
+				t.Fatal("seal failure must degrade the agent")
+			}
+			if !strings.Contains(string(message.Payload), "process isolation seal failed") {
+				t.Fatalf("unexpected failure: %s", message.Payload)
+			}
+			_ = client.Close()
+			cancel()
+			<-serverErr
+			return
+		}
+	}
+}
+
+func TestNonIsolatedHealthDoesNotAdvertiseSeal(t *testing.T) {
+	if got := processSealCapability(false); got != "" {
+		t.Fatalf("non-isolated backend advertised %q", got)
+	}
+}
+
+func TestInheritedOutputPipeCannotDelayCommandIndefinitely(t *testing.T) {
+	secret := bytes.Repeat([]byte{0x43}, 32)
+	server, err := NewServer(t.TempDir(), secret, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, serverConn := net.Pipe()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	serverErr := make(chan error, 1)
+	go func() { serverErr <- server.Serve(ctx, serverConn) }()
+	codec := protocol.NewCodec(client, client)
+	if err := protocol.AuthenticateClient(codec, secret); err != nil {
+		t.Fatal(err)
+	}
+	request, err := protocol.NewEnvelope("inherited-output", "session", "exec.start", ExecStart{
+		Argv: []string{"/bin/sh", "-c", "sleep 20 & printf parent-exited"}, TimeoutMillis: 10_000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := codec.Write(request); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.SetReadDeadline(time.Now().Add(7 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	var output string
+	for {
+		message, err := codec.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch message.Type {
+		case "exec.stdout":
+			var chunk ExecOutput
+			if err := json.Unmarshal(message.Payload, &chunk); err != nil {
+				t.Fatal(err)
+			}
+			output += string(chunk.Data)
+		case "exec.exit":
+			t.Fatal("inherited output pipe must not produce a successful result")
+		case "error":
+			if !strings.Contains(output, "parent-exited") {
+				t.Fatalf("lost the parent's output: %q", output)
+			}
+			_ = client.Close()
+			cancel()
+			<-serverErr
+			return
 		}
 	}
 }

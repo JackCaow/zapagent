@@ -74,6 +74,9 @@ export interface ExecutionProcessBroker {
   /** Adapter readiness is checked under the execution deadline, before the
    * handler may launch anything. Failure never selects a different backend. */
   ensureReady?(): Promise<void>;
+  /** Host-only, backend-authored check that every launched process is sealed.
+   * Absence means the backend cannot satisfy a required process seal. */
+  verifyProcessSeal?(): Promise<void>;
   spawnCommand(
     executable: string,
     args: string[],
@@ -101,6 +104,8 @@ export interface OsSandbox {
 }
 
 export interface ExecutionBrokerRequest {
+  /** Host requirement, never supplied by model tool arguments. */
+  requireProcessSeal?: boolean;
   /** Host-minted stable approval identity; never read from model arguments. */
   serviceOperationNonce?: string;
   /** Host-only progress facts, so outer cancellation retains unknown effects. */
@@ -136,6 +141,9 @@ export interface ExecutionResourceBudget {
 }
 
 export interface ExecutionBroker {
+  /** Host configuration supports requesting per-execution seal verification.
+   * This is not itself a seal receipt for a command. */
+  supportsProcessSeal?(tool: { name: string; executionLocation?: "workspace" | "host" }): boolean;
   /** Explicit selected-backend service capability; never inferred from shell support. */
   serviceCapabilities?(workspace: WorkspaceIdentity): ServiceCapabilities | undefined;
   sandboxStatus(): SandboxStatus;

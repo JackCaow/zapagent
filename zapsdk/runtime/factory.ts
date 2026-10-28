@@ -26,6 +26,10 @@ import {
 
 export interface RuntimeWorkspaceOptions {
   root: string;
+  /** Host-controlled location and backend restriction for isolated children. */
+  tempRoot?: string;
+  forbidGit?: boolean;
+  capturePrivateGitFromRoot?: { ownerDirectory: string; sourceBinding: import("../workspace/types.js").PrivateGitBinding };
   onTrackEdit?: (paths: string[]) => Promise<void>;
   retention?: false | Partial<WorkspaceRetentionPolicy>;
   onRetention?: (report: WorkspaceRetentionReport) => void | Promise<void>;
@@ -80,6 +84,9 @@ export function createAgentRuntime(options: CreateAgentRuntimeOptions): AgentRun
   const runtimeOwner = stateTracker.ownerSnapshot();
   const workspaceManager = new WorkspaceManager({
     root: options.workspace.root,
+    tempRoot: options.workspace.tempRoot,
+    forbidGit: options.workspace.forbidGit,
+    capturePrivateGitFromRoot: options.workspace.capturePrivateGitFromRoot,
     owner: {
       threadId: options.threadId,
       instanceId: runtimeOwner.instanceId,

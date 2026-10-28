@@ -1,4 +1,4 @@
-import { isAbsolute, relative, resolve } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { ResourceClaim } from "../tools/effects.js";
 
 export type ToolRunStatus =
@@ -39,7 +39,7 @@ function fsPath(key: string): string | undefined {
 function pathsOverlap(left: string, right: string): boolean {
   const leftToRight = relative(left, right);
   const rightToLeft = relative(right, left);
-  const contains = (rel: string) => rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  const contains = (rel: string) => rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
   return contains(leftToRight) || contains(rightToLeft);
 }
 

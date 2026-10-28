@@ -39,7 +39,21 @@ do
 done
 for arch in arm64 amd64; do
     sh scripts/install-rootfs-packages.sh packaging/guest "$arch" --verify-only
+    sh scripts/install-linux-builder-packages.sh packaging/linux "$arch" --verify-only
+    sh scripts/install-image-converter-packages.sh packaging/linux "$arch" --verify-only
 done
+if ! grep -Fq 'sh /zapvm-install-builder-packages /zapvm-build-lock "$ZAPVM_BUILDER_ARCH"' scripts/build-linux-runtime.sh; then
+    echo "Linux runtime builder is missing exact builder package enforcement" >&2
+    exit 1
+fi
+if ! grep -Fq 'sh /zapvm-install-converter-packages /zapvm-converter-lock "$ZAPVM_CONVERTER_ARCH"' scripts/build-rootfs.sh; then
+    echo "disk image converter is missing exact package enforcement" >&2
+    exit 1
+fi
+if ! grep -Fq 'sh "$repo_dir/scripts/verify-linux-builder-metadata.sh" "$repo_dir/packaging/linux" "$build_dir"' scripts/build-linux-runtime.sh; then
+    echo "Linux runtime builder is missing locked metadata validation" >&2
+    exit 1
+fi
 
 for required_layer_update_contract in \
     'case "target-metadata"' \

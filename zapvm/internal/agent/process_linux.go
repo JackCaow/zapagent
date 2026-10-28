@@ -5,13 +5,45 @@ package agent
 import (
 	"errors"
 	"fmt"
+	"golang.org/x/sys/unix"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
+
+// This preflight advertises a supported backend, not a promise that a later
+// request will successfully acquire and empty its own cgroup.
+func processSealCapability(isolate bool) string {
+	if !isolate || os.Geteuid() != 0 {
+		return ""
+	}
+	launcher := os.Getenv("ZAPVM_LAUNCHER_PATH")
+	if launcher == "" {
+		launcher = "/usr/local/sbin/zapvm-launcher"
+	}
+	if info, err := os.Stat(launcher); err != nil || !info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
+		return ""
+	}
+	var stat unix.Statfs_t
+	if unix.Statfs(cgroupRoot, &stat) != nil || uint64(stat.Type) != uint64(unix.CGROUP2_SUPER_MAGIC) {
+		return ""
+	}
+	if _, err := os.ReadFile(filepath.Join(cgroupRoot, "cgroup.controllers")); err != nil {
+		return ""
+	}
+	fd, err := os.OpenFile(filepath.Join(cgroupRoot, "cgroup.subtree_control"), os.O_WRONLY, 0)
+	if err != nil {
+		return ""
+	}
+	if fd.Close() != nil {
+		return ""
+	}
+	return "cgroup-v2"
+}
 
 const (
 	cgroupRoot       = "/sys/fs/cgroup"
@@ -176,11 +208,17 @@ func (i *linuxIsolation) AfterStart() error {
 }
 
 func (i *linuxIsolation) Kill() error {
-	err := os.WriteFile(filepath.Join(i.path, "cgroup.kill"), []byte("1"), 0o644)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
+	return os.WriteFile(filepath.Join(i.path, "cgroup.kill"), []byte("1"), 0o644)
+}
+
+func (i *linuxIsolation) Seal() (*ProcessSeal, error) {
+	if err := i.Kill(); err != nil {
+		return nil, fmt.Errorf("kill workload cgroup: %w", err)
 	}
-	return err
+	if err := waitCgroupEmpty(filepath.Join(i.path, "cgroup.events"), 5*time.Second); err != nil {
+		return nil, fmt.Errorf("verify workload cgroup empty: %w", err)
+	}
+	return &ProcessSeal{Mechanism: "cgroup-v2", State: "empty"}, nil
 }
 
 func (i *linuxIsolation) Cleanup() error {

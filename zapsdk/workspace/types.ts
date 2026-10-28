@@ -1,5 +1,12 @@
 export type WorkspaceMode = "shared-readonly" | "isolated-git" | "isolated-copy";
 
+/** Host-recorded identity, never accepted from model tool arguments. */
+export interface PrivateGitBinding {
+  directory: string;
+  device: string;
+  inode: string;
+}
+
 export interface WorkspaceLease {
   workspaceId: string;
   runId: string;
@@ -8,6 +15,8 @@ export interface WorkspaceLease {
   repoPath?: string;
   baseOid?: string;
   batchPath?: string;
+  /** Host-created private metadata, excluded from delivered file artifacts. */
+  privateGit?: PrivateGitBinding;
 }
 
 export interface AgentArtifact {
@@ -26,6 +35,8 @@ export interface AgentArtifact {
     deletions: number;
     files: number;
   };
+  /** Private commit history is retained as evidence, never applied to the source repository. */
+  privateGitHistory?: { repository: string; treeHash: string };
 }
 
 export interface MergeResult {

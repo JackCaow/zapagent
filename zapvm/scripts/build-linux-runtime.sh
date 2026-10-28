@@ -73,12 +73,15 @@ else
 		-e VIRTIOFSD_VERSION="$VIRTIOFSD_VERSION" \
 		-e RUST_TARGET="$rust_target" \
 		-e SOURCE_DATE_EPOCH=1785860000 \
+		-e ZAPVM_BUILDER_ARCH="$target_arch" \
 		-e CARGO_HOME=/work/cargo-home \
 		-e CARGO_TARGET_DIR=/work/cargo-target \
+		-v "$repo_dir/packaging/linux:/zapvm-build-lock:ro" \
+		-v "$repo_dir/scripts/install-linux-builder-packages.sh:/zapvm-install-builder-packages:ro" \
 		-v "$build_dir:/work" \
 		"$rust_builder_image" \
 		sh -euxc '
-		apk add --no-cache ca-certificates curl file libcap-ng-static libseccomp-static musl-dev pkgconf
+		sh /zapvm-install-builder-packages /zapvm-build-lock "$ZAPVM_BUILDER_ARCH"
 		rm -rf /work/virtiofsd-source
         curl --fail --location --silent --show-error \
             --proto "=https" --tlsv1.2 \
@@ -103,6 +106,10 @@ else
     '
 fi
 
+# Provenance is part of the cache contract: a verified binary cannot be
+# paired with arbitrary or stale builder metadata. Apply the same checks to
+# fresh builds and cache restores before producing a provenance document.
+sh "$repo_dir/scripts/verify-linux-builder-metadata.sh" "$repo_dir/packaging/linux" "$build_dir"
 printf '%s  %s\n' "$virtiofsd_expected_sha256" "$virtiofsd_part" | shasum -a 256 -c -
 
 virtiofsd_sha256=$(shasum -a 256 "$virtiofsd_part" | awk '{print $1}')

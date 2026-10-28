@@ -39,6 +39,8 @@ export interface ExecuteCommandOptions {
   /** Whether sandboxed commands may open outbound network connections.
    * Defaults to false; network tools are the brokered egress path. */
   sandboxNetwork?: boolean;
+  /** Restrict shell cwd and declared paths to this tool's workspace root. */
+  workspaceOnly?: boolean;
   /** Expose destination declarations for a restricted execution backend. */
   restrictedNetwork?: boolean;
   /** Offer the per-call `dangerouslyDisableSandbox` retry. Defaults to true;
@@ -204,6 +206,15 @@ export function executeCommandTool(options: ExecuteCommandOptions = {}): Tool {
     if (args.check_steps && (args.run_in_background === true
       || (args.command !== undefined && args.command !== shellCommandDisplay({ check_steps: args.check_steps })))) {
       ctx.addIssue({ code: "custom", message: "check_steps requires foreground execution and command matching the complete parenthesized step list when provided" });
+    }
+    if (options.workspaceOnly) {
+      const workspace = resolveToolPathCanonical(options.defaultCwd ?? process.cwd(), options.defaultCwd ?? process.cwd());
+      const cwd = resolveToolPathCanonical(args.cwd ?? workspace, workspace);
+      const paths = [cwd, ...(args.read_paths ?? []).map(path => resolveToolPathCanonical(path, cwd)),
+        ...(args.write_paths ?? []).map(path => resolveToolPathCanonical(path, cwd))];
+      if (paths.some(path => !pathIsInsideRoot(path, workspace))) {
+        ctx.addIssue({ code: "custom", message: "Goal shell paths must remain inside its workspace" });
+      }
     }
   }).overwrite(args => ({ ...args, command: args.command ?? shellCommandDisplay(args) }));
   // Keep an object schema for embedders. Parsing supplies the canonical command

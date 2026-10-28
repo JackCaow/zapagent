@@ -68,6 +68,8 @@ export interface LLMCallOptions {
   onRequestEvent?: (event: ProviderRequestEvent) => void;
   /** RetryProvider supplies this metadata to each adapter attempt. */
   requestAttempt?: { attempt: number; maxAttempts: number };
+  /** Host-local logical request identity, shared by retry attempts. */
+  requestId?: string;
 }
 
 export interface LLMProvider {
