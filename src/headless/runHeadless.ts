@@ -2,6 +2,8 @@ import { connectLocalServiceOwner } from "../../zapsdk/services/local-owner.js"
 import { createExecutionEnvironment, resolveExecutionBackend } from "../execution-environment.js"
 import { executionExitCode, OutcomeProtocolError, type AgentOutcomeV1 } from "../../zapsdk/runtime/outcome.js"
 import type { CompletionEvidenceProvider } from "../../zapsdk/harness/completion.js"
+import type { LLMProvider } from "../../zapsdk/core/llm.js"
+import { requireProcessSealing } from "../../zapsdk/execution/required-process-seal.js"
 // Headless run loop. Loads config, builds an AgentRuntime (sharing the TUI's
 // provider/registry/executor factory), wires the formatter to AgentEvent
 // streams, and exits with a stop-reason-derived code.
@@ -15,6 +17,8 @@ import type { CompletionEvidenceProvider } from "../../zapsdk/harness/completion
 //   - no auto-compact reactive pause (we let it run silently)
 
 import process from "node:process"
+import { realpathSync } from "node:fs"
+import type { PrivateGitBinding } from "../../zapsdk/workspace/types.js"
 import { join } from "node:path"
 import { createBoundedRepairSession, type BoundedRepairResult } from "../../zapsdk/runtime/bounded-repair.js"
 import type { CreateAgentRuntimeOptions } from "../../zapsdk/runtime/factory.js"
@@ -273,9 +277,30 @@ export interface HeadlessHost {
   onSealing?: () => void
   sealingTimeoutMs?: number
   getPermissionMode?: () => HeadlessArgs["permissionMode"]
+  /** Host workflows must not mistake a denied operation for successful work. */
+  onPermissionDenied?: (toolName: string, reason: string) => void
   images?: ImageContent[]
   strictResume?: boolean
   prepareRegistry?: (registry: ToolRegistry) => Promise<void>
+  /** Trusted Host instrumentation, applied inside RetryProvider. */
+  providerAdapter?: (provider: LLMProvider) => LLMProvider
+  admitToolExecution?: (toolName: string) => void
+  /** Host-controlled admission may require prohibiting unmetered child agents. */
+  disableSubagent?: boolean
+  /** Host-owned isolation root for workflows requiring fenced child workspaces. */
+  subagentIsolationRoot?: string
+  /** Enforce the workspace boundary even in permissive approval modes. */
+  isolateWorkspace?: boolean
+  privateGit?: PrivateGitBinding
+  privateGitOwnerDirectory?: string
+  serializeSubagent?: boolean
+  prepareSubagentWorkspace?: (cwd: string, signal?: AbortSignal) => Promise<void>
+  validateSubagentWorkspace?: (cwd: string, signal?: AbortSignal) => Promise<void>
+  /** Require an OS sandbox with no network grant and workspace-only shell paths. */
+  disableShellNetwork?: boolean
+  requireProcessSeal?: boolean
+  onProcessSealUnconfirmed?: () => void
+  disableRepoMap?: boolean
 }
 
 export async function runHeadless(args: HeadlessArgs, host: HeadlessHost = {}): Promise<number> {
@@ -404,6 +429,7 @@ export async function runHeadless(args: HeadlessArgs, host: HeadlessHost = {}): 
     disallowedTools: args.disallowedTools,
     onDeny: (tool, reason) => {
       formatter.progress(`✗ denied ${getToolAlias(tool)}: ${reason}`)
+      host.onPermissionDenied?.(tool, reason)
     },
     onDecision: (tool, decision, reason) => {
       if (args.outputFormat === "stream-json" && !host.formatter) {
@@ -456,6 +482,17 @@ export async function runHeadless(args: HeadlessArgs, host: HeadlessHost = {}): 
       executionEnvironment = createExecutionEnvironment(cwd, "required", "local", false, config.sandboxNetwork, config.sandboxExcludedCommands, owner)
     } catch { process.stderr.write("Invalid, unavailable or incompatible Host service owner.\n"); return EXIT_BAD_ARGS }
   }
+  if (host.disableShellNetwork) {
+    if (args.serviceOwner || args.dangerouslyDisableOsSandbox || process.env.ZAPCODE_RESIDENT_AGENT === "1") {
+      throw new Error("Goal offline shell requires the local OS sandbox")
+    }
+    executionEnvironment = createExecutionEnvironment(cwd, "required", resolveExecutionBackend(config.executionBackend), false, config.sandboxNetwork, [])
+    executionEnvironment.commandOptions.sandboxNetwork = false
+    executionEnvironment.commandOptions.restrictedNetwork = false
+    executionEnvironment.commandOptions.workspaceOnly = true
+    executionEnvironment.commandOptions.disableBackgroundTasks = true
+    if (host.requireProcessSeal) executionEnvironment.broker = requireProcessSealing(executionEnvironment.broker, host.onProcessSealUnconfirmed)
+  }
   const { provider: llmProvider, registry, executor: baseExecutor, createRegistryForCwd, executionFacts, executionCapacity, sandboxConfined } = buildAgentObjects(
     config,
     approval.onApproval,
@@ -470,6 +507,8 @@ export async function runHeadless(args: HeadlessArgs, host: HeadlessHost = {}): 
       formatter.onEvent(event)
       host.onEvent?.(event)
     },
+    /* askUserCallbacks */ undefined,
+    /* providerAdapter */ host.providerAdapter,
   )
   const deniedTools = new Set(args.disallowedTools ?? [])
   const scopedExecutor = deniedTools.size ? baseExecutor.withRuntimePolicy({
@@ -477,7 +516,9 @@ export async function runHeadless(args: HeadlessArgs, host: HeadlessHost = {}): 
       ? approval.onApproval(request.call.name, request.call.arguments).then(() => ({ decision: "deny" as const, reason: "disallowed by --disallowed-tools" }))
       : baseExecutor.policyEngine.evaluate(request),
   }, baseExecutor.checkpointMode) : baseExecutor
-  const executor = resultGuard ? scopedExecutor.withResultGuard(resultGuard) : scopedExecutor
+  const guardedExecutor = resultGuard ? scopedExecutor.withResultGuard(resultGuard) : scopedExecutor
+  const isolatedExecutor = host.isolateWorkspace ? guardedExecutor.withWorkspace({ root: realpathSync(cwd), mode: "isolated-write", sandbox: sandboxConfined ? "enforced" : "none", ...(host.privateGit ? { privateGitDirectory: host.privateGit.directory, privateGitIdentity: { device: host.privateGit.device, inode: host.privateGit.inode } } : {}) }) : guardedExecutor
+  const executor = host.admitToolExecution ? isolatedExecutor.withExecutionAdmission(host.admitToolExecution) : isolatedExecutor
   approval.setSandboxConfined(sandboxConfined, config.autoAllowSandboxedCommands !== false)
   approval.setSandboxExcludedCommands(config.allowUnsandboxedCommands !== false ? config.sandboxExcludedCommands : undefined)
   await host.prepareRegistry?.(registry)
@@ -530,7 +571,7 @@ export async function runHeadless(args: HeadlessArgs, host: HeadlessHost = {}): 
     contextWindow: ctxWin,
     diagnosticsLogger: appLogger,
   })
-  await buildRepoMapAttachment(cwd, args.prompt, ctxWin).then((repoMap) => {
+  if (!host.disableRepoMap) await buildRepoMapAttachment(cwd, args.prompt, ctxWin).then((repoMap) => {
     attachments.repoMapAttachment = repoMap.text
     attachments.repoMapIncluded = repoMap.selectedFiles
     attachments.repoMapRevision = repoMap.revision
@@ -581,6 +622,8 @@ export async function runHeadless(args: HeadlessArgs, host: HeadlessHost = {}): 
     },
     workspace: {
       root: cwd,
+      ...(host.subagentIsolationRoot ? { tempRoot: host.subagentIsolationRoot, forbidGit: true, retention: false as const } : {}),
+      ...(host.privateGit && host.privateGitOwnerDirectory ? { capturePrivateGitFromRoot: { ownerDirectory: host.privateGitOwnerDirectory, sourceBinding: host.privateGit } } : {}),
       onTrackEdit: (paths) => checkpoint.trackEdits(paths),
     },
     loopAgent: {
@@ -606,14 +649,23 @@ export async function runHeadless(args: HeadlessArgs, host: HeadlessHost = {}): 
       storageSessionId: getCurrentSessionId(),
       storageProjectCwd: cwd,
       sessionId: getCurrentSessionId(),
-      subagentFactory: publicChecks ? undefined : subagentTool,
+      subagentFactory: publicChecks || host.disableSubagent ? undefined : host.serializeSubagent ? options => {
+        const tool = subagentTool(options)
+        const resolveEffects = tool.definition.resolveEffects
+        return { ...tool, definition: { ...tool.definition, resolveEffects: (args, context) => {
+          const effects = resolveEffects!(args, context)
+          return { ...effects, workspace: { mode: "root-integration" as const } }
+        } } }
+      } : subagentTool,
     },
-    subagent: publicChecks ? false : {
+    subagent: publicChecks || host.disableSubagent ? false : {
       inheritedInstructions: [args.systemPromptPrepend, config.customSystemPrompt, args.systemPromptAppend]
         .filter(text => text?.trim()).join("\n\n"),
       onEvent: (event) => { formatter.onEvent(event); host.onEvent?.(event) },
       createRegistryForCwd,
       requireWriteIsolation: true,
+      prepareWorkspace: host.prepareSubagentWorkspace,
+      validateWorkspace: host.validateSubagentWorkspace,
     },
     onRunEnd: async () => {
       observeLifecycle("checkpoint_started")

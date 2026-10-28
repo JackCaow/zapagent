@@ -17,6 +17,7 @@ import { resolveActiveContextLimits } from "../context-budget.js"
 import type { CheckpointManager } from "../../zapsdk/checkpoint/index.js"
 import { conversation, autoMemory } from "../singletons.js"
 import { dispatchMCPCommand } from "./mcp.js"
+import { goalCommand } from "../goal-command.js"
 import {
   getCurrentSessionId,
   lastOutputPath,
@@ -606,6 +607,15 @@ export function dispatchSlashCommand(
 
     case "init_project": {
       return dispatchAgentTurn("Analyze this project and write AGENTS.md.", INIT_PROJECT_PROMPT)
+    }
+
+    case "goal": {
+      const raw = cmd.value?.trim() ?? ""
+      const parts = raw ? raw.split(/\s+/) : []
+      if (parts.length && !["status", "watch", "list", "pause", "resume", "cancel", "budget", "help"].includes(parts[0]!) && !precheckProvider(deps)) return true
+      try { deps.addLog("system", goalCommand(parts, process.cwd(), deps.configRef.current.permissionMode)) }
+      catch (error) { deps.addLog("error", error instanceof Error ? error.message : String(error)) }
+      return true
     }
 
     case "supertask": {

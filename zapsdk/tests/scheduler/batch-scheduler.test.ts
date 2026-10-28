@@ -11,6 +11,7 @@ describe("resourceClaimsConflict", () => {
 
   it("detects parent/child filesystem conflicts", () => {
     expect(resourceClaimsConflict(shared("fs:/repo/src"), exclusive("fs:/repo/src/a.ts"))).toBe(true);
+    expect(resourceClaimsConflict(shared("fs:/repo"), exclusive("fs:/repo/..hidden/a.ts"))).toBe(true);
   });
 
   it("makes unknown effects globally exclusive", () => {

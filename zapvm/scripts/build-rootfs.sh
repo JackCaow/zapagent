@@ -162,10 +162,13 @@ ZAPVM_ARCH_OUTPUT_DIR="$output_dir" "$repo_dir/scripts/build-linux-runtime.sh" "
 docker run --rm --privileged \
     --platform "linux/$docker_arch" \
 	-e "ZAPVM_IMAGE_PROFILE=$image_profile" \
+	-e "ZAPVM_CONVERTER_ARCH=$target_arch" \
+	-v "$repo_dir/packaging/linux:/zapvm-converter-lock:ro" \
+	-v "$repo_dir/scripts/install-image-converter-packages.sh:/zapvm-install-converter-packages:ro" \
 	-v "$output_dir:/output" \
-    alpine:3.23.5 \
+    "$ALPINE_BASE_IMAGE" \
     sh -euxc '
-        apk add --no-cache e2fsprogs-extra qemu-img
+        sh /zapvm-install-converter-packages /zapvm-converter-lock "$ZAPVM_CONVERTER_ARCH"
         rm -rf /tmp/rootfs
         mkdir -p /tmp/rootfs
         tar -xf /output/rootfs.tar -C /tmp/rootfs

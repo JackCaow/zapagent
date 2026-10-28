@@ -22,6 +22,7 @@ export interface CommandResult {
     | "init_project"
     | "review"
     | "commit"
+    | "goal"
     | "supertask"
     | "supertask_resume"
     | "supertask_abort"
@@ -93,6 +94,7 @@ export function parseCommand(input: string): CommandResult | null {
           "  /review [path]   — Review code for bugs & security",
           "  /commit          — Stage changes and create a commit",
           "  /init            — Analyze project and generate AGENTS.md",
+          "  /goal <objective> — Start a Goal; /goal help for controls",
           "  /supertask <desc> [--max-turns N] [--max-iter N]",
           "                          — Long-horizon orchestrated task (defaults: 80 turns, 30 iters)",
           "  /supertask resume       — Continue the most recent unfinished supertask",
@@ -220,6 +222,8 @@ export function parseCommand(input: string): CommandResult | null {
 
     case "init":
       return { type: "init_project" }
+
+    case "goal": return { type: "goal", value: rest.trim() }
 
     case "supertask": {
       const trimmed = rest.trim()

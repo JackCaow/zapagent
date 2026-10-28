@@ -52,6 +52,8 @@ type Server struct {
 	degraded       atomic.Bool
 	semaphore      chan struct{}
 	protectedMu    sync.Mutex
+	// Test hook for exercising seal failures at the protocol boundary.
+	sealWorkload func(processIsolation) (*ProcessSeal, error)
 
 	mu      sync.Mutex
 	running map[string]*runningCommand
@@ -189,12 +191,17 @@ func (s *Server) Serve(ctx context.Context, connection io.ReadWriteCloser) error
 				s.writeError(codec, envelope, "agent is degraded")
 				continue
 			}
+			sealCapability := ""
+			if s.runUID != 0 && s.runGID != 0 {
+				sealCapability = processSealCapability(s.isolate)
+			}
 			s.write(codec, envelope, "health.ok", Health{
 				ProtocolVersion: protocol.Version,
 				InstanceID:      s.instanceID,
 				StateSchema:     s.stateSchema,
 				ActiveCommands:  s.activeCommands(),
 				UptimeMillis:    time.Since(s.startedAt).Milliseconds(),
+				ProcessSeal:     sealCapability,
 			})
 		case "agent.restart":
 			if s.activeCommands() != 0 {
@@ -294,7 +301,9 @@ func (s *Server) handleExec(parent context.Context, codec *protocol.Codec, envel
 	cleanupIsolation := true
 	defer func() {
 		if cleanupIsolation {
-			_ = isolation.Cleanup()
+			if err := isolation.Cleanup(); err != nil {
+				s.degraded.Store(true)
+			}
 		}
 	}()
 	// Use non-file writers so os/exec owns the copy goroutines and Wait does not
@@ -303,6 +312,11 @@ func (s *Server) handleExec(parent context.Context, codec *protocol.Codec, envel
 	// its final buffered bytes.
 	cmd.Stdout = &execOutputWriter{server: s, codec: codec, request: envelope, messageType: "exec.stdout"}
 	cmd.Stderr = &execOutputWriter{server: s, codec: codec, request: envelope, messageType: "exec.stderr"}
+	// A descendant may inherit the pipes even after the command leader exits.
+	// Do not wait forever for that descendant before killing its cgroup. If the
+	// drain deadline fires, Wait reports an error rather than claiming output is
+	// complete. The cgroup is still sealed before that error is returned.
+	cmd.WaitDelay = 2 * time.Second
 
 	s.mu.Lock()
 	if _, exists := s.running[envelope.ID]; exists {
@@ -318,8 +332,13 @@ func (s *Server) handleExec(parent context.Context, codec *protocol.Codec, envel
 	if err := isolation.AfterStart(); err != nil {
 		s.mu.Unlock()
 		_ = killProcessTree(cmd)
-		_ = isolation.Kill()
+		killErr := isolation.Kill()
 		_ = cmd.Wait()
+		cleanupErr := isolation.Cleanup()
+		cleanupIsolation = false
+		if killErr != nil || cleanupErr != nil {
+			s.degraded.Store(true)
+		}
 		s.writeError(codec, envelope, err.Error())
 		return
 	}
@@ -338,14 +357,23 @@ func (s *Server) handleExec(parent context.Context, codec *protocol.Codec, envel
 	}()
 	waitErr := cmd.Wait()
 	close(killed)
-	_ = isolation.Kill()
+	sealWorkload := isolation.Seal
+	if s.sealWorkload != nil {
+		sealWorkload = func() (*ProcessSeal, error) { return s.sealWorkload(isolation) }
+	}
+	seal, sealErr := sealWorkload()
 	_ = killProcessTree(cmd)
-	_ = isolation.Cleanup()
+	cleanupErr := isolation.Cleanup()
 	cleanupIsolation = false
 
 	s.mu.Lock()
 	delete(s.running, envelope.ID)
 	s.mu.Unlock()
+	if sealErr != nil || cleanupErr != nil || (s.isolate && seal == nil) {
+		s.degraded.Store(true)
+		s.writeError(codec, envelope, "process isolation seal failed")
+		return
+	}
 	if err := credentialLease.Cleanup(); err != nil {
 		credentialCleaned = true
 		s.degraded.Store(true)
@@ -363,7 +391,7 @@ func (s *Server) handleExec(parent context.Context, codec *protocol.Codec, envel
 			return
 		}
 	}
-	s.write(codec, envelope, "exec.exit", ExecExit{Code: exitCode})
+	s.write(codec, envelope, "exec.exit", ExecExit{Code: exitCode, Seal: seal})
 }
 
 func (s *Server) handleSignal(codec *protocol.Codec, envelope protocol.Envelope) {

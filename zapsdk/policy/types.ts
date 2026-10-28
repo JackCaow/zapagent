@@ -24,6 +24,10 @@ export interface WorkspaceIdentity {
   /** Host-owned standalone Git directory of a writing Agent's private clone.
    * Never derived from tool arguments, repository files or linked worktrees. */
   privateGitDirectory?: string;
+  /** Optional Host-recorded identity of the privately created Git directory. */
+  privateGitIdentity?: { device: string; inode: string };
+  /** Extra relative paths selected by the Host, never by tool arguments. */
+  protectedWorkspacePaths?: readonly string[];
 }
 
 export interface CapabilityGrant {

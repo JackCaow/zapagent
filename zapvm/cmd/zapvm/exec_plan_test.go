@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -15,7 +16,9 @@ import (
 
 	"zapvm/internal/agent"
 	"zapvm/internal/credential"
+	"zapvm/internal/daemonrpc"
 	"zapvm/internal/platform"
+	"zapvm/internal/protocol"
 )
 
 func TestLoadExecPlanStrictValidation(t *testing.T) {
@@ -67,6 +70,91 @@ func TestWriteResultPreservesGuestExitCode(t *testing.T) {
 	}
 	if event.OK == nil || *event.OK || event.ExitCode == nil || *event.ExitCode != 23 {
 		t.Fatalf("Guest exit code was not preserved: %+v", event)
+	}
+}
+
+func TestRequiredProcessSealRejectsUnisolatedGuestBeforeExecution(t *testing.T) {
+	secret := bytes.Repeat([]byte{0x5a}, 32)
+	dir := t.TempDir()
+	server, err := agent.NewServer(dir, secret, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	marker := filepath.Join(dir, "must-not-exist")
+	plan := execPlan{SchemaVersion: 1, Commands: []execPlanCommand{{
+		ID: "one", SessionID: "session-a", Argv: []string{"/bin/sh", "-c", "touch " + marker}, RequireProcessSeal: true,
+	}}}
+	var output bytes.Buffer
+	err = runExecPlanTo(ctx, execPlanTestDialer{ctx: ctx, server: server}, secret, plan, platform.NetworkOff, time.Minute, nil, &output)
+	if err == nil || !strings.Contains(err.Error(), "required process sealing") {
+		t.Fatalf("expected preflight denial, got %v", err)
+	}
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unisolated guest executed command: %v", err)
+	}
+}
+
+func TestSealReceiptSurvivesResultSerialization(t *testing.T) {
+	var output bytes.Buffer
+	runner := execCommandRunner{sink: &execPlanEventSink{encoder: json.NewEncoder(&output)}}
+	seal := &daemonrpc.ProcessSeal{Mechanism: "cgroup-v2", State: "empty"}
+	if err := runner.writeResultWithSeal("command-1", nil, seal); err != nil {
+		t.Fatal(err)
+	}
+	var event execPlanEvent
+	if err := json.Unmarshal(output.Bytes(), &event); err != nil {
+		t.Fatal(err)
+	}
+	converted := daemonEvent(event)
+	if converted.Seal == nil || *converted.Seal != *seal {
+		t.Fatalf("seal lost in daemon event: %+v", converted)
+	}
+	path := filepath.Join(t.TempDir(), "result.json")
+	if err := writeDaemonExecResult(path, converted, "command-1", "session-1"); err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		RequestID string                 `json:"request_id"`
+		SessionID string                 `json:"session_id"`
+		Seal      *daemonrpc.ProcessSeal `json:"seal"`
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.RequestID != "command-1" || result.SessionID != "session-1" || result.Seal == nil || *result.Seal != *seal {
+		t.Fatalf("result file lost identity or seal: %+v", result)
+	}
+}
+
+func TestGuestSealRejectsMismatchedCommandIdentity(t *testing.T) {
+	client, guest := net.Pipe()
+	defer client.Close()
+	defer guest.Close()
+	go func() {
+		codec := protocol.NewCodec(guest, guest)
+		request, err := codec.Read()
+		if err != nil {
+			return
+		}
+		response, err := protocol.NewEnvelope("other-command", request.SessionID, "exec.exit", agent.ExecExit{
+			Code: 0, Seal: &agent.ProcessSeal{Mechanism: "cgroup-v2", State: "empty"},
+		})
+		if err == nil {
+			_ = codec.Write(response)
+		}
+	}()
+	called := false
+	err := executeGuestTo(protocol.NewCodec(client, client), "expected-command", []string{"true"}, ".", platform.NetworkOff,
+		"expected-session", time.Second, nil, nil, nil, io.Discard, io.Discard, nil,
+		func(agent.ExecExit) error { called = true; return nil })
+	if err == nil || !strings.Contains(err.Error(), "identity mismatch") || called {
+		t.Fatalf("mismatched seal was accepted: called=%v error=%v", called, err)
 	}
 }
 
@@ -177,5 +265,20 @@ func TestRunExecPlanResolvesOnlyRequestedCredentials(t *testing.T) {
 	unknown.Commands[0].CredentialIDs = []string{"missing"}
 	if err := validatePlanCredentialBindings(unknown, broker); err == nil {
 		t.Fatal("unknown credential ID passed plan preflight")
+	}
+}
+
+func TestDaemonSealReceiptRequiresMatchingCommand(t *testing.T) {
+	code := 0
+	event := &daemonrpc.Event{CommandID: "request-a", ExitCode: &code, Seal: &daemonrpc.ProcessSeal{Mechanism: "cgroup-v2", State: "empty"}}
+	if err := validateDaemonSealReceipt(event, "request-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateDaemonSealReceipt(event, "request-b"); err == nil {
+		t.Fatal("accepted receipt for another command")
+	}
+	event.Seal = nil
+	if err := validateDaemonSealReceipt(event, "request-a"); err == nil {
+		t.Fatal("accepted missing seal")
 	}
 }

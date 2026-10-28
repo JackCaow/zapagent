@@ -22,7 +22,7 @@ export interface ExecutionEnvironment {
   capacity?: ExecutionCapacityFacts
   // No prompt, model, retry, budget or completion policy is accepted here.
   commandOptions: Pick<ExecuteCommandOptions,
-    "disableBackgroundTasks" | "restrictedNetwork" | "preserveEnvironment" | "allowUnsandboxed" | "sandboxNetwork" | "sandboxExcludedCommands" | "sandboxGitIntegration">
+    "disableBackgroundTasks" | "restrictedNetwork" | "preserveEnvironment" | "allowUnsandboxed" | "sandboxNetwork" | "sandboxExcludedCommands" | "sandboxGitIntegration" | "workspaceOnly">
 }
 
 export type ExecutionBackend = "local" | "vm"

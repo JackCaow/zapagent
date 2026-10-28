@@ -5,8 +5,35 @@ import { ToolRegistry } from "../../tools/registry.js";
 import { ToolExecutor } from "../../tools/executor.js";
 import type { LLMProvider } from "../../core/llm.js";
 import type { LLMChunk } from "../../core/types.js";
+import { GoalWorkspaceGate } from "../../execution/goal-workspace-gate.js";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 describe("LoopAgent progress observations", () => {
+  it("does not resolve filesystem effects outside a workspace fence after execution", async () => {
+    const root = mkdtempSync(join(tmpdir(), "goal-progress-gate-"));
+    try {
+      let turns = 0, handlerRan = false, lateResolutions = 0;
+      const provider: LLMProvider = { async call() { throw new Error("unexpected call"); },
+        async *stream(): AsyncIterable<LLMChunk> {
+          if (++turns === 1) {
+            yield { type: "tool_call_start", toolCallId: "read-1", toolName: "probe" };
+            yield { type: "tool_call_delta", toolCallId: "read-1", partialJson: "{}" };
+          } else yield { type: "text_delta", text: "done" };
+          yield { type: "done", usage: { inputTokens: 1, outputTokens: 1 } };
+        } };
+      const registry = new ToolRegistry();
+      registry.register({ definition: { name: "probe", description: "probe", parameters: z.object({}),
+        resolveEffects() { if (handlerRan) lateResolutions++; return { filesystem: [{ kind: "filesystem", operation: "read", paths: [root] }],
+          network: [], process: [], external: [], workspace: { mode: "shared-readonly" }, confidence: "declared" }; } },
+        async handler() { handlerRan = true; return { success: true, output: "observed" }; } });
+      const executor = new ToolExecutor(registry, { cwd: root, workspace: { root }, workspaceGate: new GoalWorkspaceGate() });
+      const result = await new LoopAgent({ provider, registry, executor, maxSteps: 5 }).run("inspect");
+      expect(result.toolResults).toHaveLength(1);
+      expect(lateResolutions).toBe(0);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
   for (const mode of ["native", "xml"] as const) {
     it(`reports completed ${mode} model and tool time in the next request, resetting between runs`, async () => {
       let now = 0;

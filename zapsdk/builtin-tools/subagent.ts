@@ -81,6 +81,9 @@ export interface SubagentToolOptions {
   createRegistryForCwd?: (cwd: string) => ToolRegistry;
   /** When true, a general Agent is blocked instead of sharing the root cwd. */
   requireWriteIsolation?: boolean;
+  /** Trusted Host preparation of a freshly acquired child lease. */
+  prepareWorkspace?: (cwd: string, signal?: AbortSignal) => Promise<void>;
+  validateWorkspace?: (cwd: string, signal?: AbortSignal) => Promise<void>;
   /** Runtime-owned scheduler. When present this Tool is only a submission
    * adapter; it never constructs an independently owned Agent lifecycle. */
   coordinator?: AgentCoordinator;
@@ -647,6 +650,7 @@ function createDirectSubagentTool(options: SubagentToolOptions): Tool {
         if (options.workspaceManager && options.createRegistryForCwd) {
           try {
             workspaceLease = await options.workspaceManager.acquire(subagentId, true);
+            await options.prepareWorkspace?.(workspaceLease.path, signal);
           } catch (err) {
             const error = `Writing Agent workspace setup failed: ${err instanceof Error ? err.message : String(err)}`;
             emitRunState("blocked", {
@@ -786,9 +790,11 @@ function createDirectSubagentTool(options: SubagentToolOptions): Tool {
           cwd: workspaceLease?.path ?? options.storageProjectCwd,
           workspace: workspaceLease
             ? { id: workspaceLease.workspaceId, root: workspaceLease.path, mode: "isolated-write",
-              ...(workspaceLease.mode === "isolated-git" && workspaceLease.repoPath
-                ? { privateGitDirectory: join(workspaceLease.repoPath, ".git") } : {}) }
-            : undefined,
+              ...(workspaceLease.privateGit ? { privateGitDirectory: workspaceLease.privateGit.directory,
+                privateGitIdentity: { device: workspaceLease.privateGit.device, inode: workspaceLease.privateGit.inode } }
+                : workspaceLease.mode === "isolated-git" && workspaceLease.repoPath
+                  ? { privateGitDirectory: join(workspaceLease.repoPath, ".git") } : {}) }
+            : options.executorOptions?.workspace,
           // Child writes need their own coverage. Never reuse root-path
           // checkpoints or bypass the destructive-write gate in a worktree.
           onTrackEdit: isolatedCheckpoint
@@ -869,6 +875,7 @@ function createDirectSubagentTool(options: SubagentToolOptions): Tool {
         const hadOutput = options.getResultSchema?.() === "outcome-v1" || !!result.text || result.toolResults.some((r) => r.success);
         let artifact: import("../workspace/types.js").AgentArtifact | null = null;
         if (workspaceLease && hadOutput && !signal?.aborted && options.workspaceManager) {
+          await options.validateWorkspace?.(workspaceLease.path, signal);
           emitRunState("validating", {
             statusDetail: "freezing workspace artifact",
             workspaceId: workspaceLease.workspaceId,

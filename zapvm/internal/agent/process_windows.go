@@ -9,6 +9,8 @@ import (
 	"strings"
 )
 
+func processSealCapability(_ bool) string { return "" }
+
 func prepareProcess(cmd *exec.Cmd, uid, gid uint32, isolate bool, stateRoot, sessionID, requestID, credentialSource, workspaceRoot string, protectedWorkspacePaths, deniedWorkspacePatterns []string) (processIsolation, error) {
 	return noopIsolation{}, nil
 }

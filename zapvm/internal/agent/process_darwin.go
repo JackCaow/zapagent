@@ -10,6 +10,8 @@ import (
 	"syscall"
 )
 
+func processSealCapability(_ bool) string { return "" }
+
 func prepareProcess(cmd *exec.Cmd, uid, gid uint32, isolate bool, stateRoot, sessionID, requestID, credentialSource, workspaceRoot string, protectedWorkspacePaths, deniedWorkspacePatterns []string) (processIsolation, error) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if uid != uint32(os.Geteuid()) || gid != uint32(os.Getegid()) {

@@ -3,6 +3,7 @@ import { z } from "zod"
 import { LoopAgent } from "../../agent/loop.js"
 import { ToolRegistry } from "../../tools/registry.js"
 import { ToolExecutor } from "../../tools/executor.js"
+import { GoalWorkspaceGate } from "../../execution/goal-workspace-gate.js"
 import { ConversationManager } from "../../memory/conversation.js"
 import { AgentBudget } from "../../agent/budget.js"
 import { subagentTool } from "../../builtin-tools/subagent.js"
@@ -259,8 +260,10 @@ describe("LoopAgent: agent tool re-binds budget per construction", () => {
   it("passes executor checkpoint and confirm policy through to the subagent factory", () => {
     const registry = new ToolRegistry()
     const onTrackEdit = async () => {}
+    const workspaceGate = new GoalWorkspaceGate()
     const executor = new ToolExecutor(registry, {
       onTrackEdit,
+      workspaceGate,
       allowConfirmWithoutApproval: true,
     })
     const conversation = new ConversationManager({ maxMessages: 10 })
@@ -289,6 +292,21 @@ describe("LoopAgent: agent tool re-binds budget per construction", () => {
 
     expect(capturedExecutorOptions).toHaveLength(1)
     expect(capturedExecutorOptions[0]?.onTrackEdit).toBe(onTrackEdit)
+    expect(capturedExecutorOptions[0]?.workspaceGate).toBe(workspaceGate)
     expect(capturedExecutorOptions[0]?.allowConfirmWithoutApproval).toBe(true)
+  })
+
+  it("passes Host tool admission to child executors", () => {
+    const registry = new ToolRegistry()
+    const admitExecution = (_name: string) => {}
+    const executor = new ToolExecutor(registry, { admitExecution })
+    let childAdmission: unknown
+    const factory = (opts: { executorOptions?: { admitExecution?: unknown } }): Tool => {
+      childAdmission = opts.executorOptions?.admitExecution
+      return { definition: { name: "agent", description: "stub", parameters: z.object({}), permission: "auto" },
+        handler: async () => ({ success: true, output: "" }) }
+    }
+    new LoopAgent({ provider: dummyProvider, registry, executor, subagent: {}, subagentFactory: factory as any })
+    expect(childAdmission).toBe(admitExecution)
   })
 })

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { z } from "zod";
@@ -11,6 +11,7 @@ import {
   normalizeZapVmShellCommand,
   parseZapVmCapabilities,
   parseZapVmDaemonStatus,
+  protectedPathsForVm,
   resolveZapVmGuestCwd,
   resolveZapVmNetworkPolicy,
   type ExecutionBroker,
@@ -23,6 +24,30 @@ describe("transparent zapVM execution", () => {
 
   afterEach(() => {
     for (const path of cleanup.splice(0)) rmSync(path, { recursive: true, force: true });
+  });
+
+  it("only unprotects an explicitly bound private Git directory in a writable isolated root", () => {
+    const root = realpathSync(fixtureRoot(cleanup));
+    mkdirSync(join(root, ".git"));
+    const base = { root, mode: "isolated-write" as const, privateGitDirectory: join(root, ".git") };
+    expect(protectedPathsForVm(base, false)).toEqual([".zapcode"]);
+    expect(protectedPathsForVm(base, true)).toEqual([".git", ".zapcode"]);
+    expect(protectedPathsForVm({ ...base, mode: "root" }, false)).toEqual([".git", ".zapcode"]);
+    const other = join(root, "other"); mkdirSync(other);
+    expect(() => protectedPathsForVm({ ...base, privateGitDirectory: join(other, ".git") }, false)).toThrow();
+    rmSync(join(root, ".git"), { recursive: true });
+    symlinkSync(other, join(root, ".git"));
+    expect(() => protectedPathsForVm(base, false)).toThrow();
+  });
+
+  it("only accepts bounded Host-authored guest-relative protected paths", () => {
+    const root = realpathSync(fixtureRoot(cleanup));
+    const base = { root, mode: "isolated-write" as const, protectedWorkspacePaths: ["package.json", "package-lock.json", ".zapcode"] };
+    expect(protectedPathsForVm(base, false)).toEqual([".zapcode", "package.json", "package-lock.json"]);
+    for (const path of ["/etc/passwd", "../outside", "a/../b", "a//b", "a\\b", "", "."]) {
+      expect(() => protectedPathsForVm({ ...base, protectedWorkspacePaths: [path] }, false)).toThrow("Invalid Host protected workspace path");
+    }
+    expect(() => protectedPathsForVm({ ...base, protectedWorkspacePaths: Array.from({ length: 16 }, (_, i) => `p${i}`) }, false)).toThrow("Too many");
   });
 
   it("discovers only a complete non-symlinked runtime installation", () => {

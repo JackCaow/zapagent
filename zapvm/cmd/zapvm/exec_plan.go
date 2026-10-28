@@ -42,19 +42,21 @@ type execPlanCommand struct {
 	ProtectedWorkspacePaths []string `json:"protected_workspace_paths,omitempty"`
 	DeniedWorkspacePatterns []string `json:"denied_workspace_patterns,omitempty"`
 	TimeoutMillis           uint64   `json:"timeout_ms,omitempty"`
+	RequireProcessSeal      bool     `json:"require_process_seal,omitempty"`
 }
 
 type execPlanEvent struct {
-	SchemaVersion int    `json:"schema_version"`
-	Timestamp     string `json:"timestamp"`
-	CommandID     string `json:"command_id,omitempty"`
-	Type          string `json:"type"`
-	Stream        string `json:"stream,omitempty"`
-	Data          []byte `json:"data,omitempty"`
-	PID           int    `json:"pid,omitempty"`
-	OK            *bool  `json:"ok,omitempty"`
-	ExitCode      *int   `json:"exit_code,omitempty"`
-	Error         string `json:"error,omitempty"`
+	SchemaVersion int                    `json:"schema_version"`
+	Timestamp     string                 `json:"timestamp"`
+	CommandID     string                 `json:"command_id,omitempty"`
+	Type          string                 `json:"type"`
+	Stream        string                 `json:"stream,omitempty"`
+	Data          []byte                 `json:"data,omitempty"`
+	PID           int                    `json:"pid,omitempty"`
+	OK            *bool                  `json:"ok,omitempty"`
+	ExitCode      *int                   `json:"exit_code,omitempty"`
+	Seal          *daemonrpc.ProcessSeal `json:"seal,omitempty"`
+	Error         string                 `json:"error,omitempty"`
 }
 
 type execPlanEventSink struct {
@@ -190,8 +192,12 @@ func (sink *execPlanEventSink) write(event execPlanEvent) error {
 }
 
 func (runner *execCommandRunner) writeResult(commandID string, commandErr error) error {
+	return runner.writeResultWithSeal(commandID, commandErr, nil)
+}
+
+func (runner *execCommandRunner) writeResultWithSeal(commandID string, commandErr error, seal *daemonrpc.ProcessSeal) error {
 	ok := commandErr == nil
-	event := execPlanEvent{SchemaVersion: 1, CommandID: commandID, Type: "result", OK: &ok}
+	event := execPlanEvent{SchemaVersion: 1, CommandID: commandID, Type: "result", OK: &ok, Seal: seal}
 	if commandErr == nil {
 		exitCode := 0
 		event.ExitCode = &exitCode
@@ -229,6 +235,7 @@ func (runner *execCommandRunner) runCredentialed(ctx context.Context, command ex
 	dialCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	connection, codec, err := connectAuthenticatedAgentWithRetry(dialCtx, runner.dialer, runner.secret)
 	cancel()
+	var seal *daemonrpc.ProcessSeal
 	if err == nil {
 		defer connection.Close()
 		cancelDone := make(chan struct{})
@@ -240,6 +247,13 @@ func (runner *execCommandRunner) runCredentialed(ctx context.Context, command ex
 			}
 		}()
 		defer close(cancelDone)
+		if command.RequireProcessSeal {
+			health, healthErr := checkAgentHealth(connection, codec, 0, 10*time.Second)
+			if healthErr != nil || health.ProcessSeal != "cgroup-v2" {
+				err = errors.New("guest does not provide required process sealing")
+				return errors.Join(err, runner.writeResult(command.ID, err))
+			}
+		}
 		timeout := runner.defaultTimeout
 		if command.TimeoutMillis != 0 {
 			timeout = time.Duration(command.TimeoutMillis) * time.Millisecond
@@ -248,12 +262,20 @@ func (runner *execCommandRunner) runCredentialed(ctx context.Context, command ex
 		stderr := &execPlanStreamWriter{sink: runner.sink, commandID: command.ID, stream: "stderr"}
 		err = executeGuestTo(codec, command.ID, command.Argv, command.Cwd, runner.networkMode, command.SessionID, timeout, credentials, command.ProtectedWorkspacePaths, command.DeniedWorkspacePatterns, stdout, stderr, func(started agent.ExecStarted) error {
 			return runner.sink.write(execPlanEvent{SchemaVersion: 1, CommandID: command.ID, Type: "started", PID: started.PID})
+		}, func(exit agent.ExecExit) error {
+			if exit.Seal != nil {
+				seal = &daemonrpc.ProcessSeal{Mechanism: exit.Seal.Mechanism, State: exit.Seal.State}
+			}
+			if command.RequireProcessSeal && (seal == nil || seal.Mechanism != "cgroup-v2" || seal.State != "empty") {
+				return errors.New("guest did not confirm process sealing")
+			}
+			return nil
 		})
 		if ctx.Err() != nil {
 			err = errors.Join(ctx.Err(), err)
 		}
 	}
-	if writeErr := runner.writeResult(command.ID, err); writeErr != nil {
+	if writeErr := runner.writeResultWithSeal(command.ID, err, seal); writeErr != nil {
 		return errors.Join(err, writeErr)
 	}
 	return err

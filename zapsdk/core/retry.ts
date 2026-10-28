@@ -1,4 +1,5 @@
 import type { LLMProvider, LLMCallOptions } from "./llm.js";
+import { randomUUID } from "node:crypto";
 import type { LLMResponse, LLMChunk, Message } from "./types.js";
 import type { ToolDefinition } from "../tools/types.js";
 import { hasMeaningfulOutput, notifyProviderRequest, ProviderRequestTimeoutError } from "./provider-request.js";
@@ -48,6 +49,7 @@ export class RetryProvider implements LLMProvider {
     options?: CallOptions
   ): Promise<LLMResponse> {
     let lastError: Error | undefined;
+    options = { ...options, requestId: options?.requestId ?? randomUUID() };
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       assertProviderRequestAllowed(options);
@@ -94,6 +96,7 @@ export class RetryProvider implements LLMProvider {
     // Partial reasoning can be abandoned only by an explicitly capable
     // consumer. Any text/tool/protocol output makes replay unsafe.
     let lastError: Error | undefined;
+    options = { ...options, requestId: options?.requestId ?? randomUUID() };
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       assertProviderRequestAllowed(options);
       let producedOutput = false;
