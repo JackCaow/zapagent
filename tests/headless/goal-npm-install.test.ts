@@ -67,6 +67,12 @@ it("prepares npm inputs for isolated worker and child before model access", asyn
       expect(wasStopped).toBe(false)
     }
     drift = "none"
+    // A budget denial after a sealed install has no live tools. Preserve the
+    // limit error while allowing the Host to release this proven-stopped phase.
+    ledger.create("model-limited", 1, { maxModelCalls: 0 })
+    let safelyStopped = false
+    await expect(runGoalPhase({ cwd, prompt: "Budget checkpoint", goalId: "model-limited", epoch: 1, role: "worker", ledgerPath, dependencyInstall: "npm", permissionMode: "bypassPermissions", onStopped() { safelyStopped = true } })).rejects.toThrow("GOAL_BUDGET_LIMITED")
+    expect(safelyStopped).toBe(true)
     // Pre-existing user data must never be replaced, even when it differs
     // from a newly sealed installation.
     await writeFile(join(cwd, "node_modules/fixture/index.js"), "user data\n")

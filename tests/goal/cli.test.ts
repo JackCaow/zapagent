@@ -5,6 +5,7 @@ import { join, resolve } from "node:path"
 import { execFileSync, spawn } from "node:child_process"
 import { createHash } from "node:crypto"
 import { createCustomProvider, getDefaultConfig } from "../../src/config.js"
+import { GoalBudgetLedger } from "../../zapsdk/goal/budget.js"
 import { GoalStore } from "../../zapsdk/goal/store.js"
 
 const cli = resolve("src/index.tsx")
@@ -42,7 +43,7 @@ for (const { git, machine, denied } of [{ git: false, machine: false, denied: fa
       } else if (userText.includes("You are an independent verifier")) { requests.push(userText.includes("goal passed") ? "verify-evidence" : "verify-missing"); value = { content: JSON.stringify({ status: "passed", detail: "The report contains the required text." }) } }
       else if (userText.includes("Inspect the frozen final Goal")) { requests.push("finalization"); value = { content: "A report and a test." } }
       else { requests.push("other"); value = { content: "Finished." } }
-      const chunk = (delta: object, reason: string | null) => `data: ${JSON.stringify({ id: "goal", object: "chat.completion.chunk", created: 1, model: "fixture", choices: [{ index: 0, delta, finish_reason: reason }], usage: { prompt_tokens: 10, completion_tokens: 5 } })}\n\n`
+      const chunk = (delta: object, reason: string | null) => `data: ${JSON.stringify({ id: "goal", object: "chat.completion.chunk", created: 1, model: "fixture", choices: [{ index: 0, delta, finish_reason: reason }], usage: { prompt_tokens: 500_000, completion_tokens: 5 } })}\n\n`
       return new Response(chunk(value, null) + chunk({}, finish) + "data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } })
     } })
     try {
@@ -58,6 +59,7 @@ for (const { git, machine, denied } of [{ git: false, machine: false, denied: fa
         return
       }
       expect(start.code).toBe(0)
+      expect(start.output).toContain("no default usage or time limit")
       const id = /goal_[a-f0-9-]+/.exec(start.output)?.[0]; expect(id).toBeDefined()
       const db = join(data, "goal", "goals.sqlite")
       let result: ReturnType<GoalStore["get"]>
@@ -66,6 +68,12 @@ for (const { git, machine, denied } of [{ git: false, machine: false, denied: fa
         const store = new GoalStore(db); result = store.get(id!); store.close()
         if (result && ["completed", "blocked", "awaiting_acceptance", "failed", "ready_for_delivery"].includes(result.status)) break
       }
+      const ledger = new GoalBudgetLedger(db)
+      const accounting = ledger.snapshot(id!)
+      ledger.close()
+      expect(accounting.limits).toEqual({ strict: git })
+      expect(result?.deadlineAt).toBeUndefined()
+      if (!denied && (!git || process.platform === "darwin")) expect(accounting.totals.tokensUsed).toBeGreaterThan(1_000_000)
       if (git && process.platform !== "darwin") {
         expect(result?.status).toBe("blocked")
         expect(result?.stopReason).toContain("requires macOS Seatbelt")
@@ -136,3 +144,59 @@ it("pauses a real Goal process, preserves budget and safely resumes its interrup
     expect(completed.ownerEpoch).toBeGreaterThan(1); expect(completed.tasks[0]?.attempt).toBe(2)
   } finally { model.stop(); await rm(root, { recursive: true, force: true }) }
 }, 30_000)
+
+it("keeps a real Goal repairing task and final failures until accepted, beyond the old token budget", async () => {
+  const root = await mkdtemp(join(tmpdir(), "zap-goal-unlimited-")), data = join(root, "data"), cwd = join(root, "project")
+  await mkdir(data); await mkdir(cwd)
+  let taskChecks = 0, finalChecks = 0, workerWrites = 0, correctionWrites = 0
+  const model = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(request) {
+    const body = await request.json() as { messages: Array<{ role: string; content: unknown }> }
+    const text = body.messages.filter(m => m.role === "user" && typeof m.content === "string").map(m => m.content).join("\n")
+    let value: object, finish = "stop"
+    if (text.includes("Plan the user's goal")) value = { content: JSON.stringify({ tasks: [{ id: "one", description: "Write report.txt", acceptance: "Required report", dependencies: [] }] }) }
+    else if (text.includes("Work on the user's goal")) {
+      if (body.messages.some(m => m.role === "tool")) value = { content: "Report written." }
+      else {
+        const correction = text.includes("Repair the integrated result")
+        if (correction) {
+          expect(text).toContain("Add the final marker")
+          correctionWrites++
+        } else workerWrites++
+        finish = "tool_calls"
+        value = { tool_calls: [{ index: 0, id: "write", type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: "report.txt", content: correction ? "goal passed\nfinal marker\n" : `goal passed\nrevision ${workerWrites}\n` }) } }] }
+      }
+    } else if (text.includes("You are an independent verifier")) {
+      const final = text.includes("Task: Produce the accepted report\n")
+      if (final) {
+        const passed = ++finalChecks > 1 && text.includes("final marker")
+        value = { content: JSON.stringify({ status: passed ? "passed" : "failed", detail: passed ? "All objective requirements met" : "Add the final marker" }) }
+      } else value = { content: JSON.stringify({ status: ++taskChecks > 4 ? "passed" : "failed", detail: "Revise the report and retry independent acceptance" }) }
+    } else value = { content: "Summary of report." }
+    const chunk = (delta: object, reason: string | null) => `data: ${JSON.stringify({ id: "unlimited", object: "chat.completion.chunk", created: 1, model: "fixture", choices: [{ index: 0, delta, finish_reason: reason }], usage: { prompt_tokens: 500_000, completion_tokens: 5 } })}\n\n`
+    return new Response(chunk(value, null) + chunk({}, finish) + "data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } })
+  } })
+  try {
+    const provider = createCustomProvider({ name: "Fixture", baseURL: `http://127.0.0.1:${model.port}/v1`, apiKey: "fixture", models: ["fixture"], contextWindow: 128000 })
+    await writeFile(join(data, "config.json"), JSON.stringify({ ...getDefaultConfig(), providers: [provider], active: { providerId: provider.id, model: "fixture" } }))
+    const start = await processRun(cwd, { ZAPCODE_DATA_DIR: data }, ["goal", "Produce the accepted report", "--strict", "--accept-edits"])
+    expect(start.code).toBe(0)
+    const id = /goal_[a-f0-9-]+/.exec(start.output)?.[0]; expect(id).toBeDefined()
+    const db = join(data, "goal", "goals.sqlite")
+    let result: ReturnType<GoalStore["get"]>
+    for (let i = 0; i < 300; i++) {
+      await new Promise(resolve => setTimeout(resolve, 100))
+      const store = new GoalStore(db); result = store.get(id!); store.close()
+      if (result && ["completed", "blocked", "awaiting_acceptance", "failed"].includes(result.status)) break
+    }
+    if (result?.status !== "completed") {
+      const log = await readFile(join(data, "goal", "runs", createHash("sha256").update(id!).digest("hex"), "runner.log"), "utf8").catch(() => "missing log")
+      throw new Error(`Goal ended ${result?.status}: ${result?.stopReason}\n${log}`)
+    }
+    expect(result.tasks).toHaveLength(2); expect(result.tasks[0]?.attempt).toBe(5)
+    expect(workerWrites).toBe(5); expect(correctionWrites).toBe(1); expect(finalChecks).toBe(2)
+    expect(await readFile(join(cwd, "report.txt"), "utf8")).toBe("goal passed\nfinal marker\n")
+    const ledger = new GoalBudgetLedger(db)
+    try { expect(ledger.snapshot(id!).totals.tokensUsed).toBeGreaterThan(1_000_000) } finally { ledger.close() }
+    expect(result.finalReceipt?.status).toBe("passed")
+  } finally { model.stop(); await rm(root, { recursive: true, force: true }) }
+}, 45_000)

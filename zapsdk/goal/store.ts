@@ -16,10 +16,10 @@ export class GoalStore {
     this.db.exec("CREATE TABLE IF NOT EXISTS goal_budget_extensions (id TEXT PRIMARY KEY, goal_id TEXT NOT NULL, at INTEGER NOT NULL, old_limits TEXT NOT NULL, new_limits TEXT NOT NULL)");
   }
   close(): void { this.db.close(); }
-  create(input: { objective: string; cwd: string; deadlineAt: number; deliveryPolicy?: "artifact" | "workspace"; machineCheck?: "bun" | "npm" | "pytest" | "go"; dependencyInstall?: "npm"; permissionMode?: "default" | "acceptEdits" | "plan" | "bypassPermissions" }): GoalRecord {
-    if (!input.objective.trim() || !input.cwd || !Number.isSafeInteger(input.deadlineAt) || input.deadlineAt <= Date.now() || (input.dependencyInstall !== undefined && input.dependencyInstall !== "npm")) throw new Error("INVALID_GOAL");
+  create(input: { objective: string; cwd: string; sessionId?: string; deadlineAt?: number; deliveryPolicy?: "artifact" | "workspace"; machineCheck?: "bun" | "npm" | "pytest" | "go"; dependencyInstall?: "npm"; permissionMode?: "default" | "acceptEdits" | "plan" | "bypassPermissions" }): GoalRecord {
+    if (!input.objective.trim() || !input.cwd || (input.deadlineAt !== undefined && (!Number.isSafeInteger(input.deadlineAt) || input.deadlineAt <= Date.now())) || (input.dependencyInstall !== undefined && input.dependencyInstall !== "npm")) throw new Error("INVALID_GOAL");
     const now = Date.now();
-    const value: GoalRecord = { id: `goal_${randomUUID()}`, objective: input.objective, deliveryPolicy: input.deliveryPolicy ?? "workspace", permissionMode: input.permissionMode ?? "default", ...(input.machineCheck ? { machineCheck: input.machineCheck } : {}), ...(input.dependencyInstall ? { dependencyInstall: input.dependencyInstall } : {}), cwd: input.cwd, stateRevision: 1, specRevision: 1, planRevision: 0, status: "created", createdAt: now, updatedAt: now, deadlineAt: input.deadlineAt, ownerEpoch: 0, tasks: [] };
+    const value: GoalRecord = { id: `goal_${randomUUID()}`, objective: input.objective, deliveryPolicy: input.deliveryPolicy ?? "workspace", permissionMode: input.permissionMode ?? "default", ...(input.machineCheck ? { machineCheck: input.machineCheck } : {}), ...(input.dependencyInstall ? { dependencyInstall: input.dependencyInstall } : {}), cwd: input.cwd, ...(input.sessionId ? { sessionId: input.sessionId } : {}), stateRevision: 1, specRevision: 1, planRevision: 0, status: "created", createdAt: now, updatedAt: now, ...(input.deadlineAt === undefined ? {} : { deadlineAt: input.deadlineAt }), ownerEpoch: 0, tasks: [] };
     this.db.query("INSERT INTO goals(id,revision,record) VALUES(?,?,?)").run(value.id, value.stateRevision, JSON.stringify(value));
     return value;
   }
@@ -47,14 +47,15 @@ export class GoalStore {
     if (changed !== 1) throw new Error("GOAL_REVISION_CONFLICT");
     return structuredClone(next);
   }
-  claim(id: string, instanceId: string, pid: number, forRecovery = false): GoalRecord {
+  claim(id: string, instanceId: string, pid: number, forRecovery = false, automatic = false): GoalRecord {
     return this.transaction(() => {
       const goal = this.get(id); if (!goal) throw new Error("GOAL_NOT_FOUND");
       if (goal.owner) throw new Error("GOAL_OWNER_ACTIVE_OR_UNRESOLVED");
+      if (automatic && (goal.control || !(goal.status === "created" || goal.status === "paused" && goal.stopReason === "RECONCILED_SAFE_TO_RESUME"))) throw new Error("GOAL_AUTOMATIC_CONTINUATION_SUPPRESSED");
       if (["completed", "cancelled", "failed"].includes(goal.status)) throw new Error("GOAL_TERMINAL");
       if (goal.inFlight && !forRecovery) throw new Error("GOAL_RECOVERY_REQUIRED");
       if (forRecovery && !goal.inFlight) throw new Error("GOAL_NO_RECOVERY_REQUIRED");
-      const next = structuredClone(goal); next.ownerEpoch++; next.owner = { instanceId, pid }; next.status = "running"; next.stopReason = undefined; next.control = undefined;
+      const next = structuredClone(goal); next.ownerEpoch++; next.owner = { instanceId, pid }; next.status = "running"; next.stopReason = undefined; next.failure = undefined; next.control = undefined;
       // The Goal and its ledger reside in the same Host database. Advancing
       // both epochs under this transaction prevents a crash or SQLite error
       // from stranding a Goal at a revision its meter will never accept.
@@ -72,7 +73,7 @@ export class GoalStore {
       const goal = this.get(id); if (!goal) throw new Error("GOAL_NOT_FOUND");
       if (goal.ownerEpoch !== epoch || goal.owner?.instanceId !== instanceId) throw new Error("GOAL_STALE_OWNER");
       const next = structuredClone(goal); fn(next);
-      if (next.id !== goal.id || next.ownerEpoch !== goal.ownerEpoch || next.owner?.instanceId !== goal.owner.instanceId || next.specRevision !== goal.specRevision || next.objective !== goal.objective || next.deliveryPolicy !== goal.deliveryPolicy || next.machineCheck !== goal.machineCheck || next.dependencyInstall !== goal.dependencyInstall || next.permissionMode !== goal.permissionMode || next.cwd !== goal.cwd || next.deadlineAt !== goal.deadlineAt) throw new Error("GOAL_IMMUTABLE_FIELD");
+      if (next.id !== goal.id || next.ownerEpoch !== goal.ownerEpoch || next.owner?.instanceId !== goal.owner.instanceId || next.specRevision !== goal.specRevision || next.objective !== goal.objective || next.deliveryPolicy !== goal.deliveryPolicy || next.machineCheck !== goal.machineCheck || next.dependencyInstall !== goal.dependencyInstall || next.permissionMode !== goal.permissionMode || next.cwd !== goal.cwd || next.sessionId !== goal.sessionId || next.deadlineAt !== goal.deadlineAt) throw new Error("GOAL_IMMUTABLE_FIELD");
       return this.save(goal, next);
     });
   }
@@ -110,6 +111,41 @@ export class GoalStore {
       this.db.query("UPDATE goal_budget_accounts SET limits_json=? WHERE goal_id=? AND epoch=?").run(JSON.stringify(nextLimits), id, account.epoch);
       this.db.query("INSERT INTO goal_budget_extensions(id,goal_id,at,old_limits,new_limits) VALUES(?,?,?,?,?)")
         .run(randomUUID(), id, Date.now(), account.limits_json, JSON.stringify(nextLimits));
+      return this.save(goal, next);
+    });
+  }
+  /** Foreground input may interrupt only Goals created by this chat. */
+  pauseForInput(cwd: string, sessionId: string): string[] {
+    return this.transaction(() => {
+      const ids: string[] = [];
+      for (const goal of this.list(cwd)) {
+        if (goal.sessionId !== sessionId || goal.control || !["created", "running"].includes(goal.status)) continue;
+        const next = structuredClone(goal); next.yieldRequested = true;
+        if (!next.owner && !next.inFlight) { next.status = "paused"; next.yieldRequested = undefined; next.stopReason = "USER_INPUT_PENDING"; }
+        this.save(goal, next); ids.push(goal.id);
+      }
+      return ids;
+    });
+  }
+  /** Explicit user resumption retries only indeterminate verification against
+   * the retained candidate; failed worker evidence stays available for repair. */
+  prepareResume(id: string): GoalRecord {
+    return this.transaction(() => {
+      const goal = this.get(id); if (!goal) throw new Error("GOAL_NOT_FOUND");
+      if (goal.owner) throw new Error("GOAL_OWNER_ACTIVE_OR_UNRESOLVED");
+      if (["completed", "cancelled", "failed"].includes(goal.status)) throw new Error("GOAL_TERMINAL");
+      const next = structuredClone(goal);
+      // Never erase unresolved effects or their evidence at this boundary.
+      if (!next.inFlight) {
+        for (const task of next.tasks) if (task.status === "blocked" && ["error", "unverified"].includes(task.receipt?.status ?? "")) {
+          task.status = "verifying"; task.receipt = undefined;
+        }
+        if (next.finalReceipt && next.finalReceipt.status !== "passed") {
+          next.finalReceipt = undefined;
+        }
+        next.progress = undefined;
+      }
+      next.status = "created"; next.stopReason = undefined; next.yieldRequested = undefined;
       return this.save(goal, next);
     });
   }

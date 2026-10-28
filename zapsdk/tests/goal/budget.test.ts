@@ -23,6 +23,24 @@ const request = (operationId: string, overrides: Partial<Parameters<GoalBudgetLe
 });
 
 describe("GoalBudgetLedger", () => {
+  it("keeps cumulative accounting beyond former defaults when no limits were requested", () => {
+    const file = fixture(); let ledger = new GoalBudgetLedger(file);
+    ledger.create("unlimited", 1, { strict: true });
+    for (let i = 0; i < 181; i++) {
+      const id = `model-${i}`;
+      expect(ledger.reserve("unlimited", 1, request(id, { estimatedTokens: 20_000 })).ok).toBe(true);
+      expect(ledger.dispatch("unlimited", 1, id).ok).toBe(true);
+      ledger.settle("unlimited", id, { ...usage, freshInputTokens: 10_000 });
+    }
+    for (let i = 0; i < 1201; i++) expect(ledger.admit("unlimited", 1, { operationId: `tool-${i}`, role: "worker", kind: "tool" }).ok).toBe(true);
+    ledger.close(); ledger = new GoalBudgetLedger(file);
+    const snapshot = ledger.snapshot("unlimited");
+    expect(snapshot.limits).toEqual({ strict: true });
+    expect(snapshot.totals).toMatchObject({ modelCalls: 181, providerAttempts: 181, toolCalls: 1201, tokensUsed: 181 * 10011 });
+    expect(ledger.reserve("unlimited", 1, request("verifier", { role: "verifier" })).ok).toBe(true);
+    ledger.close();
+  });
+
   it("survives reopen, counts fresh and cached tokens once, and rejects a duplicate or conflicting settlement", () => {
     const file = fixture();
     let ledger = new GoalBudgetLedger(file);

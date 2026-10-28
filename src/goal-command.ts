@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url"
 import { spawn } from "node:child_process"
 import { getAppDataDir } from "../zapsdk/utils/platform.js"
 import { GoalStore } from "../zapsdk/goal/store.js"
-import { GoalBudgetLedger } from "../zapsdk/goal/budget.js"
+import { GoalBudgetLedger, type GoalBudgetLimits } from "../zapsdk/goal/budget.js"
 import type { GoalRecord } from "../zapsdk/goal/contracts.js"
 import { loadAppConfig } from "./config.js"
 import { createExecutionEnvironment, resolveExecutionBackend } from "./execution-environment.js"
@@ -20,10 +20,17 @@ export function goalDatabasePath(): string { return join(getAppDataDir(), "goal"
 export function goalHome(goalId: string): string {
   return join(getAppDataDir(), "goal", "runs", createHash("sha256").update(goalId).digest("hex"))
 }
-function selectGoal(store: GoalStore, cwd: string, id?: string): GoalRecord {
-  const value = id ? store.get(id) : store.list(cwd)[0]
+function selectGoal(store: GoalStore, cwd: string, id?: string, sessionId?: string): GoalRecord {
+  const goals = store.list(cwd)
+  const value = id ? store.get(id) : sessionId ? goals.find(goal => goal.sessionId === sessionId) ?? goals.find(goal => !goal.sessionId) : goals[0]
   if (!value || value.cwd !== cwd) throw new Error("No matching Goal in this workspace")
   return value
+}
+/** No state is created just by sending an ordinary chat message. */
+export function pauseGoalsForUserInput(cwd: string, sessionId: string, text: string): string[] {
+  if (/^\/goal(?:\s|$)/.test(text.trim()) || !existsSync(goalDatabasePath())) return []
+  const store = new GoalStore(goalDatabasePath())
+  try { return store.pauseForInput(cwd, sessionId) } finally { store.close() }
 }
 function definitelyGone(pid: number, group: boolean): boolean {
   if (!Number.isSafeInteger(pid) || pid <= 0 || (group && process.platform === "win32")) return false
@@ -60,10 +67,11 @@ function startRunner(goal: GoalRecord): void {
 }
 
 /** The same command implementation is used by the TUI and the CLI. */
-export function goalCommand(args: string[], cwd: string, currentMode: import("./config.js").PermissionMode = "default", platform: NodeJS.Platform = process.platform): string {
+export function goalCommand(args: string[], cwd: string, currentMode: import("./config.js").PermissionMode = "default", platform: NodeJS.Platform = process.platform, sessionId?: string): string {
   const action = args[0] ?? ""
   if (!action || action === "help") return [
-    "Usage: /goal <objective> [--artifact] [--strict] [--accept-edits | --permission-mode=MODE] [--check=bun|npm|pytest|go] [--install=npm] | status [id] | list | pause [id] | resume [id] | cancel [id] | budget extend [id] --tokens=N --minutes=N",
+    "Usage: /goal <objective> [--artifact] [--strict] [--accept-edits | --permission-mode=MODE] [--check=bun|npm|pytest|go] [--install=npm] [--tokens=N] [--minutes=N] [--model-calls=N] [--tool-calls=N] | status [id] | list | pause [id] | resume [id] | cancel [id] | budget extend [id] --tokens=N --minutes=N",
+    "Goals run until independent acceptance and delivery, with no default token, call or time limit. Use pause or cancel to interrupt.",
     "Goal execution is not yet supported on Windows; --check requires a VM backend with verified process sealing.",
     "Git Goal currently supports macOS repository roots with an existing commit and ordinary SHA-1 metadata; linked worktrees, alternates, shallow and SHA-256 repositories are unavailable.",
     "Git commits remain private to the Goal; delivery changes files only, not the source index or refs. The private index starts from HEAD and does not preserve staged/unstaged grouping.",
@@ -81,6 +89,20 @@ export function goalCommand(args: string[], cwd: string, currentMode: import("./
   if (!control && installArgs.length && !machineCheckSupported(cwd)) throw new Error("Goal --install=npm requires a VM backend with verified process sealing.")
   if (!control && checkArgs.length && !machineCheckSupported(cwd)) throw new Error("Goal --check machine verification is currently unavailable: process-tree sealing cannot be verified.")
   if (!control && (checkArgs.length > 1 || checkArgs.some(arg => !/^--check=(bun|npm|pytest|go)$/.test(arg)))) throw new Error("Invalid Goal machine check; use --check=bun, npm, pytest or go")
+  const limits: GoalBudgetLimits = { strict: args.includes("--strict") }
+  const limitKeys = { tokens: "maxTokens", "model-calls": "maxModelCalls", "provider-attempts": "maxProviderAttempts", "tool-calls": "maxToolCalls", minutes: "deadlineAt" } as const
+  const limitArgs = !control ? args.filter(arg => /^--(?:tokens|model-calls|provider-attempts|tool-calls|minutes)(?:=|$)/.test(arg)) : []
+  const seen = new Set<string>()
+  for (const arg of limitArgs) {
+    const match = /^--(tokens|model-calls|provider-attempts|tool-calls|minutes)=([1-9]\d*)$/.exec(arg)
+    if (!match || seen.has(match[1]!)) throw new Error("Invalid explicit Goal limit")
+    seen.add(match[1]!)
+    const value = Number(match[2]), key = limitKeys[match[1] as keyof typeof limitKeys]
+    const limit = key === "deadlineAt" ? Date.now() + value * 60_000 : value
+    if (!Number.isSafeInteger(value) || !Number.isSafeInteger(limit)) throw new Error("Invalid explicit Goal limit")
+    limits[key] = limit
+  }
+  if (limits.maxTokens !== undefined) limits.reservedTokens = Math.min(50_000, Math.floor(limits.maxTokens * 0.05))
   const store = new GoalStore(goalDatabasePath(), { requireLedger: true })
   try {
     if (action === "list") {
@@ -88,7 +110,7 @@ export function goalCommand(args: string[], cwd: string, currentMode: import("./
       return list.length ? list.map(g => `${g.id} · ${g.status} · ${g.objective}`).join("\n") : "No Goals in this workspace."
     }
     if (["status", "watch"].includes(action)) {
-      const goal = selectGoal(store, cwd, args[1])
+      const goal = selectGoal(store, cwd, args[1], sessionId)
       const ledger = new GoalBudgetLedger(goalDatabasePath())
       try {
         const budget = ledger.snapshot(goal.id)
@@ -96,9 +118,11 @@ export function goalCommand(args: string[], cwd: string, currentMode: import("./
           `${goal.id} · ${goal.status}${goal.phase ? ` / ${goal.phase}` : ""}`,
           goal.objective,
           ...(goal.stopReason ? [`Reason: ${goal.stopReason}`] : []),
+          ...(goal.failure ? [`Failure: ${JSON.stringify(goal.failure)}`] : []),
+          ...(goal.progress ? [`Progress: ${JSON.stringify(goal.progress)}`] : []),
           `Tasks: ${goal.tasks.filter(task => task.status === "passed").length}/${goal.tasks.length}`,
           ...(goal.dependencyInstall ? ["Dependencies: npm (official registry, package-lock v3, scripts disabled)"] : []),
-          `Budget: ${budget.totals.modelCalls} model calls · ${budget.totals.toolCalls} tool calls · ${budget.totals.tokensUsed} tokens · ${budget.totals.unknownUsage} unknown usage · ${budget.totals.opaqueToolCalls} unmetered tool calls (${budget.limits.strict === false ? "observed" : "strict"})`,
+          `Usage: ${budget.totals.modelCalls} model calls · ${budget.totals.toolCalls} tool calls · ${budget.totals.tokensUsed} tokens · ${budget.totals.unknownUsage} unknown usage · ${budget.totals.opaqueToolCalls} unmetered tool calls (${budget.limits.strict === false ? "observed" : "strict"})`,
           ...(goal.delivery ? [`Artifact: ${JSON.stringify(goal.delivery)}`] : []),
           `Log: ${join(goalHome(goal.id), "runner.log")}`,
         ].join("\n")
@@ -106,7 +130,7 @@ export function goalCommand(args: string[], cwd: string, currentMode: import("./
     }
     if (action === "budget" && args[1] === "extend") {
       const id = args[2]?.startsWith("--") ? undefined : args[2]
-      const goal = selectGoal(store, cwd, id)
+      const goal = selectGoal(store, cwd, id, sessionId)
       const delta: { tokens?: number; modelCalls?: number; providerAttempts?: number; toolCalls?: number; minutes?: number } = {}
       for (const arg of args.slice(id ? 3 : 2)) {
         const match = /^--(tokens|model-calls|provider-attempts|tool-calls|minutes)=(\d+)$/.exec(arg)
@@ -118,29 +142,32 @@ export function goalCommand(args: string[], cwd: string, currentMode: import("./
       return `Goal ${updated.id} budget extended; resume to continue.`
     }
     if (action === "pause" || action === "cancel") {
-      const goal = selectGoal(store, cwd, args[1]); const next = store.requestControl(goal.id, action)
+      const goal = selectGoal(store, cwd, args[1], sessionId); const next = store.requestControl(goal.id, action)
       return `${next.id}: ${next.owner ? `${action} requested; waiting for sealing` : next.status}`
     }
     if (action === "resume") {
-      const goal = selectGoal(store, cwd, args[1])
+      const goal = selectGoal(store, cwd, args[1], sessionId)
       if ((goal.machineCheck || goal.dependencyInstall) && !machineCheckSupported(cwd)) throw new Error("Goal VM execution is currently unavailable: process-tree sealing cannot be verified.")
-      startRunner(recoverStoppedOwner(store, goal))
+      const stopped = recoverStoppedOwner(store, goal)
+      if (sessionId && stopped.sessionId === sessionId) store.pauseForInput(cwd, sessionId)
+      startRunner(store.prepareResume(stopped.id))
       return `Goal ${goal.id} resumed; budget and task state retained.`
     }
     const permissionMode = args.includes("--accept-edits") ? "acceptEdits" : modeArgs.length ? modeArgs[0]!.slice("--permission-mode=".length) as import("./config.js").PermissionMode : currentMode
     const strict = args.includes("--strict")
     const deliveryPolicy = args.includes("--artifact") ? "artifact" : "workspace"
-    const objective = args.filter(arg => arg !== "--strict" && arg !== "--artifact" && arg !== "--accept-edits" && !arg.startsWith("--permission-mode=") && !arg.startsWith("--check=") && !arg.startsWith("--install=")).join(" ").trim()
+    const objective = args.filter(arg => arg !== "--strict" && arg !== "--artifact" && arg !== "--accept-edits" && !arg.startsWith("--permission-mode=") && !arg.startsWith("--check=") && !arg.startsWith("--install=") && !limitArgs.includes(arg)).join(" ").trim()
     if (!objective) throw new Error("Goal objective is required")
-    const deadlineAt = Date.now() + 2 * 60 * 60_000
     const machineCheck = checkArgs[0]?.slice("--check=".length) as "bun" | "npm" | "pytest" | "go" | undefined
-    const goal = store.create({ objective, cwd, deadlineAt, deliveryPolicy, permissionMode, machineCheck, dependencyInstall: installArgs.length ? "npm" : undefined })
+    if (sessionId) store.pauseForInput(cwd, sessionId)
+    const goal = store.create({ objective, cwd, sessionId, deadlineAt: limits.deadlineAt, deliveryPolicy, permissionMode, machineCheck, dependencyInstall: installArgs.length ? "npm" : undefined })
     const ledger = new GoalBudgetLedger(goalDatabasePath())
     try {
-      ledger.create(goal.id, 0, { deadlineAt, maxModelCalls: 120, maxProviderAttempts: 180, maxToolCalls: 1200,
-        maxTokens: 1_000_000, reservedTokens: 50_000, strict })
+      // Usage remains durable and shared across all phases and children; no
+      // implicit cap may turn an unfinished objective into a stopped Goal.
+      ledger.create(goal.id, 0, limits)
     } finally { ledger.close() }
     startRunner(goal)
-    return `Goal ${goal.id} started (${strict ? "strict budget" : "observed budget; external tool usage may be unknown"}). Use /goal status ${goal.id} to inspect progress.`
+    return `Goal ${goal.id} started (${limitArgs.length ? "explicit user limits" : "no default usage or time limit"}; ${strict ? "strict accounting" : "observed usage; external tool usage may be unknown"}). Use /goal status ${goal.id} to inspect progress.`
   } finally { store.close() }
 }

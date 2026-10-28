@@ -613,7 +613,7 @@ export function dispatchSlashCommand(
       const raw = cmd.value?.trim() ?? ""
       const parts = raw ? raw.split(/\s+/) : []
       if (parts.length && !["status", "watch", "list", "pause", "resume", "cancel", "budget", "help"].includes(parts[0]!) && !precheckProvider(deps)) return true
-      try { deps.addLog("system", goalCommand(parts, process.cwd(), deps.configRef.current.permissionMode)) }
+      try { deps.addLog("system", goalCommand(parts, process.cwd(), deps.configRef.current.permissionMode, process.platform, getCurrentSessionId())) }
       catch (error) { deps.addLog("error", error instanceof Error ? error.message : String(error)) }
       return true
     }

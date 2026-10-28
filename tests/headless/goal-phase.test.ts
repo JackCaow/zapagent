@@ -44,6 +44,7 @@ it("runs each Goal phase in a fresh cwd, meters real provider/tool calls and res
     const lifecycle: string[] = []
     const first = await runGoalPhase({ cwd: worker, prompt: "Read reference.txt", goalId: "g", epoch: 1, role: "worker", ledgerPath,
       onSpawn(pid) { lifecycle.push(`spawn:${pid}`) }, onStopped(pid) { lifecycle.push(`stopped:${pid}`) } })
+    expect(first.toolCalls).toBeGreaterThan(0)
     expect(lifecycle).toHaveLength(2)
     expect(lifecycle[0]!.replace("spawn:", "")).toBe(lifecycle[1]!.replace("stopped:", ""))
     expect(first.text).toContain("Checked")

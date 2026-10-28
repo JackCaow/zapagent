@@ -38,3 +38,35 @@ it("rejects unsupported npm installation and conflicting approval modes before c
   expect(() => goalCommand(["Create a report", "--permission-mode=unknown"], root)).toThrow("Invalid Goal permission mode")
   expect(existsSync(goalDatabasePath())).toBe(false)
 })
+
+
+it("offers Goal in the slash palette and completes to its existing command", async () => {
+  const { filterCommands } = await import("../../src/ui/slash-palette.js")
+  const { parseCommand } = await import("../../src/commands.js")
+  expect(filterCommands("/").some(entry => entry.name === "/goal")).toBe(true)
+  const entry = filterCommands("/go")[0]
+  expect(entry?.name).toBe("/goal")
+  expect(parseCommand(`${entry!.name} help`)).toEqual({ type: "goal", value: "help" })
+})
+
+it("rejects invalid or duplicate explicit limits before creating state", () => {
+  for (const flag of ["--tokens=0", "--tokens=abc", "--minutes=9999999999999999999", "--tool-calls=-1"]) {
+    expect(() => goalCommand(["Report", flag], root)).toThrow("Invalid explicit Goal limit")
+  }
+  expect(() => goalCommand(["Report", "--tokens=10", "--tokens=20"], root)).toThrow("Invalid explicit Goal limit")
+  expect(existsSync(goalDatabasePath())).toBe(false)
+})
+
+
+it("selects the current chat's Goal instead of a newer Goal from another chat", async () => {
+  const { GoalStore } = await import("../../zapsdk/goal/store.js")
+  const { GoalBudgetLedger } = await import("../../zapsdk/goal/budget.js")
+  const store = new GoalStore(goalDatabasePath()), ledger = new GoalBudgetLedger(goalDatabasePath())
+  try {
+    const mine = store.create({ objective: "My report", cwd: root, sessionId: "mine" })
+    const other = store.create({ objective: "Other report", cwd: root, sessionId: "other" })
+    ledger.create(mine.id, 0, { strict: false }); ledger.create(other.id, 0, { strict: false })
+    const status = goalCommand(["status"], root, "default", process.platform, "mine")
+    expect(status).toContain(mine.id); expect(status).not.toContain(other.id)
+  } finally { ledger.close(); store.close() }
+})
