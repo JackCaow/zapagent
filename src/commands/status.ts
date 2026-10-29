@@ -9,14 +9,15 @@
  * zap's bring-your-own-key model.
  */
 
-import { existsSync, realpathSync, statSync } from "node:fs"
-import { dirname, join, parse, relative } from "node:path"
+import { realpathSync } from "node:fs"
+import { relative } from "node:path"
 import { homedir } from "node:os"
 import { computeCacheUsageStats } from "../../zapsdk/agent/cache-metrics.js"
 import type { ContextDiagnostics, ContextSegmentDiagnostics } from "../../zapsdk/agent/events.js"
 import type { ToolSchemaDiagnostics } from "../agent/toolDiagnostics.js"
 import type { PromptCacheDiagnostics } from "../agent/promptDiagnostics.js"
 import type { CacheMemoryAuditEntry } from "../agent/cacheMemoryAudit.js"
+import { readProjectGuidelines } from "../prompts/sections/agents-md.js"
 import {
   makePromptCacheScope,
   samePromptCacheScope,
@@ -122,43 +123,17 @@ export interface StatusDiagnostics {
   }
 }
 
-/** Surface the AGENTS.md file that the system prompt actually loads.
- *  The prompt section resolves AGENTS.md from the git root when available,
- *  so /status must do the same; otherwise a session started from a subdir
- *  misleadingly reports "(none detected)" while project rules are active. */
+/** Surface every project document loaded for the current directory scope. */
 function detectAgentsDoc(cwd: string): string | null {
-  const root = resolveProjectRoot(cwd)
-  const path = join(root, "AGENTS.md")
-  if (!existsSync(path)) return null
-  return root === cwd ? "AGENTS.md" : shortRelativePath(cwd, path)
-}
-
-function resolveProjectRoot(cwd: string): string {
-  let current = cwd
-  const { root } = parse(cwd)
-  for (;;) {
-    if (hasGitMarker(current)) return current
-    if (current === root) return cwd
-    const parent = dirname(current)
-    if (parent === current) return cwd
-    current = parent
-  }
-}
-
-function hasGitMarker(path: string): boolean {
-  try {
-    const stat = statSync(join(path, ".git"))
-    return stat.isDirectory() || stat.isFile()
-  } catch {
-    return false
-  }
+  const documents = readProjectGuidelines(cwd)
+  return documents.length ? documents.map(document => shortRelativePath(cwd, document.path)).join(", ") : null
 }
 
 function shortRelativePath(cwd: string, path: string): string {
   const from = realPathBestEffort(cwd)
   const to = realPathBestEffort(path)
   const r = relative(from, to)
-  if (!r) return "AGENTS.md"
+  if (!r || r === "AGENTS.md") return "AGENTS.md"
   return r.startsWith(".") ? r : `./${r}`
 }
 

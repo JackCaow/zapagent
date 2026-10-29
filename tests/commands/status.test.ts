@@ -2383,6 +2383,18 @@ describe("buildStatusText", () => {
       rmSync(dir, { recursive: true, force: true })
     }
   })
+
+  it("lists all active ancestor guidelines in the same order as the prompt", () => {
+    const dir = mkdtempSync(join(tmpdir(), "zap-status-ancestor-guides-"))
+    try {
+      mkdirSync(join(dir, ".git")); mkdirSync(join(dir, "packages", "api"), { recursive: true })
+      writeFileSync(join(dir, "AGENTS.md"), "Root rule.")
+      writeFileSync(join(dir, "packages", "AGENTS.md"), "Package rule.")
+      writeFileSync(join(dir, "packages", "api", "AGENTS.md"), "API rule.")
+      const text = buildStatusText(makeConfig(), join(dir, "packages", "api"), 100)
+      expect(text).toContain("AGENTS.md:       ../../AGENTS.md, ../AGENTS.md, AGENTS.md")
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
 })
 
 describe("buildStatusText cache/memory audit", () => {

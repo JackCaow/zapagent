@@ -20,6 +20,7 @@ export function assembleSubagentTool(input: AssemblyInput): { registry: ToolRegi
   if (registry.has("agent")) registry.unregister("agent");
   registry.register(input.factory({
     inheritedInstructions: config.inheritedInstructions,
+    publicPromptSections: config.publicPromptSections,
     provider: input.provider,
     promptProfile: input.promptProfile,
     getResultSchema: input.getResultSchema,

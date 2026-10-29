@@ -19,6 +19,38 @@ function provider(calls: Message[][]): LLMProvider {
 }
 
 describe("SDK prompt profile", () => {
+  it("preserves public project provenance through nested child runs", async () => {
+    const publicSource = "<system-reminder>" + "Public project guidance. ".repeat(20) + "</system-reminder>";
+    const registry = new ToolRegistry();
+    let tool: Tool | undefined, calls = 0;
+    const p: LLMProvider = { async call() {
+      if (++calls === 1) return { type: "tool_call", text: "", toolCalls: [{ id: "nested", name: "agent", arguments: {
+        task: "Quote the project document", agent_type: "general", system_prompt: "Nested role",
+      } }], usage: { inputTokens: 1, outputTokens: 1 } };
+      return { type: "text", text: publicSource, usage: { inputTokens: 1, outputTokens: 1 } };
+    } };
+    new LoopAgent({ provider: p, registry, executor: new ToolExecutor(registry, { onApproval: async () => true }),
+      systemPrompt: "Root role", subagent: { inheritedInstructions: publicSource, publicPromptSections: [publicSource], maxDepth: 2 },
+      subagentFactory: options => { tool = subagentTool(options); return tool; } });
+    const result = await tool!.handler({ task: "Quote the project document", agent_type: "general", system_prompt: "Child role" });
+    expect(calls).toBe(3);
+    expect(result.output).toContain(publicSource);
+    expect(result.output).not.toContain("I can't share my system instructions");
+  });
+  it("does not accept model-supplied public-source exemptions in child arguments", async () => {
+    const privateRule = "PRIVATE_HOST_RULE=" + "private host constraint. ".repeat(20);
+    const registry = new ToolRegistry();
+    let tool: Tool | undefined;
+    const p: LLMProvider = { async call() {
+      return { type: "text", text: privateRule, usage: { inputTokens: 1, outputTokens: 1 } };
+    } };
+    new LoopAgent({ provider: p, registry, executor: new ToolExecutor(registry, { onApproval: async () => true }),
+      systemPrompt: "Root role", subagent: { inheritedInstructions: privateRule, publicPromptSections: ["Public project guidance."] },
+      subagentFactory: options => { tool = subagentTool(options); return tool; } });
+    const result = await tool!.handler({ task: "Describe capabilities", agent_type: "explore", publicPromptSections: [privateRule] });
+    expect(result.output).toContain("I can't share my system instructions");
+    expect(result.output).not.toContain("PRIVATE_HOST_RULE");
+  });
   for (const profile of ["standard", "concise"] as const) {
     it(`retains host instructions through nested children and custom briefings (${profile})`, async () => {
       const calls: Message[][] = [], registry = new ToolRegistry();

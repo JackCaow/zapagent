@@ -54,7 +54,8 @@ it("real CLI sends the selected profile with user/project text and unchanged sch
       expect(JSON.stringify(requests[2].messages.filter((m: any) => m.role === "tool"))).toContain("CHECK_FAILURE_SENTINEL");
       const system = requests[0].messages.find((m: any) => m.role === "system").content as string;
       expect(system).toContain("PREPEND_SENTINEL"); expect(system).toContain("APPEND_SENTINEL");
-      expect(system).toContain(custom ? "CUSTOM_SENTINEL" : "PROJECT_SENTINEL");
+      expect(system).toContain("PROJECT_SENTINEL");
+      if (custom) expect(system).toContain("CUSTOM_SENTINEL");
       expect(system.includes("Profile: concise")).toBe(profile === "concise");
       expect(system.includes("3-5 ordered, observable items")).toBe(profile === "standard");
       schemas ??= requests[0].tools;
@@ -88,5 +89,25 @@ it("TUI runtime adapter applies profile changes and custom prompts across turns"
       { systemCount: 1, protocolCount: 1, concise: true, custom: true },
       { systemCount: 1, protocolCount: 1, concise: false, custom: false },
     ]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+}, 30000);
+
+it("a restricted headless runtime advertises only its effective capabilities", async () => {
+  const root = await mkdtemp(join(tmpdir(), "zap-restricted-prompt-"));
+  try {
+    const child = spawn(process.execPath, [resolve("tests/fixtures/prompt-capabilities-headless.ts")], {
+      cwd: root, env: { ...process.env, ZAPCODE_DATA_DIR: join(root, "data"), ZAPCODE_DEVTOOLS_PORT: "", ZAP_DISABLE_UPDATE_CHECK: "1" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "", stderr = "";
+    child.stdout!.on("data", chunk => stdout += String(chunk)); child.stderr!.on("data", chunk => stderr += String(chunk));
+    const timer = setTimeout(() => child.kill("SIGKILL"), 25000);
+    let code: number | null;
+    try { code = await new Promise((resolve, reject) => { child.once("error", reject); child.once("close", resolve); }); }
+    finally { clearTimeout(timer); }
+    if (code !== 0) throw new Error(stderr + stdout);
+    const result = JSON.parse(stdout);
+    expect(result).toEqual({ code: 0, tools: ["read_file", "read_tool_output"], agentGuidance: false, planTool: false,
+      searchTool: false, globTool: false, skillLoading: false });
   } finally { await rm(root, { recursive: true, force: true }); }
 }, 30000);

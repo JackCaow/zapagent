@@ -12,6 +12,7 @@ import { resolvePromptProfile, type PromptProfile } from "../zapsdk/agent/prompt
 import { concisePlanSection } from "./prompts/sections/concise.js"
 import { recordPromptSection } from "./prompts/registry.js"
 import { localExecutionShell } from "../zapsdk/execution/shell.js"
+import { REQUIRED_SECTIONS } from "./prompts/required-sections.js"
 
 /** A built-in provider template. Templates are catalog-only: they seed the
  *  "Add Provider" wizard with sensible defaults, but never store runtime
@@ -1015,7 +1016,7 @@ export function buildSystemPrompt(
     enabledTools: enabledTools ?? new Set(),
     toolPromptsRaw: toolPrompts,
     model: config.active.model,
-    customSystemPrompt: undefined,
+    customSystemPrompt: config.customSystemPrompt,
     promptProfile: resolvePromptProfile(config.promptProfile),
     onSection,
     availableSkills,
@@ -1038,17 +1039,19 @@ export function buildCustomSystemPrompt(
   dynamicLines: string[] = [],
 ): string {
   const cacheableSupportSections = [
+    ...REQUIRED_SECTIONS,
     toolPromptsSection,
     skillsSection,
     ctx.promptProfile === "concise" ? concisePlanSection : planDisciplineSection,
   ].flatMap((section) => {
     const value = section.compute(ctx)
     const trimmed = value ? escapeDynamicBoundaryText(value).trim() : ""
-    if (trimmed) recordPromptSection(ctx, section, trimmed)
+    if (trimmed) recordPromptSection(ctx, section, trimmed, value ?? undefined)
     return trimmed ? [trimmed] : []
   })
   const dynamic = [
     ...dynamicLines,
+    ...(ctx.model ? [`Model: ${ctx.model}`] : []),
     `Shell: ${ctx.executionFacts?.shell ?? localExecutionShell().executable}`,
     ...(ctx.executionFacts ? [`Process environment facts: ${JSON.stringify(ctx.executionFacts)}`] : []),
     ...sandboxTemporaryDirectoryDescription(ctx.executionFacts),
@@ -1058,6 +1061,8 @@ export function buildCustomSystemPrompt(
   recordPromptSection(ctx, { name: "custom-environment", purpose: "environment", dynamic: true, compute: () => null }, dynamic.join("\n"))
   return [
     escapeDynamicBoundaryText(customPrompt).trim(),
+    ...(ctx.customSystemPrompt?.trim() && ctx.customSystemPrompt.trim() !== customPrompt.trim()
+      ? [escapeDynamicBoundaryText(ctx.customSystemPrompt).trim()] : []),
     ...cacheableSupportSections,
     ...(dynamic.length > 0 ? [DYNAMIC_BOUNDARY, ...dynamic] : []),
   ].filter(Boolean).join("\n")

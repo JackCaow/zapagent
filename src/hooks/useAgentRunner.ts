@@ -617,7 +617,7 @@ export function useAgentRunner({
       enabledTools: runtimeTools.enabledToolNames,
       toolPromptsRaw: runtimeTools.toolPrompts,
       model: currentConfig.active.model,
-      customSystemPrompt: undefined,
+      customSystemPrompt: currentConfig.customSystemPrompt,
       promptProfile: currentConfig.promptProfile ?? "standard",
       availableSkills,
       executionFacts,
@@ -755,6 +755,7 @@ export function useAgentRunner({
       cwd,
       conversation,
       fullSystemPrompt,
+      publicPromptSections: promptSections.publicPromptSections,
       inheritedInstructions: systemPrompt || currentConfig.customSystemPrompt,
       // Dual thresholds so auto-compact fires on whichever signal hits first.
       // - Char: catches English/code heavy conversations (1 token ≈ 4 chars).

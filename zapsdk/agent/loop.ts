@@ -3,6 +3,7 @@ import { backgroundTaskLifecycle, describeBackgroundTaskLifecycle, type Backgrou
 import { describeCheckpointCoverage } from "../checkpoint/facts.js";
 import { conciseAgentProtocol, DELIVERABLE_SCOPE_GUIDANCE, resolvePromptProfile, type PromptProfile } from "./prompt-profile.js";
 import { executeNonStreamingTurn } from "./nonstreaming-tool-executor.js";
+import { findPromptLeak, PromptOutputEmitter } from "./prompt-output-guard.js";
 import { earliestDeadlineAt } from "../execution/deadline.js";
 import { toolOutputTool } from "../builtin-tools/tool-output.js";
 import { assembleSubagentTool } from "./subagent-assembly.js";
@@ -25,7 +26,6 @@ import { ToolExecutor, type ApprovalCallback, type PostProcessCallback, type Too
 import { isEffectivelyReadOnly, unknownToolEffects } from "../tools/effects.js";
 import { formatToolResultForModel, formatToolResultContent, normalizeToolFailure, operationFailure } from "../execution/failure.js";
 import {
-  AgentEventEmitter,
   nextContentId,
   type AgentEventType,
   type AgentEventHandler,
@@ -195,6 +195,7 @@ export interface SubagentConfig {
   /** Host-selected instructions shared by every descendant, independent of
    * model-authored briefings. Do not pass the parent's entire workflow prompt. */
   inheritedInstructions?: string;
+  publicPromptSections?: readonly string[];
   /** Max steps per subagent (default: 50, capped to main agent's maxSteps) */
   maxSteps?: number;
   /** Subagent execution timeout in ms (default: 600_000) */
@@ -229,6 +230,7 @@ export interface SubagentFactoryArgs {
   /** Non-secret Host connection identity used only for local cache statistics. */
   requestCacheScope?: string;
   inheritedInstructions?: string;
+  publicPromptSections?: readonly string[];
   promptProfile?: PromptProfile;
   getResultSchema?: () => "outcome-v1" | "legacy";
   provider: LLMProvider;
@@ -277,6 +279,8 @@ export interface LoopAgentOptions {
   registry: ToolRegistry;
   executor: ToolExecutor;
   systemPrompt?: string;
+  /** Host-classified project documents, safe to quote; never model-controlled. */
+  publicPromptSections?: readonly string[];
   /** Optional behavior profile; omitted SDK callers retain legacy prompt assembly. */
   promptProfile?: PromptProfile;
   maxSteps?: number;
@@ -489,7 +493,10 @@ export class LoopAgent {
   private readonly promptProfile: PromptProfile;
   private readonly explicitPromptProfile: boolean;
   private maxToolRetries: number;
-  private emitter = new AgentEventEmitter();
+  private emitter = new PromptOutputEmitter(
+    (text, scanFrom) => this.guardOutput(text, scanFrom),
+    () => !!(this.systemPrompt || this.explicitPromptProfile || this.turnContextPrefix),
+  );
   private conversation?: ConversationManager;
   private resultCompressor?: ResultCompressor;
   private fallbackProvider?: LLMProvider;
@@ -545,6 +552,7 @@ export class LoopAgent {
    *  run(), cleared in finally. Read by guardOutput so memory content
    *  living in the transient attachment is still scanned for leak. */
   private turnContextPrefix?: string;
+  private readonly publicPromptSections: readonly string[];
   /** Host callback fired the first time a run self-heals an image rejection. */
   private onImageStripSelfHeal?: () => void;
 
@@ -559,6 +567,7 @@ export class LoopAgent {
     this.registry = options.registry;
     this.executor = options.executor;
     this.systemPrompt = options.systemPrompt;
+    this.publicPromptSections = [...(options.publicPromptSections ?? [])];
     this.promptProfile = resolvePromptProfile(options.promptProfile);
     this.initialUsage = options.initialUsage;
     this.explicitPromptProfile = options.promptProfile !== undefined;
@@ -1630,6 +1639,7 @@ export class LoopAgent {
       throw err;
       }
     } finally {
+      this.emitter.clearOutputBuffers();
       this.requestMeter?.close();
       this.emitter.off("content_abandoned", recordIncompleteUsage);
       this.emitter.off("provider_request", recordIncompleteUsage);
@@ -1664,14 +1674,16 @@ export class LoopAgent {
   protocolPrompt(): string {
     const toolNames = this.registry.definitions().map((t) => t.name).join(", ");
     if (this.promptProfile === "concise") {
-      return conciseAgentProtocol(toolNames, this.maxSteps, this.taskDecomposition === "required");
+      return conciseAgentProtocol(toolNames, this.maxSteps, this.taskDecomposition === "required" && this.registry.has("todo_write"));
     }
     return (
       `[AGENT PROTOCOL]\n` +
       `Tools: ${toolNames}\n` +
       `Budget: ${this.maxSteps} steps\n` +
       `Rules:\n` +
-      `- Think before acting. For a non-trivial tool task, decompose it with todo_write before implementation: 3-5 ordered, observable items; one in_progress; each has acceptanceCriteria; include an early minimal end-to-end probe and a contingency for a slow/blocked dependency; final item is a concrete verification.\n` +
+      (this.registry.has("todo_write")
+        ? `- Think before acting. For a non-trivial tool task, decompose it with todo_write before implementation: 3-5 ordered, observable items; one in_progress; each has acceptanceCriteria; include an early minimal end-to-end probe and a contingency for a slow/blocked dependency; final item is a concrete verification.\n`
+        : `- Think before acting. For non-trivial work, choose a useful plan and verify the result using only the exposed tools.\n`) +
       `- Search/scan first, then targeted reads. Don't read every file.\n` +
       `- For recovery or forensics tasks, preserve the original input before running a parser, database client, or repair command that could mutate it.\n` +
       `- Reuse prior read/search results while the workspace is unchanged; do not repeat them through bash/grep/sed.\n` +
@@ -1683,7 +1695,8 @@ export class LoopAgent {
       `- When a check fails, identify the competing explanations and run a small test that distinguishes them before changing more code. Record which hypothesis changed and whether the result improved; do not cycle through variants without new evidence.\n` +
       `- If a tool fails, read the error carefully. Fix the cause, don't blindly retry.\n` +
       `- For a build or test failure, diagnose the cause and retry after a relevant change to source, command arguments, configuration, or dependencies. The same output target does not make a corrected invocation a duplicate.\n` +
-      `- Use web_search results directly when snippets contain enough info. Only http_fetch when you need full page content.`
+      (this.registry.has("web_search") ? `- Use web_search results directly when snippets contain enough info.` : "") +
+      (this.registry.has("http_fetch") ? ` Only use http_fetch when you need full page content.` : "")
     );
   }
 
@@ -2747,7 +2760,7 @@ export class LoopAgent {
   }
 
   /**
-   * Last-line defense against prompt / memory extraction. Scans the final
+   * Shared defense for public streaming events and final responses. Scans
    * assistant text for fingerprints of the system prompt or injected memory
    * and, if found, replaces the whole response with a brief refusal plus an
    * observation event.
@@ -2761,50 +2774,23 @@ export class LoopAgent {
    *      proof dumps that sidestep the header markers. 300 chars is large
    *      enough that accidental match on common code/docs is implausible.
    */
-  private guardOutput(text: string): string {
+  private guardOutput(text: string, scanFrom = 0): string {
     if (!text) return text;
-    if (!this.systemPrompt && !this.turnContextPrefix) return text;
+    const system = this.effectiveSystemPrompt();
+    if (!system && !this.turnContextPrefix) return text;
 
     // Scan against system prompt AND the per-turn context attachment.
     // Memory content used to live in systemPrompt; after the Phase 2 split
     // it's in turnContextPrefix. Either can leak verbatim, so both are
     // fair game for the detector.
-    const corpus = [this.systemPrompt, this.turnContextPrefix].filter(Boolean).join("\n\n");
+    const privateSystem = this.publicPromptSections.reduce((prompt, section) => section ? prompt.split(section).join("\n\n") : prompt, system ?? "");
+    const corpus = [privateSystem, this.turnContextPrefix].filter(Boolean).join("\n\n");
 
-    const hardMarkers = [
-      "# Persistent Memory",
-      "## Memory types",
-      "## How to save a memory",
-      "# Project Guidelines (from AGENTS.md)",
-      "[AGENT PROTOCOL]",
-      "<system-context>",
-      "<active_plan>",
-      "<system-reminder>",
-    ];
-    for (const marker of hardMarkers) {
-      if (corpus.includes(marker) && text.includes(marker)) {
-        this.emitter.emit({
-          type: "observation",
-          kind: "prompt_leak_blocked",
-          detail: { marker, replacedLength: text.length },
-        });
-        return REFUSAL_PROMPT_LEAK;
-      }
-    }
-
-    const runLen = 300;
-    if (text.length >= runLen) {
-      for (let i = 0; i + runLen <= text.length; i += 60) {
-        const chunk = text.slice(i, i + runLen);
-        if (corpus.includes(chunk)) {
-          this.emitter.emit({
-            type: "observation",
-            kind: "prompt_leak_blocked",
-            detail: { reason: "long_verbatim_run", replacedLength: text.length },
-          });
-          return REFUSAL_PROMPT_LEAK;
-        }
-      }
+    const leak = findPromptLeak(text, corpus, scanFrom, this.publicPromptSections);
+    if (leak) {
+      this.emitter.emit({ type: "observation", kind: "prompt_leak_blocked",
+        detail: { ...leak, replacedLength: text.length } });
+      return REFUSAL_PROMPT_LEAK;
     }
 
     return text;

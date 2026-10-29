@@ -31,6 +31,7 @@ import type { DeferredAgentCoordinatorExecutor } from "../coordinator/executor-b
 export interface SubagentToolOptions {
   /** Host-owned constraints, preserved across custom roles and descendants. */
   inheritedInstructions?: string;
+  publicPromptSections?: readonly string[];
   /** Host-selected behavior profile, inherited by descendants. */
   promptProfile?: PromptProfile;
   getResultSchema?: () => "outcome-v1" | "legacy";
@@ -317,7 +318,7 @@ const AGENT_TYPES: Record<string, AgentTypeConfig> = {
     description: "File editing; see runtime shell capabilities below.",
     tools: null,
     basePrompt:
-      "You are a writing subagent. Complete the given task using the tools available in your assigned workspace. Respect its execution and isolation boundaries. Output only your final result — the main agent will synthesize it.",
+      "You are a task subagent. Complete the given task using the tools available in your assigned workspace. Respect its execution and isolation boundaries. Output only your final result — the main agent will synthesize it.",
   },
   explore: {
     description: "Read-only inspection.",
@@ -328,7 +329,7 @@ const AGENT_TYPES: Record<string, AgentTypeConfig> = {
     description: "Read-only planning.",
     tools: PLAN_TOOLS,
     basePrompt:
-      "You are an architecture subagent. Explore the codebase, then produce a clear step-by-step implementation plan. Do NOT write or modify code. Include: files to change, functions to add/modify, and potential risks.",
+      "You are a planning subagent. Inspect the relevant materials, then produce a clear step-by-step plan for the user's objective. Do NOT modify files. Include the expected deliverables, verification steps, dependencies and potential risks; do not assume the task requires programming.",
   },
 };
 
@@ -805,6 +806,7 @@ function createDirectSubagentTool(options: SubagentToolOptions): Tool {
         });
 
         const subagent = new LoopAgent({
+          publicPromptSections: options.publicPromptSections,
           provider: options.provider,
           registry,
           executor,

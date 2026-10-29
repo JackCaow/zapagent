@@ -11,6 +11,7 @@ export const skillsSection: PromptSection = {
   compute: (ctx) => {
     const skills = ctx.availableSkills ?? []
     if (skills.length === 0) return null
+    const canLoad = ctx.enabledTools.has("skill")
 
     const sorted = [...skills].sort((a, b) => a.name.localeCompare(b.name))
 
@@ -25,11 +26,11 @@ export const skillsSection: PromptSection = {
 
     return `# Skills
 
-You have access to specialized skills via the \`skill\` tool. Load a skill when the user explicitly requests it or its guidance materially helps the current task. Choose by its purpose and the work needed, not merely its name or a matching keyword.
+${canLoad ? "You have access to specialized skills via the `skill` tool. Load a skill when the user explicitly requests it or its guidance materially helps the current task. Choose by its purpose and the work needed, not merely its name or a matching keyword." : "The host discovered these skills, but no skill-loading tool is exposed in this session. Do not invoke unavailable tools; report the missing capability if one is required."}
 
-Load the skill when the relevant work begins. Skill discovery does not require delaying necessary clarification, planning, or unrelated work. The tool returns instructions; loading them does not perform the work or verify its outcome. Apply them within the user's scope and higher-priority instructions.
+${canLoad ? "Load the skill when the relevant work begins. Skill discovery does not require delaying necessary clarification, planning, or unrelated work. The tool returns instructions; loading them does not perform the work or verify its outcome. Apply them within the user's scope and higher-priority instructions." : "Discovery alone does not load instructions or grant access to a resource."}
 
-**Do not narrate** skill selection. Call the tool; use what it returns.
+${canLoad ? "**Do not narrate** skill selection. Call the tool; use what it returns." : ""}
 
 Available skills:
 ${list}`

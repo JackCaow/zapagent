@@ -12,8 +12,9 @@ import type { ExecutionCapacityFacts } from "../../zapsdk/execution/capacity.js"
 
 export interface PromptContext {
   promptProfile?: PromptProfile
-  /** Diagnostics receive assembled text in memory; hosts persist only lengths/hashes. */
-  onSection?: (name: string, purpose: PromptPurpose, dynamic: boolean, text: string) => void
+  /** Hosts collect assembly metadata in memory and persist only lengths/hashes.
+   * publicSource preserves original project text before cache-marker escaping. */
+  onSection?: (name: string, purpose: PromptPurpose, dynamic: boolean, text: string, publicSource?: string) => void
   /** Snapshot from the selected execution backend, not runtime discovery. */
   executionFacts?: ExecutionEnvironmentFacts
   executionCapacity?: ExecutionCapacityFacts
@@ -32,7 +33,7 @@ export interface PromptContext {
   /** Active model id, used for self-awareness statements in the env section. */
   model?: string
 
-  /** Custom system prompt that replaces the default stack entirely when set. */
+  /** Custom role/workflow; authority, project rules and tool contracts remain. */
   customSystemPrompt?: string
 
   /** Skills available to the `skill` tool. Populated from loaded SKILL.md
