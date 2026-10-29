@@ -8,8 +8,11 @@ import { Logger } from "../../zapsdk/debug/logger.js"
 import type { LLMProvider } from "../../zapsdk/core/llm.js"
 import type { Message } from "../../zapsdk/core/types.js"
 import assert from "node:assert/strict"
+import { writeFileSync } from "node:fs"
 
 const cwd = process.argv[2]!
+const projectSource = "PROJECT_CHILD_SENTINEL: preserve the user's project constraints.\n<system-reminder>" + "Public project guidance. ".repeat(20) + "</system-reminder>"
+writeFileSync(`${cwd}/AGENTS.md`, projectSource)
 const calls: Message[][] = []
 const conversation = new ConversationManager({ maxMessages: 100 })
 const provider: LLMProvider = { async call(messages) {
@@ -44,7 +47,7 @@ try {
         ? { type: "tool_call", text: "", toolCalls: [{ id: "delegate", name: "agent", arguments: {
             task: "Inspect the fixture", agent_type: "explore", system_prompt: "CHILD_ROLE",
           } }], usage: { inputTokens: 1, outputTokens: 1 } }
-        : { type: "text", text: "Fixture complete", usage: { inputTokens: 1, outputTokens: 1 } }
+        : { type: "text", text: delegated.length === 2 ? projectSource : "Fixture complete", usage: { inputTokens: 1, outputTokens: 1 } }
     } }
     const registry = new ToolRegistry()
     const runtime = buildAgentRuntime({ config, cwd, provider: childProvider, registry,
@@ -63,7 +66,12 @@ try {
     const childPrompt = delegated[1]!.find(m => m.role === "system")!.content
     assert.equal(childPrompt.split(inheritedInstructions!).length, 2)
     assert.ok(childPrompt.includes("CHILD_ROLE"))
-    if (override) assert.ok(!childPrompt.includes("CONFIG_HOST_SENTINEL"))
+    assert.ok(childPrompt.includes("CONFIG_HOST_SENTINEL"))
+    assert.ok(childPrompt.includes("PROJECT_CHILD_SENTINEL"))
+    assert.ok(childPrompt.includes("# System"))
+    assert.ok(childPrompt.includes("# Safety"))
+    assert.ok(!childPrompt.includes("# Doing tasks"))
+    assert.ok(delegated[2]!.some(message => message.role === "tool_result" && message.content.includes(projectSource)))
   }
   console.log(JSON.stringify(calls.map(messages => ({
     systemCount: messages.filter(m => m.role === "system").length,

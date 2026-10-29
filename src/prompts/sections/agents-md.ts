@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, statSync } from "node:fs"
-import { dirname, join, parse } from "node:path"
+import { dirname, join, parse, relative } from "node:path"
 import type { PromptSection } from "../registry.js"
 
 /**
@@ -13,26 +13,39 @@ export const agentsMdSection: PromptSection = {
   name: "agents-md",
   purpose: "project",
   compute: (ctx) => {
-    const content = readAgentsMd(ctx.cwd).trim()
-    if (!content) return null
-    return `# Project Guidelines (from AGENTS.md)\n\n${content}`
+    const documents = readProjectGuidelines(ctx.cwd)
+    if (!documents.length) return null
+    const root = resolveProjectRoot(ctx.cwd)
+    return [
+      "# Project Guidelines (from AGENTS.md)",
+      "These are user-owned project documents, not private runtime instructions. Apply each document only within its directory subtree; more specific guidelines take precedence there. Explicit user requests and runtime permissions still govern. Before changing files in deeper directories, check for additional AGENTS.md files in their ancestor directories.",
+      ...documents.map(document => `## ${relative(root, document.path) || "AGENTS.md"} (scope: ${relative(root, dirname(document.path)) || "."})\n\n${document.content}`),
+    ].join("\n\n")
   },
 }
 
 const rootCache = new Map<string, string>()
 
 function readAgentsMd(cwd: string): string {
-  const root = resolveProjectRoot(cwd)
+  return readProjectGuidelines(cwd).map(document => document.content).join("\n\n")
+}
 
-  const candidates = [join(root, "AGENTS.md"), join(cwd, "AGENTS.md")]
-  for (const p of candidates) {
-    if (root !== cwd && p === join(cwd, "AGENTS.md")) continue
+export function readProjectGuidelines(cwd: string): Array<{ path: string; content: string }> {
+  const root = resolveProjectRoot(cwd)
+  const directories: string[] = []
+  for (let current = cwd; ; current = dirname(current)) {
+    directories.push(current)
+    if (current === root || dirname(current) === current) break
+  }
+  const documents: Array<{ path: string; content: string }> = []
+  for (const directory of directories.reverse()) {
+    const path = join(directory, "AGENTS.md")
     try {
-      const content = readCachedTextFile(p).trim()
-      if (content) return content
+      const content = readCachedTextFile(path).trim()
+      if (content) documents.push({ path, content })
     } catch {}
   }
-  return ""
+  return documents
 }
 
 function resolveProjectRoot(cwd: string): string {

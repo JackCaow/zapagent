@@ -18,6 +18,7 @@ import { getActiveMaxOutputTokens, getActiveProvider, setVisionSupport } from ".
 import type { AppConfig } from "../config.js"
 import type { AgentObjects } from "./types.js"
 import { resolveActiveContextLimits } from "../context-budget.js"
+import { buildInheritedPromptInstructions } from "../prompts/required-sections.js"
 import {
   createProjectRuntimeEventStore,
   createProjectRuntimeStateStore,
@@ -30,6 +31,7 @@ export interface BuildAgentRuntimeDeps extends Pick<AgentObjects, "provider" | "
   completionEvidence?: CompletionEvidenceProvider
   conversation: ConversationManager
   fullSystemPrompt: string
+  publicPromptSections?: readonly string[]
   /** Explicit host instructions for descendants; excludes generated workflow sections. */
   inheritedInstructions?: string
   /** AutoCompact char threshold (≈ 80% context window × 4 chars/token). */
@@ -51,6 +53,7 @@ export interface BuildAgentRuntimeDeps extends Pick<AgentObjects, "provider" | "
  * config, checkpoint and devtools integration. */
 export function buildAgentRuntime(deps: BuildAgentRuntimeDeps): AgentRuntime {
   const contextLimits = resolveActiveContextLimits(deps.config)
+  const inherited = buildInheritedPromptInstructions(deps.cwd, [deps.config.customSystemPrompt, deps.inheritedInstructions])
   const runtime = createAgentRuntime({
     threadId: deps.currentSessionId,
     observer: watchObserver(),
@@ -76,6 +79,7 @@ export function buildAgentRuntime(deps: BuildAgentRuntimeDeps): AgentRuntime {
       executor: deps.executor,
       conversation: deps.conversation,
       systemPrompt: deps.fullSystemPrompt,
+      publicPromptSections: deps.publicPromptSections ?? inherited.publicPromptSections,
       promptProfile: deps.config.promptProfile ?? "standard",
       maxSteps: deps.config.maxSteps,
       reserveSteps: 2,
@@ -107,7 +111,8 @@ export function buildAgentRuntime(deps: BuildAgentRuntimeDeps): AgentRuntime {
       }
     },
     subagent: {
-      inheritedInstructions: deps.inheritedInstructions ?? deps.config.customSystemPrompt,
+      inheritedInstructions: inherited.instructions,
+      publicPromptSections: inherited.publicPromptSections,
       onEvent: deps.subAgentEventHandler,
       todoStore: deps.todoStore,
       createRegistryForCwd: deps.createRegistryForCwd,

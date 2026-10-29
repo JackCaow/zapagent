@@ -48,9 +48,10 @@ export function setPromptDiagnosticsLogger(logger: PromptDiagnosticsLogger | nul
 }
 
 /** Diagnostics must not alter prompt assembly or agent behavior. */
-export function recordPromptSection(ctx: PromptContext, section: PromptSection, text: string): void {
+export function recordPromptSection(ctx: PromptContext, section: PromptSection, text: string, sourceText?: string): void {
   try {
-    ctx.onSection?.(section.name, section.purpose ?? "unspecified", section.dynamic === true, text)
+    ctx.onSection?.(section.name, section.purpose ?? "unspecified", section.dynamic === true, text,
+      section.purpose === "project" ? sourceText : undefined)
   } catch {
     // The prompt remains usable when an optional host diagnostic sink fails.
   }
@@ -76,7 +77,7 @@ export function assemblePrompt(ctx: PromptContext, sections: PromptSection[]): s
     if (!value) continue
     const trimmed = escapeDynamicBoundaryText(value).trim()
     if (!trimmed) continue
-    recordPromptSection(ctx, section, trimmed)
+    recordPromptSection(ctx, section, trimmed, value)
     if (section.dynamic) dynamicParts.push(trimmed)
     else staticParts.push(trimmed)
   }

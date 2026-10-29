@@ -1,7 +1,7 @@
 {
   "name": "zapagent",
   "private": true,
-  "version": "1.14.13",
+  "version": "1.14.14",
   "packageManager": "bun@1.3.14",
   "author": "",
   "main": "src/index.tsx",

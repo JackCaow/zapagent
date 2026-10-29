@@ -520,6 +520,7 @@ describe("LoopAgent context diagnostics", () => {
     };
     let deltaCalls = 0;
     const observations: string[] = [];
+    const publicText: string[] = [];
     const conversation = new ConversationManager({ maxMessages: 100 });
     const agent = new LoopAgent({
       provider,
@@ -531,6 +532,9 @@ describe("LoopAgent context diagnostics", () => {
     });
     agent.on("observation", (event) => {
       if (event.type === "observation") observations.push(event.kind);
+    });
+    agent.on("*", event => {
+      if ((event.type === "content_delta" || event.type === "content_final") && event.kind === "text") publicText.push(event.text);
     });
 
     const result = await agent.run("hi", {
@@ -546,6 +550,7 @@ describe("LoopAgent context diagnostics", () => {
     expect(streamCalls).toBe(2);
     expect(result.text).toContain("I can't share my system instructions");
     expect(result.text).not.toContain("second secret");
+    expect(publicText.join("")).not.toContain("second secret");
     expect(observations).toContain("prompt_leak_blocked");
     expect(conversation.getMessages().some((m) => m.content.includes("second secret"))).toBe(false);
   });

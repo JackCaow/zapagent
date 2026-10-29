@@ -21,6 +21,6 @@ export const conciseToolsSection: PromptSection = {
 export const concisePlanSection: PromptSection = {
   name: "concise-plan",
   purpose: "tool-contract",
-  compute: () => `# Plan state
-An <active_plan> attachment records the current task plan. Keep it consistent with actual progress and the user's latest instructions. When an item is complete, update it with todo_write, including the final item. Do not report an unfinished item as complete.`,
+  compute: (ctx) => `# Plan state
+An <active_plan> attachment records the current task plan. Keep it consistent with actual progress and the user's latest instructions. ${ctx.enabledTools.has("todo_write") ? "When an item is complete, update it with todo_write, including the final item." : "Report progress using the tools actually available in this session."} Do not report an unfinished item as complete.`,
 }

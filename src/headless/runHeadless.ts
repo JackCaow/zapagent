@@ -67,6 +67,7 @@ import {
 } from "../agent/contextAttachments.js"
 import { buildRepoMapAttachment } from "../agent/repoMap.js"
 import { appendCacheableSystemSection, buildRuntimePromptToolInputs } from "../agent/systemPrompt.js"
+import { buildInheritedPromptInstructions } from "../prompts/required-sections.js"
 import { createPromptSectionDiagnostics, buildPromptCacheDiagnostics, type PromptCacheDiagnostics } from "../agent/promptDiagnostics.js"
 import { summarizeSkillsForPrompt } from "../agent/skillSummary.js"
 import { createAgentRuntime, subagentTool, type Todo, type TodoStore } from "../../zapsdk/index.js"
@@ -538,6 +539,7 @@ export async function runHeadless(args: HeadlessArgs, host: HeadlessHost = {}): 
   const runtimeTools = buildRuntimePromptToolInputs(
     registry.definitions().map((d: { name: string }) => d.name),
     registry.toolPrompts(),
+    { subagentEnabled: !publicChecks && !host.disableSubagent },
   )
   const appLogger = new Logger()
   const agentLogger = new AgentLogger(appLogger)
@@ -598,6 +600,7 @@ export async function runHeadless(args: HeadlessArgs, host: HeadlessHost = {}): 
     type: "observation", kind: "runtime_lifecycle", detail: { stage, at: Date.now() },
   })
   const controller = new AbortController()
+  const inherited = buildInheritedPromptInstructions(cwd, [args.systemPromptPrepend, config.customSystemPrompt, args.systemPromptAppend])
   const runtimeOptions: CreateAgentRuntimeOptions = {
     observer: watchObserver(),
     backgroundTasks: { store: taskStore, disposition: "stop" },
@@ -633,6 +636,7 @@ export async function runHeadless(args: HeadlessArgs, host: HeadlessHost = {}): 
       executor,
       conversation: publicChecks ? undefined : conversation,
       systemPrompt,
+      publicPromptSections: promptSections.publicPromptSections,
       promptProfile: config.promptProfile ?? "standard",
       maxSteps: args.maxTurns ?? config.maxSteps,
       timeoutMs: args.timeoutMs,
@@ -659,8 +663,8 @@ export async function runHeadless(args: HeadlessArgs, host: HeadlessHost = {}): 
       } : subagentTool,
     },
     subagent: publicChecks || host.disableSubagent ? false : {
-      inheritedInstructions: [args.systemPromptPrepend, config.customSystemPrompt, args.systemPromptAppend]
-        .filter(text => text?.trim()).join("\n\n"),
+      inheritedInstructions: inherited.instructions,
+      publicPromptSections: inherited.publicPromptSections,
       onEvent: (event) => { formatter.onEvent(event); host.onEvent?.(event) },
       createRegistryForCwd,
       requireWriteIsolation: true,

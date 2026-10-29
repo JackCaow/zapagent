@@ -16,12 +16,19 @@ export interface PromptSectionDiagnostics extends PromptSegmentDiagnostics {
 
 export function createPromptSectionDiagnostics(): {
   sections: PromptSectionDiagnostics[]
+  publicPromptSections: string[]
   record: NonNullable<PromptContext["onSection"]>
 } {
   const sections: PromptSectionDiagnostics[] = []
+  const publicPromptSections: string[] = []
   return {
     sections,
-    record: (name, purpose, dynamic, text) => {
+    publicPromptSections,
+    record: (name, purpose, dynamic, text, sourceText) => {
+      if (purpose === "project") {
+        publicPromptSections.push(text)
+        if (sourceText && sourceText !== text) publicPromptSections.push(sourceText)
+      }
       sections.push({ name, purpose, dynamic, ...segmentDiagnostics(text) })
     },
   }
