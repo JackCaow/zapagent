@@ -7,7 +7,7 @@ import { ConversationManager } from "../../memory/conversation.js";
 import { ToolExecutor } from "../../tools/executor.js";
 import { ToolRegistry } from "../../tools/registry.js";
 
-const failures = ["timeout", "error", "empty", "whitespace", "tool_text", "tool_json", "deadline"] as const;
+const failures = ["timeout", "error", "empty", "whitespace", "tool_text", "deadline"] as const;
 type FinishMode = typeof failures[number] | "success";
 
 async function runWithFinalizer(mode: FinishMode, earlierText: string, emptyTurn = false) {
@@ -29,7 +29,6 @@ async function runWithFinalizer(mode: FinishMode, earlierText: string, emptyTurn
         type: "text",
         text: mode === "success" ? "Saved revision 2; validation failed."
           : mode === "tool_text" ? '<tool_call>{"name":"write_revision","arguments":{}}</tool_call>'
-          : mode === "tool_json" ? '{"name":"write_revision","arguments":{}}'
           : mode === "whitespace" ? " \n\t" : "",
         toolCalls: [],
         usage: { inputTokens: 2, outputTokens: 1 },

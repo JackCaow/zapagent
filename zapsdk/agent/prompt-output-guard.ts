@@ -15,15 +15,7 @@ const PROMPT_LEAK_MARKERS = [
 /** Exempt only bytes matching a host-classified public source. A shared tag
  * does not exempt a different/private body following it. */
 function matchesPublicSource(text: string, offset: number, width: number, sources: readonly string[]): boolean {
-  const candidate = text.slice(offset, offset + Math.max(width, PROMPT_LEAK_RUN_LENGTH));
-  const anchor = candidate.slice(0, width);
-  return sources.some(source => {
-    for (let at = source.indexOf(anchor); at >= 0; at = source.indexOf(anchor, at + 1)) {
-      const length = Math.min(candidate.length, source.length - at);
-      if (source.slice(at, at + length) === candidate.slice(0, length)) return true;
-    }
-    return false;
-  });
+  return sources.some(source => source.includes(text.slice(offset, offset + width)));
 }
 
 export function findPromptLeak(text: string, corpus: string, scanFrom = 0, publicSources: readonly string[] = []): Record<string, string> | undefined {
@@ -53,7 +45,9 @@ export function findPromptLeak(text: string, corpus: string, scanFrom = 0, publi
 
 interface OutputBuffer {
   text: string;
+  visible: string;
   released: number;
+  finalized: number;
   blocked?: string;
 }
 
@@ -66,6 +60,7 @@ export class PromptOutputEmitter extends AgentEventEmitter {
   constructor(
     private guard: (text: string, scanFrom?: number) => string,
     private enabled: () => boolean = () => true,
+    private normalize: (text: string, final: boolean) => string = text => text,
   ) {
     super();
   }
@@ -85,38 +80,58 @@ export class PromptOutputEmitter extends AgentEventEmitter {
     }
     const buffer = this.buffers.get(event.id);
     if (event.type === "content_final") {
-      const safe = buffer?.blocked ?? this.guard(event.text);
+      // A tool preamble boundary is not EOF. Retain both the lookahead and
+      // unstable markup; previews keep their buffer until the complete final.
+      if (event.streamContinues) return;
+      const state = buffer ?? { text: event.text, visible: "", released: 0, finalized: 0 };
+      const projected = this.normalize(state.text, true);
+      const rawSafe = state.blocked ?? this.guard(state.text);
+      const safe = state.blocked ?? (rawSafe !== state.text ? rawSafe : this.guard(projected));
+      // A final may already have been replaced by the loop's output policy.
+      // Only release the checked projection, never a different raw tail.
+      const finalSafe = this.guard(this.normalize(event.text, true));
+      const isReplacement = finalSafe !== this.normalize(event.text, true)
+        || (buffer && event.text !== buffer.text && event.text !== buffer.text.slice(buffer.text.length - event.text.length)
+          && event.text !== projected);
+      const complete = state.blocked ?? (safe !== projected ? safe : isReplacement ? finalSafe : projected);
       if (buffer && !buffer.blocked) {
-        // stream-json consumes deltas, so flush a safe tail before finalizing.
-        const delta = safe === event.text ? buffer.text.slice(buffer.released) : safe;
+        const prefix = state.visible.slice(0, state.released);
+        const delta = complete.startsWith(prefix) ? complete.slice(state.released)
+          : prefix.startsWith(complete) ? "" : complete;
         if (delta) super.emit({ ...event, type: "content_delta", text: delta });
       }
-      // A streaming preamble can finalize at tool_call_start and then resume
-      // under the same id. Retain its detection state until the run ends.
-      const state = buffer ?? { text: event.text, released: event.text.length };
-      state.released = state.text.length;
-      if (safe !== event.text) state.blocked = safe;
+      const segment = state.blocked || complete !== projected ? complete : complete.slice(state.finalized);
+      if (complete !== projected) state.blocked = complete;
+      state.visible = complete;
+      state.released = complete.length;
+      state.finalized = complete.length;
       this.buffers.set(event.id, state);
-      super.emit({ ...event, text: safe });
+      super.emit({ ...event, text: segment });
       return;
     }
 
-    const state = buffer ?? { text: "", released: 0 };
+    const state = buffer ?? { text: "", visible: "", released: 0, finalized: 0 };
     this.buffers.set(event.id, state);
     if (state.blocked) return;
     const scanFrom = Math.max(0, state.text.length - PROMPT_LEAK_RUN_LENGTH + 1);
     state.text += event.text;
-    const safe = this.guard(state.text, scanFrom);
-    if (safe !== state.text) {
+    const visible = this.normalize(state.text, false);
+    const rawSafe = this.guard(state.text, scanFrom);
+    const safe = rawSafe !== state.text ? rawSafe : this.guard(visible,
+      visible.startsWith(state.visible) ? Math.max(0, state.visible.length - PROMPT_LEAK_RUN_LENGTH + 1) : 0);
+    if (rawSafe !== state.text || safe !== visible) {
       state.blocked = safe;
       super.emit({ ...event, text: safe });
       return;
     }
-    let end = Math.max(0, state.text.length - PROMPT_LEAK_RUN_LENGTH + 1);
+    const prefix = state.visible.slice(0, state.released);
+    state.visible = visible;
+    if (!visible.startsWith(prefix)) return;
+    let end = Math.max(0, visible.length - PROMPT_LEAK_RUN_LENGTH + 1);
     // Do not split a UTF-16 surrogate pair at the release boundary.
-    if (end > 0 && /[\uD800-\uDBFF]/.test(state.text[end - 1]!)) end--;
+    if (end > 0 && /[\uD800-\uDBFF]/.test(visible[end - 1]!)) end--;
     end = Math.max(state.released, end);
-    const delta = state.text.slice(state.released, end);
+    const delta = visible.slice(state.released, end);
     state.released = end;
     if (delta) super.emit({ ...event, text: delta });
   }

@@ -4,6 +4,7 @@ import { describeCheckpointCoverage } from "../checkpoint/facts.js";
 import { conciseAgentProtocol, DELIVERABLE_SCOPE_GUIDANCE, resolvePromptProfile, type PromptProfile } from "./prompt-profile.js";
 import { executeNonStreamingTurn } from "./nonstreaming-tool-executor.js";
 import { findPromptLeak, PromptOutputEmitter } from "./prompt-output-guard.js";
+import { normalizeAssistantText } from "./output-text.js";
 import { earliestDeadlineAt } from "../execution/deadline.js";
 import { toolOutputTool } from "../builtin-tools/tool-output.js";
 import { assembleSubagentTool } from "./subagent-assembly.js";
@@ -496,6 +497,7 @@ export class LoopAgent {
   private emitter = new PromptOutputEmitter(
     (text, scanFrom) => this.guardOutput(text, scanFrom),
     () => !!(this.systemPrompt || this.explicitPromptProfile || this.turnContextPrefix),
+    normalizeAssistantText,
   );
   private conversation?: ConversationManager;
   private resultCompressor?: ResultCompressor;
@@ -2739,24 +2741,7 @@ export class LoopAgent {
   }
 
   private cleanOutput(text: string): string {
-    if (!text) return text;
-
-    let cleaned = text
-      .replace(/<\|?tool_call[s_a-z]*\|?>[^]*?<\/?[|]?tool_call[s_a-z]*[|]?>/gi, "")
-      .replace(/<\|?tool_calls_section_begin\|?>[^]*?<\|?tool_calls_section_end\|?>/gi, "")
-      .replace(/<arg_key>[^<]*<\/arg_key><arg_value>[^<]*<\/arg_value>/gi, "")
-      .trim();
-
-    if (cleaned.startsWith("{") && cleaned.includes('"name"') && cleaned.includes('"arguments"')) {
-      return "";
-    }
-
-    const toolCallStart = cleaned.lastIndexOf("<|tool_call");
-    if (toolCallStart !== -1 && !cleaned.includes("<|tool_call", toolCallStart + 1)) {
-      cleaned = cleaned.slice(0, toolCallStart).trim();
-    }
-
-    return this.guardOutput(cleaned);
+    return this.guardOutput(normalizeAssistantText(text));
   }
 
   /**

@@ -2,19 +2,19 @@ import { expect, it } from "bun:test";
 import { findPromptLeak, PromptOutputEmitter } from "../../agent/prompt-output-guard.js";
 import type { AgentEvent } from "../../agent/events.js";
 
-function fixture(corpus = "Private host rules.") {
+function fixture(corpus = "Private host rules.", normalize: (text: string, final: boolean) => string = text => text) {
   const events: AgentEvent[] = [];
-  const emitter = new PromptOutputEmitter((text, start) => findPromptLeak(text, corpus, start) ? "BLOCKED" : text);
+  const emitter = new PromptOutputEmitter((text, start) => findPromptLeak(text, corpus, start) ? "BLOCKED" : text, () => true, normalize);
   emitter.on("*", event => events.push(event));
   return { events, emitter };
 }
 
 it("does not duplicate an emitted prefix when the final response is trimmed", () => {
-  const { emitter, events } = fixture();
+  const { emitter, events } = fixture(undefined, (text, final) => final ? text.trim() : text.trimStart());
   const raw = "  " + "Public words. ".repeat(50) + "  ";
   emitter.emit({ type: "content_delta", kind: "text", id: "text", text: raw });
   emitter.emit({ type: "content_final", kind: "text", id: "text", text: raw.trim() });
-  expect(events.flatMap(e => e.type === "content_delta" ? [e.text] : []).join("")).toBe(raw);
+  expect(events.flatMap(e => e.type === "content_delta" ? [e.text] : []).join("")).toBe(raw.trim());
   expect(events.at(-1)).toMatchObject({ type: "content_final", text: raw.trim() });
 });
 
@@ -105,6 +105,13 @@ it("a document ending at a public tag cannot exempt a private suffix", () => {
   expect(findPromptLeak(privateText, privateText, 0, [source])).toEqual({ marker: "<system-reminder>" });
   expect(findPromptLeak(source + "\nThis is a public explanation.", privateText, 0, [source])).toBeUndefined();
   expect(findPromptLeak(privateText, privateText, 0, [source + "PRIVATE_"])).toEqual({ marker: "<system-reminder>" });
+});
+
+it("allows a short public tag quote followed by an original explanation", () => {
+  const source = "<system-reminder>Public conventions.</system-reminder>";
+  const privateText = "<system-reminder>PRIVATE_REVIEW_FIXTURE</system-reminder>";
+  expect(findPromptLeak('The document uses `<system-reminder>` as a literal tag.', privateText, 0, [source])).toBeUndefined();
+  expect(findPromptLeak("<system-reminder>PRIVATE_REVIEW_FIXTURE", privateText, 0, [source])).toEqual({ marker: "<system-reminder>" });
 });
 
 it("withholds a private suffix arriving after an exempt tag in separate deltas", () => {

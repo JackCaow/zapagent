@@ -170,17 +170,23 @@ export class StreamingToolExecutor {
     // end-of-stream for thinking/text, arriving AFTER tool_call/tool_result
     // events — UI renders them in the wrong order.
     let textFinalized = false;
+    let textFinalizedAt = 0;
     let thinkingFinalized = false;
-    const finalizeThinking = () => {
-      if (thinkingId && thinking && !thinkingFinalized) {
-        this.emitter.emit({ type: "content_final", kind: "thinking", id: thinkingId, text: thinking });
+    let thinkingFinalizedAt = 0;
+    const finalizeThinking = (complete = false) => {
+      if (thinkingId && (thinking.length > thinkingFinalizedAt || (complete && thinkingFinalized))) {
+        this.emitter.emit({ type: "content_final", kind: "thinking", id: thinkingId, text: thinking.slice(thinkingFinalizedAt),
+          ...(!complete ? { streamContinues: true } : {}) });
         thinkingFinalized = true;
+        thinkingFinalizedAt = thinking.length;
       }
     };
-    const finalizeText = () => {
-      if (textId && text && !textFinalized) {
-        this.emitter.emit({ type: "content_final", kind: "text", id: textId, text });
+    const finalizeText = (complete = false) => {
+      if (textId && (text.length > textFinalizedAt || (complete && textFinalized))) {
+        this.emitter.emit({ type: "content_final", kind: "text", id: textId, text: text.slice(textFinalizedAt),
+          ...(!complete ? { streamContinues: true } : {}) });
         textFinalized = true;
+        textFinalizedAt = text.length;
       }
     };
     let finishReason: string | undefined;
@@ -346,7 +352,8 @@ export class StreamingToolExecutor {
         }
       }
     } catch (error) {
-      finalizeThinking();
+      finalizeThinking(true);
+      finalizeText(true);
       const partial = { text, textId, textFinalEmitted: textFinalized, thinking, thinkingId, raw };
       if (signal?.aborted) throw await this.buildAbortError(partial);
       // Thinking-only failures retain RetryProvider's existing bounded retry
@@ -366,7 +373,8 @@ export class StreamingToolExecutor {
     // Stream ended without a tool_call_start (pure text or pure thinking
     // response). Catch any sections that weren't finalized yet in-loop. The
     // finalize* helpers no-op if already called, so this is idempotent.
-    finalizeThinking();
+    finalizeThinking(true);
+    if (textFinalized || signal?.aborted) finalizeText(true);
     // Note: text is intentionally NOT finalized here — when there are no
     // tool calls, loop.ts applies cleanOutput to strip XML-style markup
     // before emitting. Finalizing raw text here would double-emit. The

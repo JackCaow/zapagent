@@ -107,6 +107,7 @@ type ContentFinalThinking = {
   kind: "thinking";
   id: string;
   text: string;
+  streamContinues?: boolean;
 };
 
 type ContentFinalText = {
@@ -114,6 +115,8 @@ type ContentFinalText = {
   kind: "text";
   id: string;
   text: string; // cleaned (cleanOutput applied)
+  /** Host-authored section boundary; more text may follow in this response. */
+  streamContinues?: boolean;
 };
 
 type ContentFinalToolCall = {
