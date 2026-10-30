@@ -1,5 +1,5 @@
 import { expect, it } from "bun:test"
-import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, mkdir, readdir, readFile, readlink, symlink, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { spawn } from "node:child_process"
@@ -8,7 +8,7 @@ import { createCustomProvider, getDefaultConfig } from "../../src/config.js"
 import { GoalStore } from "../../zapsdk/goal/store.js"
 import { GoalBudgetLedger } from "../../zapsdk/goal/budget.js"
 
-for (const mode of ["format", "resume-verifier", "explicit-limit"] as const) {
+for (const mode of ["format", "resume-verifier", "explicit-limit", "foreground"] as const) {
   it(`runs the real Goal continuation lifecycle: ${mode}`, async () => {
     const root = await mkdtemp(join(tmpdir(), "zap-goal-continuation-")), data = join(root, "data"), cwd = join(root, "project")
     await mkdir(data); await mkdir(cwd)
@@ -51,8 +51,20 @@ for (const mode of ["format", "resume-verifier", "explicit-limit"] as const) {
     try {
       const provider = createCustomProvider({ name: "Fixture", baseURL: `http://127.0.0.1:${model.port}/v1`, apiKey: "fixture", models: ["fixture"], contextWindow: 128000 })
       await writeFile(join(data, "config.json"), JSON.stringify({ ...getDefaultConfig(), providers: [provider], active: { providerId: provider.id, model: "fixture" } }))
-      const start = await cli(["Write a verified report", "--accept-edits", ...(mode === "explicit-limit" ? ["--tokens=1000"] : [])])
+      if (mode === "foreground") {
+        await writeFile(join(cwd, "target.txt"), "source stays private\n")
+        await symlink(join(cwd, "target.txt"), join(cwd, "internal-link"))
+      }
+      const start = await cli(["Write a verified report", ...(mode === "foreground" ? [] : ["--background"]), "--accept-edits", ...(mode === "explicit-limit" ? ["--tokens=1000"] : [])])
       expect(start.code).toBe(0)
+      if (mode === "foreground") {
+        expect(start.output).toContain("started in this session")
+        expect(start.output).toContain("Goal running/planning")
+        expect(start.output).toContain("Tool write_file")
+        expect(start.output).toContain("Goal running/verifying")
+        expect(start.output).toContain("completed")
+        expect(await readlink(join(cwd, "internal-link"))).toBe(join(cwd, "target.txt"))
+      }
       const id = /goal_[a-f0-9-]+/.exec(start.output)?.[0]; expect(id).toBeDefined()
       let goal = await waitForStop(id!)
       let frozen: string | undefined
@@ -62,7 +74,7 @@ for (const mode of ["format", "resume-verifier", "explicit-limit"] as const) {
         expect(workers).toBe(1); expect(verifier).toBe(3)
         frozen = (goal.tasks[0]?.candidate as { snapshotId: string }).snapshotId
         resume = true
-        expect((await cli(["resume", id!])).code).toBe(0)
+        expect((await cli(["resume", id!, "--background"])).code).toBe(0)
         goal = await waitForStop(id!)
         expect((goal.tasks[0]?.candidate as { snapshotId: string }).snapshotId).toBe(frozen)
         const attempts = await readdir(join(home, "acceptance-attempts"))
@@ -72,7 +84,7 @@ for (const mode of ["format", "resume-verifier", "explicit-limit"] as const) {
         expect(goal.status).toBe("budget_limited"); expect(goal.failure?.code).toBe("GOAL_BUDGET_LIMITED")
         expect(planner).toBe(0); expect(workers).toBe(0)
         expect((await cli(["budget", "extend", id!, "--tokens=100000"])).code).toBe(0)
-        expect((await cli(["resume", id!])).code).toBe(0)
+        expect((await cli(["resume", id!, "--background"])).code).toBe(0)
         goal = await waitForStop(id!)
       }
       if (goal.status !== "completed") throw new Error(`Goal ${goal.status}: ${goal.stopReason}\n${await readFile(join(home, "runner.log"), "utf8")}`)

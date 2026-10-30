@@ -1,3 +1,5 @@
+import { executeGoalCommand } from "../goal-session.js"
+import { createGoalPresentation } from "../agent/goalPresentation.js"
 import { AgentBudget } from "../../zapsdk/agent/budget.js"
 import { RequestMeter } from "../../zapsdk/agent/request-meter.js"
 import { accumulateTokenUsage } from "../../zapsdk/agent/token-usage.js"
@@ -354,6 +356,7 @@ export function useAgentRunner({
   onUpdateConfig,
 }: UseAgentRunnerOptions) {
   const [status, setStatus] = useState("ready")
+  const [goalRunning, setGoalRunning] = useState(false)
   const [outputThroughput, setOutputThroughput] = useState<OutputThroughputSample>()
   const [providerRequest, setProviderRequest] = useState<ProviderRequestEvent>()
   const [step, setStep] = useState(0)
@@ -937,6 +940,47 @@ export function useAgentRunner({
     turnStartUiLogIndexRef,
   ])
 
+  const runGoalCommand = useCallback(async (args: string[]): Promise<number> => {
+    const controller = new AbortController()
+    let presentation: ReturnType<typeof createGoalPresentation> | undefined
+    let stateLabel = ""
+    try {
+      return await executeGoalCommand(args, cwd, {
+        permissionMode: config.permissionMode, sessionId: getCurrentSessionId(), signal: controller.signal,
+        onStart: () => {
+          if (running.current) throw new Error("The current session is already running a task")
+          running.current = true; abortRef.current = controller; setGoalRunning(true); setStatus("preparing")
+          agentRunStore.clear()
+          presentation = createGoalPresentation({ currentConfig: config, controller,
+            createPreview: () => {
+              const preview = createStreamingPreview({ addLog, setStreamingText, setIsStreaming, setThinkingText, setIsThinking, getIsFrozen: getIsFrozen ?? (() => false) })
+              registerStaticFlushCallback?.(() => preview.onStaticFlushed())
+              return preview
+            },
+            setStatus, setStep, setActiveTool, setActiveToolBytes, setProviderRequest, setOutputThroughput,
+            addLog, replaceLog, peekNextLogId, onAgentRunState: run => agentRunStore.apply(run),
+          })
+        },
+        onEvent: (event, scope) => presentation?.event(event, scope),
+        onState: goal => {
+          const label = `${goal.status}/${goal.phase ?? "preparing"} · ${goal.tasks.filter(task => task.status === "passed").length}/${goal.tasks.length} tasks`
+          if (label !== stateLabel) {
+            stateLabel = label
+            addLog("system", `Goal ${label}${goal.stopReason ? ` · ${goal.stopReason}` : ""}`)
+            if (!controller.signal.aborted) setStatus(goal.phase ?? "preparing")
+          }
+        },
+        onMessage: text => addLog("system", text),
+      })
+    } finally {
+      if (presentation) {
+        presentation.finish(); running.current = false
+        if (abortRef.current === controller) abortRef.current = null
+        setGoalRunning(false); setStatus("ready"); setActiveTool(""); setStep(0); setProviderRequest(undefined)
+      }
+    }
+  }, [config, cwd, addLog, replaceLog, peekNextLogId, getIsFrozen, registerStaticFlushCallback, agentRunStore])
+
   const runAgentRef = useRef(runAgent)
   runAgentRef.current = runAgent
   useEffect(() => {
@@ -977,6 +1021,8 @@ export function useAgentRunner({
 
   return {
     runAgent,
+    runGoalCommand,
+    goalRunning,
     running,
     abortRef,
     status,

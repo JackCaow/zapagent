@@ -261,6 +261,8 @@ contract. The normal local `zap` command remains host-orchestrated.
 
 ## Goal completion
 
+Goals run in the current session by default: planning, tool calls, child agents, independent verification, delivery and blocked reasons appear in the same transcript as normal tasks. `/goal resume` also attaches to the current session. Use `/goal <objective> --background` (or `zap goal <objective> --background`) to start detached, `/goal resume [id] --background` to resume detached, or `/goal background` to hand off the active foreground Goal at its next safe phase boundary. Status, pause and cancel controls remain available while a foreground Goal is running. Esc/Ctrl+C request a pause and the session stays busy until its owned processes are sealed.
+
 Goal is objective-driven: a worker response or a green self-test does not complete the Goal. Failed task checks trigger another repair; failed final acceptance creates corrective work from the integrated result and repeats independent acceptance before delivery. Accepted tasks are retained.
 
 New Goals have no default cumulative token, model-call, tool-call or elapsed-time limit. Usage is still recorded across planning, workers, children, repairs and verifiers. Use `/goal status`, `/goal pause` or `/goal cancel` to inspect or interrupt a run. Existing Goals retain their previously configured limits; `budget extend` continues to apply to those bounded runs.

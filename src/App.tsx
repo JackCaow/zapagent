@@ -534,8 +534,10 @@ export function App() {
   // ── Agent runner ──
   const {
     runAgent,
+    runGoalCommand,
+    goalRunning,
     abortRef,
-    status,
+    status: runnerStatus,
     providerRequest,
     outputThroughput,
     setStatus,
@@ -586,7 +588,8 @@ export function App() {
     onUpdateConfig: updateConfig,
   })
 
-  const isAgentRunning = status !== "ready" && status !== "cancelled"
+  const status = goalRunning && (runnerStatus === "ready" || runnerStatus === "cancelled") ? "sealing" : runnerStatus
+  const isAgentRunning = goalRunning || status !== "ready" && status !== "cancelled"
   const turnActivity = resolveTurnActivity(status, inputQueue, queueActiveRunId, queueError)
   const isRunning = turnActivity.busy
 
@@ -750,6 +753,7 @@ export function App() {
     ): Promise<boolean> => {
       const result = await dispatchSlashCommand(input, {
         exit,
+        runGoalCommand,
         bumpTranscript,
         setLogs,
         setTodos,
@@ -801,7 +805,7 @@ export function App() {
     // stable; refs aren't deps. Only addLog/addToast/compactLogs/dispatchUserTurn
     // could realistically change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [addLog, addToast, compactLogs, dispatchUserTurn, exit, updateConfig, setContextTokens, resetRunDiagnostics, restoreMemoryQueryHistoryFromLogs, setCompactFailure, setMemoryFailure, bindQueue],
+    [addLog, addToast, compactLogs, dispatchUserTurn, runGoalCommand, exit, updateConfig, setContextTokens, resetRunDiagnostics, restoreMemoryQueryHistoryFromLogs, setCompactFailure, setMemoryFailure, bindQueue],
   )
 
   // ── Turn dispatcher (unified handleSubmit + drain) ──

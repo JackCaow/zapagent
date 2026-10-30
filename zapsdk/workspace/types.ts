@@ -15,6 +15,8 @@ export interface WorkspaceLease {
   repoPath?: string;
   baseOid?: string;
   batchPath?: string;
+  /** Host-owned raw source-link baseline, outside every writable clone. */
+  sourceLinksHash?: string;
   /** Host-created private metadata, excluded from delivered file artifacts. */
   privateGit?: PrivateGitBinding;
 }

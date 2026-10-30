@@ -51,7 +51,7 @@ it("runs a Goal with managed npm dependencies for worker, child and final check"
   try {
     const provider = createCustomProvider({ name: "Fixture", baseURL: `http://127.0.0.1:${model.port}/v1`, apiKey: "fixture", models: ["fixture"], contextWindow: 128000 })
     await writeFile(join(data, "config.json"), JSON.stringify({ ...getDefaultConfig(), executionBackend: "vm", permissionMode: "bypassPermissions", providers: [provider], active: { providerId: provider.id, model: "fixture" } }))
-    const started = await cli(["goal", "make a report", "--install=npm", "--check=npm", "--permission-mode=bypassPermissions"])
+    const started = await cli(["goal", "make a report", "--background", "--install=npm", "--check=npm", "--permission-mode=bypassPermissions"])
     expect(started.code).toBe(0)
     const id = /goal_[a-f0-9-]+/.exec(started.output)?.[0]; expect(id).toBeDefined()
     const db = join(data, "goal", "goals.sqlite"); let result: ReturnType<GoalStore["get"]>

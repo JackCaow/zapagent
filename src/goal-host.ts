@@ -173,7 +173,7 @@ export class LocalGoalHost implements GoalHost {
   private readonly directory: string
   private readonly metadata: string
   private readonly acceptance: JsonAcceptanceStore
-  constructor(private readonly goalId: string) {
+  constructor(private readonly goalId: string, private readonly onEvent?: (event: import("../zapsdk/agent/events.js").AgentEvent, operationId: string) => void) {
     this.directory = goalHome(goalId)
     this.metadata = join(this.directory, "workspace.json")
     this.acceptance = new JsonAcceptanceStore(join(this.directory, "acceptance"))
@@ -186,6 +186,7 @@ export class LocalGoalHost implements GoalHost {
   private getWorkspace(): GoalWorkspace { if (!this.workspace) throw new Error("Goal workspace unavailable"); return this.workspace }
   private phaseHooks(context: GoalOperationContext) {
     return {
+      ...(this.onEvent ? { onEvent: (event: import("../zapsdk/agent/events.js").AgentEvent) => this.onEvent!(event, context.operationId) } : {}),
       onSpawn: (pid: number, mayLaunchSealedProcess: boolean) => {
         if (this.state?.phaseProcess) throw new Error("Previous Goal child process is unresolved")
         this.state!.phaseProcess = { pid, operationId: context.operationId, requiresReceipt: mayLaunchSealedProcess }; this.persist()

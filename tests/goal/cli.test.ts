@@ -50,7 +50,7 @@ for (const { git, machine, denied } of [{ git: false, machine: false, denied: fa
       const provider = createCustomProvider({ name: "Fixture", baseURL: `http://127.0.0.1:${model.port}/v1`, apiKey: "fixture", models: ["fixture"], contextWindow: 128000 })
       await writeFile(join(data, "config.json"), JSON.stringify({ ...getDefaultConfig(), permissionMode: "acceptEdits", providers: [provider], active: { providerId: provider.id, model: "fixture" } }))
       const env = { ZAPCODE_DATA_DIR: data }
-      const start = await processRun(cwd, env, ["goal", "write report and pass tests", ...(!denied ? ["--accept-edits"] : []), ...(git ? ["--strict"] : []), ...(machine ? ["--check=bun"] : [])])
+      const start = await processRun(cwd, env, ["goal", "write report and pass tests", "--background", ...(!denied ? ["--accept-edits"] : []), ...(git ? ["--strict"] : []), ...(machine ? ["--check=bun"] : [])])
       if (machine) {
         expect(start.code).toBe(1)
         expect(start.output).toContain("--check machine verification is currently unavailable")
@@ -129,14 +129,14 @@ it("pauses a real Goal process, preserves budget and safely resumes its interrup
     const provider = createCustomProvider({ name: "Fixture", baseURL: `http://127.0.0.1:${model.port}/v1`, apiKey: "fixture", models: ["fixture"], contextWindow: 128000 })
     await writeFile(join(data, "config.json"), JSON.stringify({ ...getDefaultConfig(), providers: [provider], active: { providerId: provider.id, model: "fixture" } }))
     const env = { ZAPCODE_DATA_DIR: data }; const db = join(data, "goal", "goals.sqlite")
-    const start = await processRun(cwd, env, ["goal", "write result", "--accept-edits"])
+    const start = await processRun(cwd, env, ["goal", "write result", "--background", "--accept-edits"])
     const id = /goal_[a-f0-9-]+/.exec(start.output)?.[0]; expect(id).toBeDefined()
     await workerStarted
     expect((await processRun(cwd, env, ["goal", "pause", id!])).code).toBe(0)
     let paused: ReturnType<GoalStore["get"]>
     for (let i = 0; i < 100; i++) { await new Promise(resolve => setTimeout(resolve, 100)); const store = new GoalStore(db); paused = store.get(id!); store.close(); if (paused?.status === "paused") break }
     expect(paused?.status).toBe("paused"); expect(paused?.inFlight?.phase).toBe("executing")
-    const resume = await processRun(cwd, env, ["goal", "resume", id!]); expect(resume.code).toBe(0)
+    const resume = await processRun(cwd, env, ["goal", "resume", id!, "--background"]); expect(resume.code).toBe(0)
     let completed: ReturnType<GoalStore["get"]>
     for (let i = 0; i < 150; i++) { await new Promise(resolve => setTimeout(resolve, 100)); const store = new GoalStore(db); completed = store.get(id!); store.close(); if (completed && ["completed", "blocked"].includes(completed.status)) break }
     if (completed?.status !== "completed") throw new Error(`Resume: ${completed?.status} ${completed?.stopReason}`)
@@ -178,7 +178,7 @@ it("keeps a real Goal repairing task and final failures until accepted, beyond t
   try {
     const provider = createCustomProvider({ name: "Fixture", baseURL: `http://127.0.0.1:${model.port}/v1`, apiKey: "fixture", models: ["fixture"], contextWindow: 128000 })
     await writeFile(join(data, "config.json"), JSON.stringify({ ...getDefaultConfig(), providers: [provider], active: { providerId: provider.id, model: "fixture" } }))
-    const start = await processRun(cwd, { ZAPCODE_DATA_DIR: data }, ["goal", "Produce the accepted report", "--strict", "--accept-edits"])
+    const start = await processRun(cwd, { ZAPCODE_DATA_DIR: data }, ["goal", "Produce the accepted report", "--background", "--strict", "--accept-edits"])
     expect(start.code).toBe(0)
     const id = /goal_[a-f0-9-]+/.exec(start.output)?.[0]; expect(id).toBeDefined()
     const db = join(data, "goal", "goals.sqlite")

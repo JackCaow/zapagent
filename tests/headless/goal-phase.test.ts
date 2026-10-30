@@ -3,7 +3,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createCustomProvider, getDefaultConfig } from "../../src/config.js"
-import { runGoalMachinePhase, runGoalPhase } from "../../src/headless/goalPhase.js"
+import { runGoalMachinePhase, runGoalPhase, runGoalMachineCommand } from "../../src/headless/goalPhase.js"
 import { GoalBudgetLedger } from "../../zapsdk/goal/budget.js"
 
 it("runs each Goal phase in a fresh cwd, meters real provider/tool calls and restricts verifier tools", async () => {
@@ -41,10 +41,13 @@ it("runs each Goal phase in a fresh cwd, meters real provider/tool calls and res
       sandboxExcludedCommands: ["printf*"], providers: [provider], active: { providerId: provider.id, model: "fixture" } }), { mode: 0o600 })
     const ledgerPath = join(data, "goals.sqlite"), ledger = new GoalBudgetLedger(ledgerPath)
     ledger.create("g", 1, { maxTokens: 500_000, maxModelCalls: 10, maxToolCalls: 10 })
-    const lifecycle: string[] = []
+    const lifecycle: string[] = [], publicEvents: import("../../zapsdk/agent/events.js").AgentEvent[] = []
     const first = await runGoalPhase({ cwd: worker, prompt: "Read reference.txt", goalId: "g", epoch: 1, role: "worker", ledgerPath,
+      onEvent(event) { publicEvents.push(event) },
       onSpawn(pid) { lifecycle.push(`spawn:${pid}`) }, onStopped(pid) { lifecycle.push(`stopped:${pid}`) } })
     expect(first.toolCalls).toBeGreaterThan(0)
+    expect(publicEvents.some(event => event.type === "content_final" && event.kind === "tool_result" && event.toolName === "read_file")).toBe(true)
+    expect(publicEvents.some(event => event.type === "content_delta" && event.kind === "text")).toBe(true)
     expect(lifecycle).toHaveLength(2)
     expect(lifecycle[0]!.replace("spawn:", "")).toBe(lifecycle[1]!.replace("stopped:", ""))
     expect(first.text).toContain("Checked")
@@ -146,3 +149,13 @@ it("runs each Goal phase in a fresh cwd, meters real provider/tool calls and res
     await rm(root, { recursive: true, force: true })
   }
 }, 60_000)
+
+it("displays machine verification calls/results without changing the sealing result", async () => {
+  const events: import("../../zapsdk/agent/events.js").AgentEvent[] = []
+  const result = { success: false, output: "one failing check", error: "exit 1" }
+  expect(await runGoalMachineCommand("npm test", async () => result, event => events.push(event))).toBe(result)
+  expect(events).toHaveLength(2)
+  expect(events[0]).toMatchObject({ type: "content_final", kind: "tool_call", toolName: "bash", arguments: { command: "npm test" } })
+  expect(events[1]).toMatchObject({ type: "content_final", kind: "tool_result", toolName: "bash", result })
+  expect((events[0] as any).id).toBe((events[1] as any).id)
+})

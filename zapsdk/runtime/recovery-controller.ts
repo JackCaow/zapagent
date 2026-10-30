@@ -191,6 +191,7 @@ function leaseFromState(workspace: PersistedWorkspaceState): WorkspaceLease {
     repoPath: workspace.repoPath,
     baseOid: workspace.baseOid,
     batchPath: workspace.batchPath,
+    ...(workspace.sourceLinksHash ? { sourceLinksHash: workspace.sourceLinksHash } : {}),
   };
 }
 

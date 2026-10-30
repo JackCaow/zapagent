@@ -1,11 +1,12 @@
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   copyFile,
   lstat,
   mkdir,
   mkdtemp,
   realpath,
+  readFile,
   readlink,
   rm,
   symlink,
@@ -142,6 +143,8 @@ export class WorkspaceManager {
   private mode: "isolated-git" | "isolated-copy" = "isolated-git";
   private templatePath?: string;
   private baseOid?: string;
+  private sourceLinksHash?: string;
+  private sourceLinks: Record<string, string> = Object.create(null);
   private initializePromise?: Promise<void>;
   private artifacts = new Map<string, AgentArtifact>();
   private leases = new Map<string, WorkspaceLease>();
@@ -233,6 +236,7 @@ export class WorkspaceManager {
       repoPath,
       baseOid: this.baseOid,
       batchPath: this.batchRoot,
+      ...(this.sourceLinksHash ? { sourceLinksHash: this.sourceLinksHash } : {}),
       ...(privateGit ? { privateGit } : {}),
     };
     this.leases.set(lease.workspaceId, lease);
@@ -499,6 +503,19 @@ export class WorkspaceManager {
     this.batchRoot = realBatch;
     this.templatePath = snapshotPath;
     this.baseOid = input.leases[0].baseOid;
+    const sourceLinksHash = input.leases[0].sourceLinksHash;
+    if (input.leases.some(lease => lease.sourceLinksHash !== sourceLinksHash)) throw new Error("Source link baseline identity mismatch");
+    if (copy && sourceLinksHash) {
+      const sourceLinksPath = join(realBatch, "source-links.json");
+      const info = await lstat(sourceLinksPath);
+      if (!info.isFile() || info.isSymbolicLink() || info.size > 16 * 1024 * 1024) throw new Error("Unsafe source link baseline");
+      const bytes = await readFile(sourceLinksPath);
+      if (createHash("sha256").update(bytes).digest("hex") !== sourceLinksHash) throw new Error("Source link baseline was modified");
+      const links = JSON.parse(bytes.toString("utf8"));
+      const baseline = await scanCopyTree(snapshotPath);
+      if (!links || Array.isArray(links) || typeof links !== "object" || Object.entries(links).some(([path, target]) => baseline[path]?.kind !== "symlink" || typeof target !== "string")) throw new Error("Invalid source link baseline");
+      this.sourceLinks = links; this.sourceLinksHash = sourceLinksHash;
+    }
     this.initializePromise = Promise.resolve();
     for (const lease of input.leases) this.leases.set(lease.workspaceId, { ...lease });
     for (const artifact of input.artifacts) this.artifacts.set(artifact.artifactId, { ...artifact });
@@ -523,6 +540,10 @@ export class WorkspaceManager {
   snapshotRepoPath(): string {
     if (!this.templatePath) throw new Error("Workspace snapshot is not initialized");
     return this.templatePath;
+  }
+
+  originalSourceLink(path: string): string | undefined {
+    return Object.hasOwn(this.sourceLinks, path) ? this.sourceLinks[path] : undefined;
   }
 
   rootRepoPath(): string {
@@ -557,6 +578,7 @@ export class WorkspaceManager {
     this.workspaceTempRoot = undefined;
     this.templatePath = undefined;
     this.baseOid = undefined;
+    this.sourceLinksHash = undefined; this.sourceLinks = Object.create(null);
     this.initializePromise = undefined;
     this.artifacts.clear();
     this.leases.clear();
@@ -575,6 +597,7 @@ export class WorkspaceManager {
       this.workspaceTempRoot = undefined;
       this.templatePath = undefined;
       this.baseOid = undefined;
+      this.sourceLinksHash = undefined; this.sourceLinks = Object.create(null);
       this.repoRoot = undefined;
       this.initializePromise = undefined;
       throw error;
@@ -631,9 +654,17 @@ export class WorkspaceManager {
         if (copyTreeOid(before) !== copyTreeOid(after)) throw new Error("Parent workspace changed during child Git capture");
         this.copyWithPrivateGit = { ownerDirectory, snapshotRepository: join(history, "repository.git") };
       }
-      const tree = await scanCopyTree(this.repoRoot, true);
+      const links: Record<string, string> = Object.create(null);
+      const tree = await scanCopyTree(this.repoRoot, true, true, true, undefined, undefined, links);
       await materializeCopyTree(this.repoRoot, this.templatePath, tree);
-      if (copyTreeOid(await scanCopyTree(this.repoRoot, true)) !== copyTreeOid(tree)) throw new Error("Copy workspace changed during snapshot");
+      const afterLinks: Record<string, string> = Object.create(null);
+      if (copyTreeOid(await scanCopyTree(this.repoRoot, true, true, true, undefined, undefined, afterLinks)) !== copyTreeOid(tree)
+        || JSON.stringify(links) !== JSON.stringify(afterLinks)) throw new Error("Copy workspace changed during snapshot");
+      if (Object.keys(links).length) {
+        const json = JSON.stringify(links);
+        await writeFile(join(this.batchRoot!, "source-links.json"), json, { flag: "wx", mode: 0o600 });
+        this.sourceLinks = links; this.sourceLinksHash = createHash("sha256").update(json).digest("hex");
+      }
       this.baseOid = copyTreeOid(tree);
       return;
     }

@@ -134,6 +134,7 @@ export interface PersistedWorkspaceState {
   repoPath?: string;
   baseOid?: string;
   batchPath?: string;
+  sourceLinksHash?: string;
   status: WorkspaceStateStatus;
   acquiredAt: number;
   updatedAt: number;
