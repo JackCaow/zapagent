@@ -51,7 +51,7 @@ function recoverStoppedOwner(store: GoalStore, goal: GoalRecord): GoalRecord {
   } else if (goal.inFlight) throw new Error("Missing Goal process evidence; manual reconciliation required")
   return store.recoverOwner(goal.id, goal.owner.instanceId, true)
 }
-function startRunner(goal: GoalRecord): void {
+export function startGoalBackgroundRunner(goal: GoalRecord): void {
   if (goal.owner) throw new Error("Goal already has an active or unresolved owner")
   if (["completed", "cancelled", "failed"].includes(goal.status)) throw new Error(`Goal is ${goal.status}`)
   const directory = goalHome(goal.id)
@@ -67,10 +67,11 @@ function startRunner(goal: GoalRecord): void {
 }
 
 /** The same command implementation is used by the TUI and the CLI. */
-export function goalCommand(args: string[], cwd: string, currentMode: import("./config.js").PermissionMode = "default", platform: NodeJS.Platform = process.platform, sessionId?: string): string {
+export function goalCommand(args: string[], cwd: string, currentMode: import("./config.js").PermissionMode = "default", platform: NodeJS.Platform = process.platform, sessionId?: string, onForeground?: (goal: GoalRecord) => void): string {
   const action = args[0] ?? ""
   if (!action || action === "help") return [
-    "Usage: /goal <objective> [--artifact] [--strict] [--accept-edits | --permission-mode=MODE] [--check=bun|npm|pytest|go] [--install=npm] [--tokens=N] [--minutes=N] [--model-calls=N] [--tool-calls=N] | status [id] | list | pause [id] | resume [id] | cancel [id] | budget extend [id] --tokens=N --minutes=N",
+    "Usage: /goal <objective> [--background] [--artifact] [--strict] [--accept-edits | --permission-mode=MODE] [--check=bun|npm|pytest|go] [--install=npm] [--tokens=N] [--minutes=N] [--model-calls=N] [--tool-calls=N] | status [id] | list | pause [id] | resume [id] | cancel [id] | budget extend [id] --tokens=N --minutes=N",
+    "Goals run in the current session by default. Use --background to detach, or /goal background to hand off at a safe boundary.",
     "Goals run until independent acceptance and delivery, with no default token, call or time limit. Use pause or cancel to interrupt.",
     "Goal execution is not yet supported on Windows; --check requires a VM backend with verified process sealing.",
     "Git Goal currently supports macOS repository roots with an existing commit and ordinary SHA-1 metadata; linked worktrees, alternates, shallow and SHA-256 repositories are unavailable.",
@@ -89,6 +90,8 @@ export function goalCommand(args: string[], cwd: string, currentMode: import("./
   if (!control && installArgs.length && !machineCheckSupported(cwd)) throw new Error("Goal --install=npm requires a VM backend with verified process sealing.")
   if (!control && checkArgs.length && !machineCheckSupported(cwd)) throw new Error("Goal --check machine verification is currently unavailable: process-tree sealing cannot be verified.")
   if (!control && (checkArgs.length > 1 || checkArgs.some(arg => !/^--check=(bun|npm|pytest|go)$/.test(arg)))) throw new Error("Invalid Goal machine check; use --check=bun, npm, pytest or go")
+  const background = args.includes("--background")
+  if (args.filter(arg => arg === "--background").length > 1 || args.some(arg => arg.startsWith("--background="))) throw new Error("Invalid Goal background flag")
   const limits: GoalBudgetLimits = { strict: args.includes("--strict") }
   const limitKeys = { tokens: "maxTokens", "model-calls": "maxModelCalls", "provider-attempts": "maxProviderAttempts", "tool-calls": "maxToolCalls", minutes: "deadlineAt" } as const
   const limitArgs = !control ? args.filter(arg => /^--(?:tokens|model-calls|provider-attempts|tool-calls|minutes)(?:=|$)/.test(arg)) : []
@@ -103,6 +106,8 @@ export function goalCommand(args: string[], cwd: string, currentMode: import("./
     limits[key] = limit
   }
   if (limits.maxTokens !== undefined) limits.reservedTokens = Math.min(50_000, Math.floor(limits.maxTokens * 0.05))
+  if ((!control || action === "resume") && !background && !onForeground) throw new Error("A foreground Goal launcher is required")
+  const launch = (goal: GoalRecord) => background ? startGoalBackgroundRunner(goal) : onForeground!(goal)
   const store = new GoalStore(goalDatabasePath(), { requireLedger: true })
   try {
     if (action === "list") {
@@ -150,13 +155,13 @@ export function goalCommand(args: string[], cwd: string, currentMode: import("./
       if ((goal.machineCheck || goal.dependencyInstall) && !machineCheckSupported(cwd)) throw new Error("Goal VM execution is currently unavailable: process-tree sealing cannot be verified.")
       const stopped = recoverStoppedOwner(store, goal)
       if (sessionId && stopped.sessionId === sessionId) store.pauseForInput(cwd, sessionId)
-      startRunner(store.prepareResume(stopped.id))
+      launch(store.prepareResume(stopped.id))
       return `Goal ${goal.id} resumed; budget and task state retained.`
     }
     const permissionMode = args.includes("--accept-edits") ? "acceptEdits" : modeArgs.length ? modeArgs[0]!.slice("--permission-mode=".length) as import("./config.js").PermissionMode : currentMode
     const strict = args.includes("--strict")
     const deliveryPolicy = args.includes("--artifact") ? "artifact" : "workspace"
-    const objective = args.filter(arg => arg !== "--strict" && arg !== "--artifact" && arg !== "--accept-edits" && !arg.startsWith("--permission-mode=") && !arg.startsWith("--check=") && !arg.startsWith("--install=") && !limitArgs.includes(arg)).join(" ").trim()
+    const objective = args.filter(arg => arg !== "--background" && arg !== "--strict" && arg !== "--artifact" && arg !== "--accept-edits" && !arg.startsWith("--permission-mode=") && !arg.startsWith("--check=") && !arg.startsWith("--install=") && !limitArgs.includes(arg)).join(" ").trim()
     if (!objective) throw new Error("Goal objective is required")
     const machineCheck = checkArgs[0]?.slice("--check=".length) as "bun" | "npm" | "pytest" | "go" | undefined
     if (sessionId) store.pauseForInput(cwd, sessionId)
@@ -167,7 +172,7 @@ export function goalCommand(args: string[], cwd: string, currentMode: import("./
       // implicit cap may turn an unfinished objective into a stopped Goal.
       ledger.create(goal.id, 0, limits)
     } finally { ledger.close() }
-    startRunner(goal)
-    return `Goal ${goal.id} started (${limitArgs.length ? "explicit user limits" : "no default usage or time limit"}; ${strict ? "strict accounting" : "observed usage; external tool usage may be unknown"}). Use /goal status ${goal.id} to inspect progress.`
+    launch(goal)
+    return `Goal ${goal.id} started${background ? " in background" : " in this session"} (${limitArgs.length ? "explicit user limits" : "no default usage or time limit"}; ${strict ? "strict accounting" : "observed usage; external tool usage may be unknown"}). Use /goal status ${goal.id} to inspect progress.`
   } finally { store.close() }
 }

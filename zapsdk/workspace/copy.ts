@@ -105,10 +105,26 @@ async function fileEntry(path: string, mode: number): Promise<CopyEntry> {
   } finally { await handle.close(); }
 }
 
+/** Find the source-root spelling without flattening any link inside it. */
+async function sourceLinkPath(root: string, canonicalRoot: string, target: string): Promise<string> {
+  for (const spelling of [resolve(root), canonicalRoot]) {
+    if (target === spelling) return "";
+    if (target.startsWith(spelling + sep)) return target.slice(spelling.length + 1);
+  }
+  // A host prefix such as /tmp may itself alias /private/tmp. Resolve only
+  // ancestors that denote the root, preserving the target's internal chain.
+  for (let parent = target; ; parent = dirname(parent)) {
+    if (await realpath(parent) === canonicalRoot) return target === parent ? "" : target.slice(parent.length + 1);
+    if (dirname(parent) === parent) break;
+  }
+  throw new Error("Absolute symlink does not name this source workspace");
+}
+
 /** Never follows directory links. Hashing is streamed, including large inputs.
  * source=true excludes private/control files from the initial snapshot only;
  * introducing one in a child is rejected rather than silently losing edits. */
-export async function scanCopyTree(root: string, source = false, validateLinks = true, omitEnvironments = source, excludedEnvironments?: Set<string>, privateGit?: PrivateGitBinding): Promise<CopyTree> {
+export async function scanCopyTree(root: string, source = false, validateLinks = true, omitEnvironments = source, excludedEnvironments?: Set<string>, privateGit?: PrivateGitBinding, originalLinks?: Record<string, string>): Promise<CopyTree> {
+  const canonicalRoot = await realpath(root);
   const info = await lstat(root);
   if (!info.isDirectory() || info.isSymbolicLink()) throw new Error(`Unsafe copy workspace root: ${root}`);
   const validatePrivateGit = async () => {
@@ -134,15 +150,24 @@ export async function scanCopyTree(root: string, source = false, validateLinks =
       const full = join(root, path);
       const stat = await lstat(full);
       if (stat.isSymbolicLink()) {
-        const target = await readlink(full);
-        if (validateLinks && (isAbsolute(target) || !isWithin(root, resolve(dirname(full), target)))) {
+        let target = await readlink(full);
+        if (originalLinks) originalLinks[path] = target;
+        if (validateLinks && (!source && isAbsolute(target) || !isAbsolute(target) && !isWithin(root, resolve(dirname(full), target)))) {
           throw new Error(`Symlink escapes copy workspace: ${path}`);
         }
         // Reject dangling/cyclic links, and links which escape indirectly.
         if (validateLinks) {
           const resolved = await realpath(full);
-          if (!isWithin(root, resolved) || excludedCopyPath(relative(root, resolved).split(sep).join("/"))) {
+          if (!isWithin(canonicalRoot, resolved) || excludedCopyPath(relative(canonicalRoot, resolved).split(sep).join("/"))) {
             throw new Error(`Unsafe copy workspace symlink: ${path}`);
+          }
+          // Source links may name a host path inside the same tree. Relocate
+          // only that verified target; snapshots must never point at the host.
+          if (source && isAbsolute(target)) {
+            const sourcePath = await sourceLinkPath(root, canonicalRoot, target);
+            if (excludedCopyPath(sourcePath)) throw new Error(`Unsafe copy workspace symlink: ${path}`);
+            const depth = dirname(path) === "." ? 0 : dirname(path).split("/").length;
+            target = "../".repeat(depth) + (sourcePath || ".");
           }
         }
         tree[path] = { kind: "symlink", target };

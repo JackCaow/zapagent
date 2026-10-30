@@ -40,7 +40,7 @@ export const BUILTIN_COMMANDS: SlashEntry[] = [
   { name: "/review",      desc: "Review code for bugs & security" },
   { name: "/commit",      desc: "Stage changes and create a commit" },
   { name: "/init",        desc: "Generate AGENTS.md for this project" },
-  { name: "/goal",        desc: "Verified Goal workflow · status | pause | resume | cancel | budget" },
+  { name: "/goal",        desc: "Goal in this session · --background | status | pause | resume | cancel" },
   { name: "/supertask",   desc: "Long-horizon orchestrated task · resume | abort | status | watch" },
   { name: "/exit",        desc: "Quit zapAgent" },
 ]

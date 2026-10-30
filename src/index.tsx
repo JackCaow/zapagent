@@ -112,10 +112,25 @@ if (args[0] === "--goal-runner") {
   process.exit(await runGoalRunner(args[1]))
 }
 if (args[0] === "goal") {
-  const [{ goalCommand }, { loadAppConfig }, { getAppDataDir }] = await Promise.all([
-    import("./goal-command.js"), import("./config.js"), import("../zapsdk/utils/platform.js"),
+  const [{ executeGoalCommand }, { loadAppConfig }, { getAppDataDir }] = await Promise.all([
+    import("./goal-session.js"), import("./config.js"), import("../zapsdk/utils/platform.js"),
   ])
-  try { process.stdout.write(goalCommand(args.slice(1), process.cwd(), loadAppConfig(join(getAppDataDir(), "config.json")).permissionMode) + "\n"); process.exit(0) }
+  const displayed = new Set<string>()
+  let lastPhase = ""
+  try { process.exit(await executeGoalCommand(args.slice(1), process.cwd(), {
+    permissionMode: loadAppConfig(join(getAppDataDir(), "config.json")).permissionMode,
+    onMessage: text => process.stdout.write(text + "\n"),
+    onState: goal => { const phase = `${goal.status}/${goal.phase ?? "preparing"}`; if (phase !== lastPhase) { lastPhase = phase; process.stdout.write(`\nGoal ${phase} · ${goal.tasks.filter(t => t.status === "passed").length}/${goal.tasks.length} tasks\n`) } },
+    onEvent: (event, scope) => {
+      if ((event.type === "content_delta" || event.type === "content_final") && (event.kind === "text" || event.kind === "thinking")) {
+        const key = `${scope}:${event.id}`
+        if (event.type === "content_delta") { displayed.add(key); process.stdout.write(event.text) }
+        else { if (!displayed.has(key)) process.stdout.write(event.text); process.stdout.write("\n") }
+      } else if (event.type === "content_final" && event.kind === "tool_call") process.stdout.write(`\n${event.path?.length ? "Child " : ""}Tool ${event.toolName}: ${JSON.stringify(event.arguments)}\n`)
+      else if (event.type === "content_final" && event.kind === "tool_result") process.stdout.write(`Tool ${event.toolName}: ${event.result.success ? "ok" : "failed"} ${event.result.output ?? event.result.error ?? ""}\n`)
+      else if (event.type === "error") process.stderr.write(event.error + "\n")
+    },
+  })) }
   catch (error) { process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`); process.exit(1) }
 }
 
@@ -409,6 +424,7 @@ if (process.stdout.isTTY) {
 // app-side hooks. macOS Cmd-C / pbpaste continue to work as expected.
 
 await inst.waitUntilExit()
+await (await import("./goal-session.js")).closeForegroundGoals()
 const restart = (await import("./self-update.js")).takeUpdateRestart()
 if (restart) {
   await (await import("./update-lifecycle.js")).prepareUpdateRestart({

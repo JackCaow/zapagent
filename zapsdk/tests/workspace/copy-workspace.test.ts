@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -315,6 +315,134 @@ describe("non-Git writing workspaces", () => {
     expect(readFileSync(join(root, "a"), "utf8")).toBe("base-a");
   });
 
+  it("relocates internal absolute file and directory links without changing source links", async () => {
+    if (process.platform === "win32") return;
+    const { root, manager } = setup();
+    mkdirSync(join(root, "dir")); writeFileSync(join(root, "dir", "item"), "original");
+    symlinkSync(join(root, "a"), join(root, "absolute"));
+    symlinkSync(join(root, "dir"), join(root, "directory-link"));
+    const lease = await manager.acquire("relocated", true);
+    expect(readlinkSync(join(lease.path, "absolute"))).toBe("a");
+    expect(readlinkSync(join(lease.path, "directory-link"))).toBe("dir");
+    const unchanged = (await manager.finalize(lease))!;
+    expect(unchanged.changedPaths).toEqual([]);
+    expect((await new MergeCoordinator(manager).merge([unchanged.artifactId])).success).toBe(true);
+    expect(readlinkSync(join(root, "absolute"))).toBe(join(root, "a"));
+    const writer = await manager.acquire("edit-target", true);
+    writeFileSync(join(writer.path, "directory-link", "item"), "isolated");
+    expect(readFileSync(join(root, "dir", "item"), "utf8")).toBe("original");
+    const changed = (await manager.finalize(writer))!;
+    expect((await new MergeCoordinator(manager).merge([changed.artifactId])).success).toBe(true);
+    expect(readFileSync(join(root, "dir", "item"), "utf8")).toBe("isolated");
+    expect(readlinkSync(join(root, "directory-link"))).toBe(join(root, "dir"));
+  });
+
+  for (const hydrate of [false, true]) {
+    it(`preserves user link representation edits on overwritten paths (hydrate=${hydrate})`, async () => {
+      if (process.platform === "win32") return;
+      const { root, manager } = setup();
+      symlinkSync(join(root, "a"), join(root, "link"));
+      const lease = await manager.acquire("link-user-drift", true);
+      rmSync(join(lease.path, "link")); symlinkSync("b", join(lease.path, "link"));
+      const artifact = (await manager.finalize(lease))!;
+      rmSync(join(root, "link")); symlinkSync("a", join(root, "link"));
+      let active = manager;
+      if (hydrate) { active = new WorkspaceManager({ root }); managers.push(active); await active.hydrate({ leases: [lease], artifacts: [artifact] }); }
+      const result = await new MergeCoordinator(active).merge([artifact.artifactId]);
+      expect(result.success).toBe(false);
+      expect(result.conflicts).toContain("link");
+      expect(readlinkSync(join(root, "link"))).toBe("a");
+    });
+  }
+
+  it("does not block a disjoint edit when the user changes an unrelated link representation", async () => {
+    if (process.platform === "win32") return;
+    const { root, manager } = setup();
+    symlinkSync(join(root, "a"), join(root, "link"));
+    const lease = await manager.acquire("disjoint-link-drift", true);
+    writeFileSync(join(lease.path, "b"), "agent-b");
+    const artifact = (await manager.finalize(lease))!;
+    rmSync(join(root, "link")); symlinkSync("a", join(root, "link"));
+    expect((await new MergeCoordinator(manager).merge([artifact.artifactId])).success).toBe(true);
+    expect(readlinkSync(join(root, "link"))).toBe("a");
+    expect(readFileSync(join(root, "b"), "utf8")).toBe("agent-b");
+  });
+
+  it("preserves the raw-link baseline through runtime state recovery", async () => {
+    if (process.platform === "win32") return;
+    const { root } = setup();
+    symlinkSync(join(root, "a"), join(root, "link"));
+    const store = new InMemoryRuntimeStateStore();
+    const tracker = new RuntimeStateTracker({ threadId: "link-state-recovery", workspaceRoot: root, store });
+    await tracker.acquireOwnership();
+    const manager = new WorkspaceManager({ root, owner: { threadId: "link-state-recovery", instanceId: "before", pid: process.pid }, onLifecycle: event => tracker.recordWorkspaceEvent(event) });
+    managers.push(manager);
+    const lease = await manager.acquire("recover-link", true);
+    rmSync(join(lease.path, "link")); symlinkSync("b", join(lease.path, "link"));
+    const artifact = (await manager.finalize(lease))!;
+    await tracker.releaseOwnership();
+    const recovery = new RuntimeRecoveryController({ threadId: "link-state-recovery", workspaceRoot: root, store });
+    const result = await recovery.resumeMerge({ artifactIds: [artifact.artifactId] });
+    expect(result.success).toBe(true);
+    expect(readlinkSync(join(root, "link"))).toBe("b");
+    expect(lease.sourceLinksHash).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("rejects a modified persisted raw-link baseline during hydration", async () => {
+    if (process.platform === "win32") return;
+    const { root, manager } = setup();
+    symlinkSync(join(root, "a"), join(root, "link"));
+    const lease = await manager.acquire("raw-links-tamper", true);
+    writeFileSync(join(lease.batchPath!, "source-links.json"), "{}");
+    await expect(new WorkspaceManager({ root }).hydrate({ leases: [lease], artifacts: [] })).rejects.toThrow("baseline was modified");
+  });
+
+  it("preserves internal link-chain semantics through verification and delivery", async () => {
+    if (process.platform === "win32") return;
+    const { root, manager } = setup();
+    symlinkSync("a", join(root, "alias")); symlinkSync(join(root, "alias"), join(root, "absolute"));
+    const lease = await manager.acquire("link-chain", true);
+    expect(readlinkSync(join(lease.path, "absolute"))).toBe("alias");
+    rmSync(join(lease.path, "alias")); symlinkSync("b", join(lease.path, "alias"));
+    expect(readFileSync(join(lease.path, "absolute"), "utf8")).toBe("base-b");
+    const artifact = (await manager.finalize(lease))!;
+    expect((await new MergeCoordinator(manager).merge([artifact.artifactId])).success).toBe(true);
+    expect(readFileSync(join(root, "absolute"), "utf8")).toBe("base-b");
+    expect(readlinkSync(join(root, "absolute"))).toBe(join(root, "alias"));
+  });
+
+  for (const change of ["modify", "delete", "replace-parent"] as const) {
+    it(`delivers ${change} of a source absolute link using original root rollback identities`, async () => {
+      if (process.platform === "win32") return;
+      const { root, manager } = setup();
+      mkdirSync(join(root, "dir")); symlinkSync(join(root, "a"), join(root, "dir", "link"));
+      const lease = await manager.acquire(change, true);
+      if (change === "replace-parent") { rmSync(join(lease.path, "dir"), { recursive: true }); writeFileSync(join(lease.path, "dir"), "new"); }
+      else { rmSync(join(lease.path, "dir", "link")); if (change === "modify") symlinkSync("../b", join(lease.path, "dir", "link")); }
+      const artifact = (await manager.finalize(lease))!;
+      const result = await new MergeCoordinator(manager).merge([artifact.artifactId]);
+      expect(result.success).toBe(true);
+      if (change === "modify") expect(readlinkSync(join(root, "dir", "link"))).toBe("../b");
+      if (change === "delete") expect(existsSync(join(root, "dir", "link"))).toBe(false);
+      if (change === "replace-parent") expect(readFileSync(join(root, "dir"), "utf8")).toBe("new");
+    });
+  }
+
+  for (const kind of ["external", "secret", "control", "dangling", "cycle", "indirect-external"] as const) {
+    it(`still rejects unsafe source links: ${kind}`, async () => {
+      if (process.platform === "win32") return;
+      const { root, manager } = setup();
+      let target = process.execPath;
+      if (kind === "secret") { target = join(root, ".env"); writeFileSync(target, "private"); }
+      if (kind === "control") { mkdirSync(join(root, ".git")); target = join(root, ".git", "config"); writeFileSync(target, "private"); }
+      if (kind === "dangling") target = join(root, "missing");
+      if (kind === "cycle") target = join(root, "bad");
+      if (kind === "indirect-external") { symlinkSync(process.execPath, join(root, "alias")); target = join(root, "alias"); }
+      symlinkSync(target, join(root, "bad"));
+      await expect(manager.acquire(kind, true)).rejects.toThrow();
+    });
+  }
+
   it("supports safe internal symlinks and rejects escape links", async () => {
     if (process.platform === "win32") return;
     const { root, manager } = setup();
@@ -386,6 +514,26 @@ describe("non-Git writing workspaces", () => {
     renameSync(join(realRoot, "a"), join(transaction, "old-0"));
     cpSync(join(manager.copyArtifactPath(artifact), "a"), join(realRoot, "a"));
     return { root, manager, lease, artifact, transaction, journal };
+  }
+
+  for (const entry of ["link", "parent"] as const) {
+    it(`restores original absolute link bytes after interrupted ${entry} delivery`, async () => {
+      if (process.platform === "win32") return;
+      const { root, manager } = setup();
+      mkdirSync(join(root, "dir")); symlinkSync(join(root, "a"), join(root, "dir", "link"));
+      const lease = await manager.acquire("rollback-absolute", true);
+      const realRoot = manager.rootRepoPath(), path = entry === "link" ? "dir/link" : "dir";
+      const target = join(realRoot, path), transaction = join(realRoot, `.zap-copy-merge-${randomUUID()}`);
+      const before = await operationOid(target, false);
+      mkdirSync(transaction);
+      renameSync(target, join(transaction, "old-0"));
+      if (entry === "link") symlinkSync("../b", target); else writeFileSync(target, "replacement");
+      const after = await operationOid(target, false);
+      await writeCopyMergeJournal(lease.batchPath!, { version: 1, root: realRoot, transaction, artifactIds: ["test"], state: "applying", operations: [{ path, modeOnly: false, before, after }] });
+      await recoverCopyMerge(realRoot, lease.batchPath!);
+      expect(readlinkSync(join(root, "dir", "link"))).toBe(join(root, "a"));
+      expect(existsSync(transaction)).toBe(false);
+    });
   }
 
   it("rolls back an interrupted install and retries the merge through a hydrated manager", async () => {

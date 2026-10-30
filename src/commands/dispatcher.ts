@@ -17,7 +17,7 @@ import { resolveActiveContextLimits } from "../context-budget.js"
 import type { CheckpointManager } from "../../zapsdk/checkpoint/index.js"
 import { conversation, autoMemory } from "../singletons.js"
 import { dispatchMCPCommand } from "./mcp.js"
-import { goalCommand } from "../goal-command.js"
+import { executeGoalCommand } from "../goal-session.js"
 import {
   getCurrentSessionId,
   lastOutputPath,
@@ -105,6 +105,7 @@ export interface ToastOptions {
 
 export interface DispatchSlashCommandDeps {
   exit: () => void
+  runGoalCommand?: (args: string[]) => Promise<number>
   bumpTranscript: () => void
   setLogs: (logs: LogEntry[]) => void
   setTodos: (todos: Todo[]) => void
@@ -612,10 +613,15 @@ export function dispatchSlashCommand(
     case "goal": {
       const raw = cmd.value?.trim() ?? ""
       const parts = raw ? raw.split(/\s+/) : []
-      if (parts.length && !["status", "watch", "list", "pause", "resume", "cancel", "budget", "help"].includes(parts[0]!) && !precheckProvider(deps)) return true
-      try { deps.addLog("system", goalCommand(parts, process.cwd(), deps.configRef.current.permissionMode, process.platform, getCurrentSessionId())) }
+      if (parts.length && !["status", "watch", "list", "pause", "resume", "cancel", "background", "budget", "help"].includes(parts[0]!) && !precheckProvider(deps)) return true
+      return (async () => {
+      try {
+        if (deps.runGoalCommand) await deps.runGoalCommand(parts)
+        else await executeGoalCommand(parts, process.cwd(), { permissionMode: deps.configRef.current.permissionMode, sessionId: getCurrentSessionId(), onMessage: text => deps.addLog("system", text) })
+      }
       catch (error) { deps.addLog("error", error instanceof Error ? error.message : String(error)) }
       return true
+      })()
     }
 
     case "supertask": {

@@ -47,6 +47,15 @@ export class GoalPhaseSealTracker {
   assertSealed(): void { if (this.unsealed || this.pendingMutations.size) throw new Error("GOAL_SEAL_UNCONFIRMED") }
 }
 
+/** Public display events never stand in for the independent sealing result. */
+export async function runGoalMachineCommand(command: string, execute: () => Promise<ToolResult>, onEvent?: (event: AgentEvent) => void): Promise<ToolResult> {
+  const id = `machine-${randomUUID()}`
+  onEvent?.({ type: "content_final", kind: "tool_call", id, step: 1, toolName: "bash", arguments: { command } })
+  const result = await execute()
+  onEvent?.({ type: "content_final", kind: "tool_result", id, step: 1, toolName: "bash", result })
+  return result
+}
+
 /** These local tools do not launch opaque model requests. */
 const GOAL_TOOLS = new Set([
   "read_file", "write_file", "edit_file", "multi_edit", "delete_file", "move_file",
@@ -70,6 +79,8 @@ export interface GoalPhaseInput {
   privateGitOwnerDirectory?: string
   permissionMode?: PermissionMode
   signal?: AbortSignal
+  /** Guarded public runtime events; never a source of process-seal receipts. */
+  onEvent?: (event: AgentEvent) => void
   machineCheck?: "bun" | "npm" | "pytest" | "go"
   dependencyInstall?: "npm"
   /** Host must durably record ownership synchronously before input is sent. */
@@ -78,13 +89,14 @@ export interface GoalPhaseInput {
   onStopped?: (pid: number) => void
 }
 
-type WorkerInput = Omit<GoalPhaseInput, "signal" | "onSpawn" | "onStopped"> & { allowSealedShell?: boolean }
+type WorkerInput = Omit<GoalPhaseInput, "signal" | "onSpawn" | "onStopped" | "onEvent"> & { allowSealedShell?: boolean; streamEvents?: boolean }
 type WorkerResult = { type: "result"; summary: RunSummary; exitCode: number; processSealed: true; toolCalls: number; failureCode?: string; dependencyHash?: string } | { type: "machine"; result: ToolResult } | { type: "fatal"; message: string; code: string }
 
 /** Check only concrete existing directories. A Host-owned ledger must not sit
  * underneath a model-writable workspace. */
 function validateInput(input: WorkerInput): void {
   if (!input || typeof input !== "object" || !isAbsolute(input.cwd) || !isAbsolute(input.ledgerPath)
+    || input.streamEvents !== undefined && typeof input.streamEvents !== "boolean"
     || typeof input.prompt !== "string" || !input.prompt.trim() || input.prompt.length > 1024 * 1024
     || typeof input.goalId !== "string" || !input.goalId || !Number.isSafeInteger(input.epoch) || input.epoch < 0
     || !["planner", "worker", "verifier", "repair", "maintenance", "finalization"].includes(input.role)
@@ -107,7 +119,7 @@ function validateInput(input: WorkerInput): void {
 /** Execute one phase in a fresh process. The process cwd is established before
  * importing the headless Runtime's cwd-bound singleton modules. */
 async function runGoalPhaseProcess(input: GoalPhaseInput): Promise<WorkerResult> {
-  const { signal, onSpawn, onStopped, ...workerInput } = input
+  const { signal, onSpawn, onStopped, onEvent, ...workerInput } = input
   validateInput(workerInput)
   signal?.throwIfAborted()
   // Decide before recording ownership and sending the worker any input. A
@@ -130,7 +142,7 @@ async function runGoalPhaseProcess(input: GoalPhaseInput): Promise<WorkerResult>
     stdio: ["pipe", "pipe", "pipe"],
     env: { ...safeEnvironment, PATH: "/usr/bin:/bin:/usr/sbin:/sbin", ZAPCODE_DEVTOOLS_PORT: "", ZAPCODE_HOST_PROTOCOL_PORT: "" },
   })
-  let output = "", cancelled = false, spawnRecorded = false, protocolError: Error | undefined, spawnError: unknown
+  let output = "", resultOutput: string | undefined, cancelled = false, spawnRecorded = false, protocolError: Error | undefined, spawnError: unknown
   let killTimer: ReturnType<typeof setTimeout> | undefined
   let pipeTimer: ReturnType<typeof setTimeout> | undefined
   const killGroup = (signalName: NodeJS.Signals) => {
@@ -165,6 +177,21 @@ async function runGoalPhaseProcess(input: GoalPhaseInput): Promise<WorkerResult>
   child.stdout.setEncoding("utf8")
   child.stdout.on("data", (chunk: string) => {
     output += chunk
+    if (onEvent) {
+      let newline: number
+      while ((newline = output.indexOf("\n")) >= 0 && !protocolError) {
+        const line = output.slice(0, newline); output = output.slice(newline + 1)
+        if (!line.trim()) continue
+        try {
+          if (Buffer.byteLength(line) > 16 * 1024 * 1024) throw new Error("Goal phase output exceeds protocol limit")
+          const frame = JSON.parse(line)
+          if (frame.type === "event" && frame.event && typeof frame.event.type === "string" && !resultOutput) {
+            onEvent(frame.event)
+          } else if (["result", "machine", "fatal"].includes(frame.type) && !resultOutput) resultOutput = line
+          else throw new Error("Invalid Goal phase stream frame")
+        } catch (error) { protocolError = error instanceof Error ? error : new Error("Invalid Goal phase stream"); abort() }
+      }
+    }
     if (Buffer.byteLength(output) > 16 * 1024 * 1024 && !protocolError) {
       protocolError = new Error("Goal phase output exceeds protocol limit")
       abort()
@@ -178,7 +205,7 @@ async function runGoalPhaseProcess(input: GoalPhaseInput): Promise<WorkerResult>
       if (!child.pid) throw new Error("Goal phase worker has no pid")
       onSpawn?.(child.pid, allowSealedShell)
       spawnRecorded = true
-      child.stdin.end(JSON.stringify({ ...workerInput, allowSealedShell }))
+      child.stdin.end(JSON.stringify({ ...workerInput, allowSealedShell, ...(onEvent ? { streamEvents: true } : {}) }))
     } catch (error) {
       spawnError = error
       abort()
@@ -198,8 +225,9 @@ async function runGoalPhaseProcess(input: GoalPhaseInput): Promise<WorkerResult>
     if (spawnError) throw spawnError
     if (protocolError) throw protocolError
     if (cancelled) throw new Error("GOAL_PHASE_CANCELLED")
+    if (onEvent && resultOutput && output.trim()) throw new Error("Invalid trailing Goal phase output")
     let response: WorkerResult
-    try { response = JSON.parse(output) as WorkerResult } catch { throw new Error(`Goal phase process returned invalid output (exit ${exitCode})`) }
+    try { response = JSON.parse(resultOutput ?? output) as WorkerResult } catch { throw new Error(`Goal phase process returned invalid output (exit ${exitCode})`) }
     if (response.type === "fatal") throw new GoalPhaseError(response.code ?? goalPhaseFailureCode(response.message))
     if (response.type === "machine") {
       if (!input.machineCheck || exitCode !== 0 || response.result.runtime?.processSeal?.state !== "sealed") throw new Error("GOAL_SEAL_UNCONFIRMED")
@@ -287,9 +315,9 @@ export async function runGoalPhaseWorker(): Promise<number> {
         const executor = new ToolExecutor(registry, { cwd: input.cwd, onApproval: async () => true,
           executionBroker: requireProcessSealing(environment.broker, () => { unsealed = true }) })
         const command = { bun: "bun test", npm: "npm test", pytest: "python3 -m pytest", go: "go test ./..." }[input.machineCheck]
-        const result = await executor.execute("bash", { command })
+        const result = await runGoalMachineCommand(command, () => executor.execute("bash", { command }), input.streamEvents ? event => { process.stdout.write(JSON.stringify({ type: "event", event }) + "\n") } : undefined)
         if (unsealed || result.runtime?.processSeal?.state !== "sealed") throw new Error("GOAL_SEAL_UNCONFIRMED")
-        process.stdout.write(JSON.stringify({ type: "machine", result } satisfies WorkerResult))
+        process.stdout.write(JSON.stringify({ type: "machine", result } satisfies WorkerResult) + "\n")
         return 0
       }
       const mode = input.permissionMode ?? config.permissionMode
@@ -320,6 +348,7 @@ export async function runGoalPhaseWorker(): Promise<number> {
           if (event.type === "content_final" && event.kind === "tool_call") toolCalls++
           if (event.type === "error") runtimeError = event.error
           sealTracker.observe(event, permitted("bash"))
+          if (input.streamEvents) process.stdout.write(JSON.stringify({ type: "event", event }) + "\n")
         }, progress() {},
         finalize(value) { summary = value },
         failure(value) { failure = value },
@@ -369,12 +398,12 @@ export async function runGoalPhaseWorker(): Promise<number> {
       if (unavailableTool) throw new Error("GOAL_UNMETERED_TOOL_UNAVAILABLE")
       if (!summary) throw new Error(failure?.code ?? `Headless phase failed (${exitCode})`)
       process.stdout.write(JSON.stringify({ type: "result", summary, exitCode, processSealed: true, toolCalls,
-        ...(exitCode !== 0 ? { failureCode: goalPhaseFailureCode(runtimeError || summary.error || summary.outcome?.execution.error?.code || "") } : {}), dependencyHash: dependencyProof?.dependencyHash } satisfies WorkerResult))
+        ...(exitCode !== 0 ? { failureCode: goalPhaseFailureCode(runtimeError || summary.error || summary.outcome?.execution.error?.code || "") } : {}), dependencyHash: dependencyProof?.dependencyHash } satisfies WorkerResult) + "\n")
       return exitCode
     } finally { ledger.close() }
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown Goal phase failure"
-    process.stdout.write(JSON.stringify({ type: "fatal", message: goalPhaseFailureCode(message), code: goalPhaseFailureCode(message) } satisfies WorkerResult))
+    process.stdout.write(JSON.stringify({ type: "fatal", message: goalPhaseFailureCode(message), code: goalPhaseFailureCode(message) } satisfies WorkerResult) + "\n")
     return 2
   }
 }

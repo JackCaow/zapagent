@@ -195,3 +195,35 @@ describe("rewind owns queue delivery until its dialog closes", () => {
     })
   }
 })
+
+for (const action of ["status", "pause", "cancel", "background"]) {
+  it(`dispatches Goal ${action} immediately while the normal turn queue is busy`, () => {
+    const directory = mkdtempSync(join(tmpdir(), "zap-goal-control-"))
+    const script = `
+      import { mock } from "bun:test";
+      import * as react from "react";
+      mock.module("react", () => ({ ...react, useRef: value => ({ current: value }), useCallback: fn => fn, useEffect: () => {} }));
+      mock.module("./src/ui/prompt.tsx", () => ({ pushHistory() {} }));
+      mock.module("./src/singletons.ts", () => ({ getMCPManager: () => undefined }));
+      const { useTurnDispatcher } = await import("./src/hooks/useTurnDispatcher.ts");
+      const { getMessageQueue } = await import("./src/queue/inputQueue.ts");
+      const queue = getMessageQueue(), commands = [];
+      queue.enqueue({text:"waiting ordinary message",displayForm:"waiting ordinary message"});
+      let input = "/goal " + process.env.GOAL_CONTROL;
+      const options = { isRunning: true, inputQueue: queue.getSnapshot(), systemInboxSize: 0,
+        addLog() {}, addToast() {}, precheckProvider: () => false,
+        dispatchCommand: async text => { commands.push(text); return true; }, dispatchUserTurn: async () => { throw Error("Must remain queued"); },
+        slashOpen: false, slashEntries: [], slashIdx: 0, expandPastes: x => x,
+        pasteStoreRef: {current:new Map()}, pasteCounterRef:{current:0}, imageCounterRef:{current:0}, attachImageWithPlaceholder() {},
+        setInputValue: next => {input=typeof next==="function"?next(input):next}, pendingImages:[], setPendingImages() {}
+      };
+      await useTurnDispatcher(options).handleSubmit(input);
+      console.log(JSON.stringify({commands,input,queue:queue.getSnapshot().map(x=>x.text)}));
+    `
+    try {
+      const child = spawnSync(process.execPath, ["-e", script], { cwd: process.cwd(), encoding: "utf8", env: { ...process.env, ZAPCODE_DATA_DIR: directory, GOAL_CONTROL: action } })
+      if (child.status !== 0) throw new Error(child.stderr)
+      expect(JSON.parse(child.stdout)).toEqual({ commands: [`/goal ${action}`], input: "", queue: ["waiting ordinary message"] })
+    } finally { rmSync(directory, { recursive: true, force: true }) }
+  })
+}

@@ -99,17 +99,22 @@ export async function mergeCopyArtifacts(
     .sort((a, b) => a.path.split("/").length - b.path.split("/").length);
   for (const operation of directories) operation.workingMode = operation.beforeMode! | 0o700;
   async function checkRoot(): Promise<string[]> {
-    const current = await scanCopyTree(root, true);
+    const rawLinks: Record<string, string> = Object.create(null);
+    const current = await scanCopyTree(root, true, true, true, undefined, undefined, rawLinks);
     const conflicts = new Set<string>();
     for (const path of changedPaths) {
       if (!sameEntry(current[path], base[path])) conflicts.add(path);
+      const originalLink = manager.originalSourceLink(path) ?? (base[path]?.kind === "symlink" ? base[path].target : undefined);
+      if (originalLink !== undefined && originalLink !== rawLinks[path]) conflicts.add(path);
       // A replaced/deleted directory also owns its descendants. Never discard
       // concurrent additions or excluded private/control files inside it.
       if (base[path]?.kind === "directory" && desired[path]?.kind !== "directory") {
         for (const child of new Set([...Object.keys(base), ...Object.keys(current)])) {
           if (descendant(child, path) && !sameEntry(current[child], base[child])) conflicts.add(child);
         }
-        const complete = await scanCopyTree(join(root, path));
+        // Root validation above already checked link targets; this subtree
+        // inventory never follows links and may contain links to root siblings.
+        const complete = await scanCopyTree(join(root, path), false, false);
         for (const child of Object.keys(complete)) {
           // Excluded environments may contain only regular files (--copies).
           // Replacing their parent must not silently delete those local files.
@@ -140,15 +145,19 @@ export async function mergeCopyArtifacts(
   // on failure if rollback cannot complete; never discard the user's originals.
   const transaction = join(root, `.zap-copy-merge-${randomUUID()}`);
   for (const operation of operations) {
-    operation.before = await operationOid(join(snapshot, operation.path), operation.modeOnly);
+    operation.before = await operationOid(join(root, operation.path), operation.modeOnly);
     operation.after = await operationOid(join(staging, operation.path), operation.modeOnly);
     if (!operation.modeOnly && operation.beforeMode !== undefined) {
-      operation.beforeWorking = await copyPathOid(join(snapshot, operation.path), operation.beforeMode | 0o700);
+      operation.beforeWorking = await copyPathOid(join(root, operation.path), operation.beforeMode | 0o700);
     }
     if (!operation.modeOnly && operation.afterMode !== undefined) {
       operation.afterWorking = await copyPathOid(join(staging, operation.path), operation.afterMode | 0o700);
     }
   }
+  // Compare the canonical baseline again after binding the original raw bytes
+  // for rollback (source absolute symlinks are relocated in snapshots).
+  drift = await checkRoot();
+  if (drift.length) return rejected("Root workspace changed while binding the merge", drift);
   const journal: CopyMergeJournal = { version: 1, root, transaction, artifactIds, operations, state: "applying" };
   await writeCopyMergeJournal(batch, journal);
   await mkdir(transaction, { mode: 0o700 });

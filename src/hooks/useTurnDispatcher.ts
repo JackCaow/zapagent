@@ -1,3 +1,4 @@
+import { isGoalSessionControl } from "../goal-session.js"
 import { pauseGoalsForUserInput } from "../goal-command.js"
 import { useCallback, useEffect, useRef } from "react"
 import {
@@ -578,6 +579,13 @@ export function useTurnDispatcher(
       }
       // Provider repair is a local control action, not a follow-up task. It
       // must remain reachable behind a failed head, without reviving that head.
+      if (isGoalSessionControl(value)) {
+        pushHistory(value)
+        addLog("user", displayForm, undefined, undefined, undefined, { restore: false })
+        await dispatchCommand(expandPastes(value), { displayText: displayForm })
+        setInputValue(current => current === draftAtSubmit ? "" : current)
+        return
+      }
       const control = parseCommand(value)
       if (!isRunning && !isDispatchingRef.current && !opts.editingMessageId
         && control && ["open_connect", "open_model_picker", "set_model"].includes(control.type)) {

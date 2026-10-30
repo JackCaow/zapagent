@@ -44,7 +44,7 @@ it("retains the seal marker and blocks recovery when a real Goal phase is killed
   try {
     const provider = createCustomProvider({ name: "Fixture", baseURL: `http://127.0.0.1:${model.port}/v1`, apiKey: "fixture", models: ["fixture"], contextWindow: 128000 })
     await writeFile(join(data, "config.json"), JSON.stringify({ ...getDefaultConfig(), executionBackend: "vm", providers: [provider], active: { providerId: provider.id, model: "fixture" } }))
-    const start = await cli(["goal", "write report", "--accept-edits"])
+    const start = await cli(["goal", "write report", "--background", "--accept-edits"])
     expect(start.code).toBe(0)
     const id = /goal_[a-f0-9-]+/.exec(start.output)?.[0]; expect(id).toBeDefined()
     let startTimer: ReturnType<typeof setTimeout> | undefined
@@ -68,7 +68,7 @@ it("retains the seal marker and blocks recovery when a real Goal phase is killed
     expect(goal?.delivery).toBeUndefined()
     const after = JSON.parse(await readFile(metaPath, "utf8")) as typeof before
     expect(after.phaseProcess).toEqual(before.phaseProcess)
-    expect((await cli(["goal", "resume", id!])).code).toBe(0)
+    expect((await cli(["goal", "resume", id!, "--background"])).code).toBe(0)
     let recovered: ReturnType<GoalStore["get"]>
     for (let i = 0; i < 100; i++) {
       await new Promise(resolve => setTimeout(resolve, 100))
