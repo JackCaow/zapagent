@@ -109,7 +109,7 @@ const READONLY_BIN_ALLOWLIST = new Set([
   // Searching
   "find", "grep", "rg", "fgrep", "egrep",
   // Dir / file metadata
-  "tree", "file", "stat", "pwd", "basename", "dirname", "readlink", "realpath",
+  "tree", "file", "stat", "pwd", "du", "basename", "dirname", "readlink", "realpath",
   // Text inspection (read-only flags only; no `sed -i`, no awk `system`)
   "sort", "uniq", "cut", "tr", "comm", "diff", "cmp",
   "column", "paste", "fold", "rev", "od", "hexdump", "strings",
@@ -137,8 +137,16 @@ const READONLY_BIN_ALLOWLIST = new Set([
 const READONLY_GIT_SUBCOMMANDS = new Set([
   "log", "diff", "status", "blame", "show", "ls-files", "ls-tree",
   "rev-parse", "rev-list", "describe", "grep", "shortlog", "whatchanged",
-  "cat-file", "for-each-ref", "name-rev",
+  "cat-file", "for-each-ref", "name-rev", "merge-base", "worktree",
 ]);
+
+/** getopt_long accepts any unique prefix of a long option (`sort --out=FILE`), so a plain
+ *  `startsWith("--output")` check is bypassed by abbreviations. */
+function isLongOptionAbbreviation(part: string, full: string, minLength: number): boolean {
+  if (!part.startsWith("--")) return false;
+  const name = part.split("=")[0]!;
+  return name.length >= minLength && full.startsWith(name);
+}
 
 /** Returns null if safe, else a human-readable reject reason. */
 export function validateReadOnlyBash(cmd: string): string | null {
@@ -147,8 +155,8 @@ export function validateReadOnlyBash(cmd: string): string | null {
 
   // Reject shell control that could chain unsafe commands or redirect output.
   // Pipes (|) are allowed because they compose read-only filters.
-  if (/;|&&|\|\||>|<|\$\(|`/.test(trimmed)) {
-    return "shell control (;, &&, ||, >, <, $(), backticks) is not allowed in read-only mode. Plain pipes (|) are allowed.";
+  if (/[\r\n&;]|\|\||>|<|\$\(|`/.test(trimmed)) {
+    return "shell control (;, &, &&, ||, >, <, $(), backticks, newlines) is not allowed in read-only mode. Plain pipes (|) are allowed.";
   }
   // Reject trailing `&` (background).
   if (/&\s*$/.test(trimmed)) return "background (&) is not allowed in read-only mode";
@@ -170,8 +178,12 @@ export function validateReadOnlyBash(cmd: string): string | null {
       if (!READONLY_GIT_SUBCOMMANDS.has(sub)) {
         return `git ${sub} is not in the read-only allowlist (allowed: log, diff, status, blame, show, ls-files, …)`;
       }
+      if (sub === "worktree" && parts[2] !== "list") return "only git worktree list is allowed in read-only mode";
       if (parts.some((part) => part === "--output" || part.startsWith("--output="))) {
         return "git --output is not allowed in read-only mode";
+      }
+      if (sub === "grep" && parts.some((part) => part.startsWith("-O") || isLongOptionAbbreviation(part, "--open-files-in-pager", 4))) {
+        return "git grep -O / --open-files-in-pager run external programs and are not allowed";
       }
     }
 
@@ -180,10 +192,33 @@ export function validateReadOnlyBash(cmd: string): string | null {
       if (/\s-(exec|delete|ok|execdir|okdir)\b/.test(seg)) {
         return "find -exec / -delete / -ok / -execdir / -okdir are not allowed";
       }
+      // -fprint* / -fls write their results to a file.
+      if (/\s-(fprint|fprint0|fprintf|fls)\b/.test(seg)) {
+        return "find -fprint / -fprint0 / -fprintf / -fls write files and are not allowed";
+      }
     }
 
-    if (first === "sort" && parts.some((part) => part === "-o" || part.startsWith("--output"))) {
-      return "sort output-file options are not allowed in read-only mode";
+    // Short-option clusters such as `-oFILE` or `-uo FILE` also select an output file.
+    if (first === "sort" && parts.slice(1).some((part) => /^-[A-Za-z]*o/.test(part) || isLongOptionAbbreviation(part, "--output", 3) || isLongOptionAbbreviation(part, "--compress-program", 4))) {
+      return "sort output-file / compress-program options are not allowed in read-only mode";
+    }
+
+    if (first === "tree" && parts.slice(1).some((part) => /^-[A-Za-z]*o/.test(part) || isLongOptionAbbreviation(part, "--output", 3))) {
+      return "tree output-file options are not allowed in read-only mode";
+    }
+
+    if (first === "rg" && parts.slice(1).some((part) => /^--(pre|hostname-bin)(=|$)/.test(part))) {
+      return "rg --pre / --hostname-bin run external programs and are not allowed";
+    }
+
+    if (first === "uniq") {
+      // `uniq INPUT OUTPUT` writes OUTPUT. Option values (-f/-s/-w N) are not files.
+      const operands: string[] = [];
+      for (let i = 1; i < parts.length; i++) {
+        if (/^-[fsw]$/.test(parts[i]!)) { i++; continue; }
+        if (!parts[i]!.startsWith("-")) operands.push(parts[i]!);
+      }
+      if (operands.length > 1) return "uniq with an output operand is not allowed in read-only mode";
     }
 
     if (first === "yq" && parts.some((part) => part === "-i" || part === "--inplace")) {
@@ -205,8 +240,8 @@ export function validateReadOnlyBash(cmd: string): string | null {
  *  argument. Registered under the same name ("bash") so the subagent's
  *  tool schema is indistinguishable from the main agent's — the model
  *  doesn't need to learn a new tool name. */
-function readOnlyBashTool(defaultCwd?: string): Tool {
-  const inner = executeCommandTool({ defaultCwd, allowUnsandboxed: false });
+export function readOnlyBashTool(defaultCwd?: string): Tool {
+  const inner = executeCommandTool({ defaultCwd, allowUnsandboxed: false, sandboxNetwork: false, restrictedNetwork: false, disableBackgroundTasks: true });
   return {
     ...inner,
     definition: {
@@ -221,6 +256,7 @@ function readOnlyBashTool(defaultCwd?: string): Tool {
           kind: "process",
           operation: "spawn",
           commandClass: "read-only-shell",
+          readOnly: true,
           background: false,
         }],
         external: [],
@@ -229,16 +265,15 @@ function readOnlyBashTool(defaultCwd?: string): Tool {
       }),
     },
     handler: async (args, signal, context) => {
-      const command = args.command as string;
-      const reject = validateReadOnlyBash(command);
-      if (reject) {
-        return {
-          success: false,
-          output: "",
-          error: `bash blocked in read-only mode: ${reject}`,
-        };
+      const parsed = inner.definition.parameters.safeParse(args);
+      if (!parsed.success) return { success: false, output: "", error: `Invalid read-only bash arguments: ${parsed.error.message}` };
+      const checked = parsed.data as Record<string, unknown>;
+      const commands = Array.isArray(checked.check_steps) ? checked.check_steps : [checked.command];
+      for (const command of commands) {
+        const reject = typeof command === "string" ? validateReadOnlyBash(command) : "command or check_steps is required";
+        if (reject) return { success: false, output: "", error: `bash blocked in read-only mode: ${reject}` };
       }
-      return inner.handler(args, signal, context);
+      return inner.handler(checked, signal, context);
     },
   };
 }

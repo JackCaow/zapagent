@@ -20,9 +20,9 @@ for (const action of ["pause", "cancel", "background", "new-input", "close", "SI
       const prompt = body.messages.filter((m: any) => m.role === "user").map((m: any) => String(m.content)).join("\n")
       let delta: object, finish = "stop"
       if (prompt.includes("Plan the user's goal")) {
-        if (first) { first = false; planning(); await gate }
         delta = { content: JSON.stringify({ tasks: [{ id: "one", description: "Write result.txt", acceptance: "result.txt says verified", dependencies: [] }] }) }
       } else if (prompt.includes("Work on the user's goal") && !body.messages.some((m: any) => m.role === "tool")) {
+        if (first) { first = false; planning(); await gate }
         finish = "tool_calls"
         delta = { tool_calls: [{ index: 0, id: "write", type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: "result.txt", content: "verified\n" }) } }] }
       } else if (prompt.includes("You are an independent verifier")) delta = { content: JSON.stringify({ status: "passed", detail: "Verified actual artifact." }) }

@@ -69,6 +69,10 @@ const READ_ONLY_GOAL_TOOLS = new Set([
 
 export interface GoalPhaseInput {
   cwd: string
+  /** New Goals reuse the ordinary runtime rather than an isolated phase. */
+  executionProfile?: "session"
+  sessionId?: string
+  streamEvents?: boolean
   prompt: string
   goalId: string
   epoch: number
@@ -87,15 +91,18 @@ export interface GoalPhaseInput {
   onSpawn?: (pid: number, mayLaunchSealedProcess: boolean) => void
   /** Called only after the owned process group has ceased to exist. */
   onStopped?: (pid: number) => void
+  onSettled?: (result: { text: string; outcome: AgentOutcomeV1; toolCalls: number; sessionId: string }) => void
 }
 
-type WorkerInput = Omit<GoalPhaseInput, "signal" | "onSpawn" | "onStopped" | "onEvent"> & { allowSealedShell?: boolean; streamEvents?: boolean }
-type WorkerResult = { type: "result"; summary: RunSummary; exitCode: number; processSealed: true; toolCalls: number; failureCode?: string; dependencyHash?: string } | { type: "machine"; result: ToolResult } | { type: "fatal"; message: string; code: string }
+type WorkerInput = Omit<GoalPhaseInput, "signal" | "onSpawn" | "onStopped" | "onSettled" | "onEvent"> & { allowSealedShell?: boolean; streamEvents?: boolean }
+type WorkerResult = { type: "result"; summary: RunSummary; exitCode: number; processSealed?: true; runtimeSettled?: boolean; toolCalls: number; failureCode?: string; dependencyHash?: string } | { type: "machine"; result: ToolResult } | { type: "fatal"; message: string; code: string }
 
 /** Check only concrete existing directories. A Host-owned ledger must not sit
  * underneath a model-writable workspace. */
 function validateInput(input: WorkerInput): void {
   if (!input || typeof input !== "object" || !isAbsolute(input.cwd) || !isAbsolute(input.ledgerPath)
+    || input.executionProfile !== undefined && input.executionProfile !== "session"
+    || input.sessionId !== undefined && (typeof input.sessionId !== "string" || !input.sessionId)
     || input.streamEvents !== undefined && typeof input.streamEvents !== "boolean"
     || typeof input.prompt !== "string" || !input.prompt.trim() || input.prompt.length > 1024 * 1024
     || typeof input.goalId !== "string" || !input.goalId || !Number.isSafeInteger(input.epoch) || input.epoch < 0
@@ -111,7 +118,7 @@ function validateInput(input: WorkerInput): void {
       privateGitIdentity: { device: input.privateGit.device, inode: input.privateGit.inode } })
   }
   const rel = relative(workspace, ledgerDir)
-  if (!rel || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel))) throw new Error("Goal ledger must be outside the writable workspace")
+  if (input.executionProfile !== "session" && (!rel || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel)))) throw new Error("Goal ledger must be outside the writable workspace")
   const ledgerStat = lstatSync(input.ledgerPath)
   if (!ledgerStat.isFile() || ledgerStat.isSymbolicLink()) throw new Error("Goal ledger must be an existing regular file")
 }
@@ -119,28 +126,32 @@ function validateInput(input: WorkerInput): void {
 /** Execute one phase in a fresh process. The process cwd is established before
  * importing the headless Runtime's cwd-bound singleton modules. */
 async function runGoalPhaseProcess(input: GoalPhaseInput): Promise<WorkerResult> {
-  const { signal, onSpawn, onStopped, onEvent, ...workerInput } = input
+  const { signal, onSpawn, onStopped, onSettled, onEvent, ...workerInput } = input
   validateInput(workerInput)
   signal?.throwIfAborted()
   // Decide before recording ownership and sending the worker any input. A
   // configuration change later cannot turn on shell in this phase.
-  const [{ loadAppConfig }, { createExecutionEnvironment, resolveExecutionBackend }] = await Promise.all([
-    import("../config.js"), import("../execution-environment.js"),
-  ])
-  const config = loadAppConfig(join(getAppDataDir(), "config.json"))
-  const environment = createExecutionEnvironment(input.cwd, "required", resolveExecutionBackend(config.executionBackend), false, config.sandboxNetwork, [])
-  const allowSealedShell = (input.role === "worker" || input.role === "repair" || !!input.machineCheck || !!input.dependencyInstall)
-    && environment.broker.supportsProcessSeal?.({ name: "bash", executionLocation: "workspace" }) === true
-  if (input.machineCheck && !allowSealedShell) throw new Error("GOAL_VERIFIER_PROCESS_SEAL_UNSUPPORTED")
-  if (input.dependencyInstall && !allowSealedShell) throw new Error("GOAL_NPM_PROCESS_SEAL_UNSUPPORTED")
-  const safeEnvironment = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("GIT_")))
+  const shared = input.executionProfile === "session"
+  let allowSealedShell = false
+  if (!shared) {
+    const [{ loadAppConfig }, { createExecutionEnvironment, resolveExecutionBackend }] = await Promise.all([
+      import("../config.js"), import("../execution-environment.js"),
+    ])
+    const config = loadAppConfig(join(getAppDataDir(), "config.json"))
+    const environment = createExecutionEnvironment(input.cwd, "required", resolveExecutionBackend(config.executionBackend), false, config.sandboxNetwork, [])
+    allowSealedShell = (input.role === "worker" || input.role === "repair" || !!input.machineCheck || !!input.dependencyInstall)
+      && environment.broker.supportsProcessSeal?.({ name: "bash", executionLocation: "workspace" }) === true
+    if (input.machineCheck && !allowSealedShell) throw new Error("GOAL_VERIFIER_PROCESS_SEAL_UNSUPPORTED")
+    if (input.dependencyInstall && !allowSealedShell) throw new Error("GOAL_NPM_PROCESS_SEAL_UNSUPPORTED")
+  }
+  const safeEnvironment = shared ? process.env : Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("GIT_")))
   const isBun = /(?:^|[\\/])bun(?:\.exe)?$/i.test(process.execPath)
   const argv = isBun ? [fileURLToPath(new URL("../index.tsx", import.meta.url)), "--goal-phase-worker"] : ["--goal-phase-worker"]
   const child = spawn(process.execPath, argv, {
     cwd: dirname(workerInput.ledgerPath),
     detached: process.platform !== "win32",
     stdio: ["pipe", "pipe", "pipe"],
-    env: { ...safeEnvironment, PATH: "/usr/bin:/bin:/usr/sbin:/sbin", ZAPCODE_DEVTOOLS_PORT: "", ZAPCODE_HOST_PROTOCOL_PORT: "" },
+    env: { ...safeEnvironment, ...(!shared ? { PATH: "/usr/bin:/bin:/usr/sbin:/sbin" } : {}), ZAPCODE_DEVTOOLS_PORT: "", ZAPCODE_HOST_PROTOCOL_PORT: "" },
   })
   let output = "", resultOutput: string | undefined, cancelled = false, spawnRecorded = false, protocolError: Error | undefined, spawnError: unknown
   let killTimer: ReturnType<typeof setTimeout> | undefined
@@ -203,7 +214,7 @@ async function runGoalPhaseProcess(input: GoalPhaseInput): Promise<WorkerResult>
   try {
     try {
       if (!child.pid) throw new Error("Goal phase worker has no pid")
-      onSpawn?.(child.pid, allowSealedShell)
+      onSpawn?.(child.pid, shared || allowSealedShell)
       spawnRecorded = true
       child.stdin.end(JSON.stringify({ ...workerInput, allowSealedShell, ...(onEvent ? { streamEvents: true } : {}) }))
     } catch (error) {
@@ -221,10 +232,10 @@ async function runGoalPhaseProcess(input: GoalPhaseInput): Promise<WorkerResult>
       while (goalPhaseGroupAlive(pid) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50))
     }
     if (goalPhaseGroupAlive(pid)) throw new Error("GOAL_SEAL_UNCONFIRMED")
-    if (!allowSealedShell && spawnRecorded) onStopped?.(pid)
+    if (!shared && !allowSealedShell && spawnRecorded) onStopped?.(pid)
     if (spawnError) throw spawnError
     if (protocolError) throw protocolError
-    if (cancelled) throw new Error("GOAL_PHASE_CANCELLED")
+    if (cancelled && !shared) throw new Error("GOAL_PHASE_CANCELLED")
     if (onEvent && resultOutput && output.trim()) throw new Error("Invalid trailing Goal phase output")
     let response: WorkerResult
     try { response = JSON.parse(resultOutput ?? output) as WorkerResult } catch { throw new Error(`Goal phase process returned invalid output (exit ${exitCode})`) }
@@ -237,9 +248,11 @@ async function runGoalPhaseProcess(input: GoalPhaseInput): Promise<WorkerResult>
     if (response.type !== "result" || !response.summary?.outcome) throw new Error(`Goal phase produced no structured outcome (exit ${exitCode})`)
     // A failed model call can still finish with every tool/process sealed.
     // Only this worker-owned receipt, never model text, may clear ownership.
-    if (response.processSealed !== true) throw new GoalPhaseError("GOAL_SEAL_UNCONFIRMED")
-    if (allowSealedShell) onStopped?.(pid)
-    if (exitCode !== 0 || response.exitCode !== 0 || response.summary.outcome.execution.status !== "finished") {
+    if (shared ? response.runtimeSettled !== true : response.processSealed !== true) throw new GoalPhaseError("GOAL_SEAL_UNCONFIRMED")
+    if (shared) onSettled?.({ text: response.summary.text, outcome: response.summary.outcome, toolCalls: response.toolCalls, sessionId: response.summary.sessionId })
+    if (shared || allowSealedShell) onStopped?.(pid)
+    if (cancelled) throw new Error("GOAL_PHASE_CANCELLED")
+    if ((!shared && (exitCode !== 0 || response.exitCode !== 0)) || !(shared ? ["finished", "limited"] : ["finished"]).includes(response.summary.outcome.execution.status)) {
       throw new GoalPhaseError(response.failureCode ?? "GOAL_PHASE_FAILED")
     }
     return response
@@ -250,10 +263,10 @@ async function runGoalPhaseProcess(input: GoalPhaseInput): Promise<WorkerResult>
   }
 }
 
-export async function runGoalPhase(input: GoalPhaseInput): Promise<{ text: string; outcome: AgentOutcomeV1; toolCalls: number; dependencyHash?: string }> {
+export async function runGoalPhase(input: GoalPhaseInput): Promise<{ text: string; outcome: AgentOutcomeV1; toolCalls: number; sessionId?: string; dependencyHash?: string }> {
   const response = await runGoalPhaseProcess(input)
   if (response.type !== "result" || !response.summary.outcome) throw new Error("Unexpected Goal phase response")
-  return { text: response.summary.text, outcome: response.summary.outcome, toolCalls: response.toolCalls, ...(response.dependencyHash ? { dependencyHash: response.dependencyHash } : {}) }
+  return { text: response.summary.text, outcome: response.summary.outcome, toolCalls: response.toolCalls, sessionId: response.summary.sessionId, ...(response.dependencyHash ? { dependencyHash: response.dependencyHash } : {}) }
 }
 
 export async function runGoalMachinePhase(input: GoalPhaseInput & { machineCheck: "bun" | "npm" | "pytest" | "go" }): Promise<ToolResult> {
@@ -280,6 +293,12 @@ export async function runGoalPhaseWorker(): Promise<number> {
       if (Buffer.byteLength(raw) > 2 * 1024 * 1024) throw new Error("Goal phase input exceeds protocol limit")
     }
     const input = JSON.parse(raw) as WorkerInput
+    validateInput(input)
+    if (input.executionProfile === "session") {
+      process.chdir(input.cwd)
+      const { runSharedGoalTurnWorker } = await import("./sharedGoalTurn.js")
+      return await runSharedGoalTurnWorker(input)
+    }
     validateInput(input)
     process.chdir(input.cwd)
     delete process.env.ZAPCODE_DEVTOOLS_PORT

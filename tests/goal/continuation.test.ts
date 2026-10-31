@@ -59,7 +59,7 @@ for (const mode of ["format", "resume-verifier", "explicit-limit", "foreground"]
       expect(start.code).toBe(0)
       if (mode === "foreground") {
         expect(start.output).toContain("started in this session")
-        expect(start.output).toContain("Goal running/planning")
+        expect(start.output).toContain("Goal running/executing")
         expect(start.output).toContain("Tool write_file")
         expect(start.output).toContain("Goal running/verifying")
         expect(start.output).toContain("completed")
@@ -90,7 +90,7 @@ for (const mode of ["format", "resume-verifier", "explicit-limit", "foreground"]
       if (goal.status !== "completed") throw new Error(`Goal ${goal.status}: ${goal.stopReason}\n${await readFile(join(home, "runner.log"), "utf8")}`)
       expect(await readFile(join(cwd, "report.txt"), "utf8")).toBe("verified\n")
       expect(workers).toBe(1); expect(goal.finalReceipt?.status).toBe("passed")
-      if (mode === "format") { expect(planner).toBe(2); expect(verifier).toBe(3) }
+      if (mode === "format") { expect(planner).toBe(0); expect(verifier).toBe(3) }
       const ledger = new GoalBudgetLedger(join(data, "goal", "goals.sqlite"))
       try { expect(ledger.snapshot(id!).totals.modelCalls).toBeGreaterThanOrEqual(planner + workers + verifier) } finally { ledger.close() }
     } finally { model.stop(); await rm(root, { recursive: true, force: true }) }

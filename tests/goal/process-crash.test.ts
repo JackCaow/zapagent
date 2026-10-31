@@ -77,7 +77,7 @@ it("retains the seal marker and blocks recovery when a real Goal phase is killed
     }
     expect(recovered?.status).toBe("blocked")
     expect(recovered!.ownerEpoch).toBeGreaterThan(goal!.ownerEpoch)
-    expect(recovered?.stopReason).toContain("seal receipt is missing")
+    expect(recovered?.stopReason).toContain("GOAL_TURN_RECONCILIATION_REQUIRED")
     expect(recovered?.inFlight?.operationId).toBe(before.phaseProcess?.operationId)
     expect(recovered?.delivery).toBeUndefined()
     expect((JSON.parse(await readFile(metaPath, "utf8")) as typeof before).phaseProcess).toEqual(before.phaseProcess)

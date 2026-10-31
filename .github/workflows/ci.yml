@@ -78,7 +78,7 @@ jobs:
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
       - name: Linux namespace acceptance
-        run: bun test zapsdk/tests/execution/platform-sandbox.test.ts
+        run: bun test zapsdk/tests/execution/platform-sandbox.test.ts zapsdk/tests/execution/sandbox-readonly.test.ts
 
   sandbox-windows:
     runs-on: windows-latest
@@ -108,6 +108,6 @@ jobs:
           bun-version: ${{ env.ZAP_BUILDER_VERSION }}
       - run: bun install --frozen-lockfile
       - name: Native macOS sandbox and multi-agent regressions
-        run: bun test zapsdk/tests/execution/workspace-runtime.test.ts zapsdk/tests/execution/sandbox-temporary-directory.test.ts zapsdk/tests/workspace/subagent-git-write.test.ts zapsdk/tests/coordinator
+        run: bun test zapsdk/tests/execution/workspace-runtime.test.ts zapsdk/tests/execution/sandbox-temporary-directory.test.ts zapsdk/tests/execution/sandbox-readonly.test.ts zapsdk/tests/workspace/subagent-git-write.test.ts zapsdk/tests/coordinator
         env:
           ZAPCODE_DATA_DIR: ${{ runner.temp }}/zap-macos-test-data

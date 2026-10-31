@@ -28,6 +28,8 @@ export interface GoalReceipt {
 export interface GoalRecord {
   id: string;
   objective: string;
+  /** Absent on legacy Goals, whose isolated snapshots retain their old host. */
+  executionMode?: "session" | "isolated";
   deliveryPolicy: "artifact" | "workspace";
   machineCheck?: "bun" | "npm" | "pytest" | "go";
   /** User-authorized, host-managed dependency preparation. */

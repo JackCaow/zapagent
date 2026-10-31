@@ -18,11 +18,14 @@ describe("Goal provider transport accounting", () => {
         if (++calls === 1) throw new Error("connection failed");
         return { type: "text", text: "ok", usage: { inputTokens: 11, cacheReadInputTokens: 5, cacheCreationInputTokens: 3, outputTokens: 2, providerUsageReported: true } };
       } };
-      const provider = new RetryProvider(meterGoalProvider(inner, ledger, { goalId: "g", epoch: 1, role: "worker" }), { maxRetries: 1, initialDelayMs: 1 });
+      const normal = new RetryProvider(inner, { maxRetries: 1, initialDelayMs: 1 });
+      const provider = normal.withInnerAdapter(raw => meterGoalProvider(raw, ledger, { goalId: "g", epoch: 1, role: "worker" }));
       expect((await provider.call([{ role: "user", content: "hello" }])).text).toBe("ok");
       const snap = ledger.snapshot("g");
       expect(snap.totals).toMatchObject({ modelCalls: 1, providerAttempts: 2, tokensUsed: 21, unknownUsage: 1 });
       expect(new Set(snap.reservations.map(r => r.logicalCallId)).size).toBe(1);
+      await normal.call([{ role: "user", content: "ordinary turn" }]);
+      expect(ledger.snapshot("g").totals.providerAttempts).toBe(2);
     } finally { ledger.close(); rmSync(dir, { recursive: true, force: true }); }
   });
 
