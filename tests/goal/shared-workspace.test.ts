@@ -4,7 +4,7 @@ import { lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, symlink, writeF
 import { join, resolve } from "node:path"
 import { tmpdir } from "node:os"
 import { createHash } from "node:crypto"
-import { captureGoalEntries, GoalTurnHost, appendGoalObservation } from "../../src/goal-turn-host.js"
+import { captureGoalEntries, goalEvidenceDrifted, GoalTurnHost, appendGoalObservation } from "../../src/goal-turn-host.js"
 import { createCustomProvider, getDefaultConfig } from "../../src/config.js"
 import { GoalStore } from "../../zapsdk/goal/store.js"
 import { createPlatformSandbox } from "../../zapsdk/execution/sandbox.js"
@@ -19,7 +19,7 @@ it("captures only observed paths, preserving dangling/external links without tra
     await symlink("/external/not-present", join(root, "external"))
     const file = await open(join(root, "huge"), "w"); await file.truncate(100 * 1024 ** 3); await file.close()
     const entries = await captureGoalEntries(root, [".", "dangling", "external"])
-    expect(entries.find(e => e.path === ".")?.entries).toEqual(["dangling", "external", "huge", "project"])
+    expect(entries.find(e => e.path === ".")?.layout).toEqual([["dangling", "link", "missing"], ["external", "link", "/external/not-present"], ["huge", "file", ""], ["project", "directory", ""]])
     expect(entries.find(e => e.path === "dangling")).toMatchObject({ kind: "link", target: "missing" })
     expect(entries.find(e => e.path === "external")).toMatchObject({ kind: "link", target: "/external/not-present" })
     expect(await readlink(join(root, "dangling"))).toBe("missing")
@@ -87,13 +87,12 @@ for (const mode of ["pass", "reject", "machine", "repair", "failed-needs-input",
           if (!results.some((m: any) => m.tool_call_id === "repair-read")) delta = call("repair-read", "read_file", { path: "report.txt" })
           else delta = { content: "Read and independently supported: two project directories." }
         } else {
-          // Ordinary shell calls are auto-approved only inside an OS sandbox; without one the
-          // headless worker (correctly) cannot get approval, so the fixture skips the shell step.
-          const steps = HAS_SANDBOX ? ["tree", "shell", "write"] : ["tree", "write"]
-          const step = steps[results.length]
+          // Ordinary shell calls are auto-approved only inside an OS sandbox. Without one the
+          // headless worker cannot get approval; like an ordinary turn it continues without it.
+          const step = ["tree", "shell", "write"][results.length]
           if (step === "tree") delta = call("tree", "list_tree", { path: ".", depth: 1, max_entries: 1000 })
           else if (step === "shell") delta = call("shell", "bash", { command: "printf goal-shell-ok" })
-          else if (step === "write") { if (HAS_SANDBOX) sawShell = String(results[1].content).includes("goal-shell-ok"); delta = call("write", "write_file", { path: "report.txt", content: "two\n" }) }
+          else if (step === "write") { sawShell = String(results[1].content).includes("goal-shell-ok"); delta = call("write", "write_file", { path: "report.txt", content: "two\n" }) }
           else delta = { content: "Two projects, alpha and beta. Links are entries and were not followed." }
         }
       } else delta = { content: "Two projects verified in the current workspace." }
@@ -111,7 +110,7 @@ for (const mode of ["pass", "reject", "machine", "repair", "failed-needs-input",
       expect(goal.executionMode).toBe("session")
       expect(sawShell).toBe(HAS_SANDBOX)
       expect(workerTools).toContain("agent"); expect(workerTools).toContain("bash"); expect(workerTools).toContain("http_fetch")
-      expect(reviewTools).not.toContain("write_file"); expect(reviewTools).not.toContain("agent")
+      expect(reviewTools).not.toContain("write_file"); expect(reviewTools).not.toContain("agent"); expect(reviewTools).not.toContain("http_fetch")
       // A rejected candidate still exists in the actual source: no hidden copy
       // and no promise of rollback after an ordinary shared-workspace turn.
       expect(await readFile(join(cwd, "report.txt"), "utf8")).toBe("two\n")
@@ -121,7 +120,13 @@ for (const mode of ["pass", "reject", "machine", "repair", "failed-needs-input",
       expect((await readdir(home)).some(name => /workspace|candidate-|integration/.test(name) && name !== "workspace.json")).toBe(false)
       expect(output).toContain("running/executing"); expect(output).toContain("running/verifying")
       if (!reject) expect(goal.finalReceipt?.status).toBe("passed")
-      if (mode === "pass") expect((goal.delivery as { text: string }).text).toContain("Two projects, alpha and beta.")
+      if (mode === "pass") {
+        const delivery = goal.delivery as { text: string; report: string }
+        expect(delivery.text).toContain("Two projects, alpha and beta.")
+        // A denied shell call is recorded for the verifier instead of failing the turn.
+        const report = JSON.parse(await readFile(delivery.report, "utf8"))
+        expect(report.permissionDenials?.map((denial: { tool: string }) => denial.tool)).toEqual(HAS_SANDBOX ? undefined : ["bash"])
+      }
       if (machine) expect((await lstat(join(cwd, "coverage"))).isDirectory()).toBe(true)
       if (mode === "repair") expect(goal.tasks[0]?.attempt).toBe(2)
       if (mode === "verifier-shell-denied" || mode === "verifier-shell-abbrev-denied") await expect(lstat(join(cwd, "forbidden.txt"))).rejects.toThrow()
@@ -140,6 +145,37 @@ it("detects symlink target content and directory entry type changes before deliv
     expect((await captureGoalEntries(root, ["alias.txt"]))[0]?.version).not.toBe(before.find(e => e.path === "alias.txt")?.version)
     await rm(join(root, "project"), { recursive: true }); await writeFile(join(root, "project"), "file")
     expect((await captureGoalEntries(root, ["."]))[0]?.version).not.toBe(before.find(e => e.path === ".")?.version)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+it("tolerates unrelated new files in an observed directory but not changes to what was observed", async () => {
+  const root = await mkdtemp(join(tmpdir(), "goal-evidence-drift-"))
+  try {
+    await writeFile(join(root, "report.txt"), "two\n"); await writeFile(join(root, "target.txt"), "verified")
+    await mkdir(join(root, "project")); await symlink("target.txt", join(root, "alias.txt"))
+    const paths = [".", "project", "alias.txt", "report.txt"]
+    const frozen = await captureGoalEntries(root, paths)
+    const drifted = async () => goalEvidenceDrifted(frozen, await captureGoalEntries(root, paths))
+    // Editor swap files, build output and other unrelated work only add names.
+    await writeFile(join(root, ".report.txt.swp"), "x"); await mkdir(join(root, "coverage")); await writeFile(join(root, "project", "new.ts"), "x")
+    expect(await drifted()).toBe(false)
+    for (const [change, undo] of [
+      [() => writeFile(join(root, "report.txt"), "three\n"), () => writeFile(join(root, "report.txt"), "two\n")],
+      [() => writeFile(join(root, "target.txt"), "changed"), () => writeFile(join(root, "target.txt"), "verified")],
+      [() => rm(join(root, "alias.txt")).then(() => symlink("report.txt", join(root, "alias.txt"))), () => rm(join(root, "alias.txt")).then(() => symlink("target.txt", join(root, "alias.txt")))],
+      [() => rm(join(root, "project"), { recursive: true }).then(() => writeFile(join(root, "project"), "file")), () => rm(join(root, "project")).then(() => mkdir(join(root, "project")))],
+      [() => rm(join(root, "report.txt")), () => writeFile(join(root, "report.txt"), "two\n")],
+    ] as const) {
+      await change(); expect(await drifted()).toBe(true)
+      await undo(); expect(await drifted()).toBe(false)
+    }
+    // Evidence frozen before listings recorded a layout stays valid after an
+    // upgrade, and still compares exactly.
+    await rm(join(root, ".report.txt.swp")); await rm(join(root, "coverage"), { recursive: true })
+    const legacy = frozen.map(({ layout, canonical: _canonical, ...entry }) => layout ? { ...entry, entries: layout.map(child => child[0]) } : entry)
+    expect(goalEvidenceDrifted(legacy, await captureGoalEntries(root, paths))).toBe(false)
+    await writeFile(join(root, "unrelated.txt"), "x")
+    expect(goalEvidenceDrifted(legacy, await captureGoalEntries(root, paths))).toBe(true)
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 
