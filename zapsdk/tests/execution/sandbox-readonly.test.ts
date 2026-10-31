@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createPlatformSandbox } from "../../execution/sandbox.js";
 import { createCapabilityGrant } from "../../policy/engine.js";
-import { readOnlyBashTool } from "../../builtin-tools/subagent.js";
+import { readOnlyBashTool, validateReadOnlyBash } from "../../builtin-tools/subagent.js";
 
 const cleanup: string[] = [];
 afterEach(() => { for (const path of cleanup.splice(0)) rmSync(path, { recursive: true, force: true }); });
@@ -46,5 +46,20 @@ describeSandbox("read-only verifier shell inside the OS sandbox (real execution)
     ].map((command) => `(${command}) 2>/dev/null`).join("; "));
     expect(readdirSync(root)).toEqual(["report.txt"]);
     expect(readFileSync(join(root, "report.txt"), "utf8")).toBe("b\na\n");
+  });
+
+  test("host secrets in the runtime environment do not reach the verifier shell", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "zap-sandbox-readonly-env-")));
+    cleanup.push(root);
+    const command = "echo probe:$ZAP_VERIFIER_SECRET_PROBE:$ANTHROPIC_API_KEY:end";
+    // The validator allows plain variable expansion; only the sandbox environment protects it.
+    expect(validateReadOnlyBash(command)).toBeNull();
+    const previous = process.env.ZAP_VERIFIER_SECRET_PROBE;
+    process.env.ZAP_VERIFIER_SECRET_PROBE = "host-secret";
+    try {
+      expect(run(root, command).trim()).toBe("probe:::end");
+    } finally {
+      if (previous === undefined) delete process.env.ZAP_VERIFIER_SECRET_PROBE; else process.env.ZAP_VERIFIER_SECRET_PROBE = previous;
+    }
   });
 });

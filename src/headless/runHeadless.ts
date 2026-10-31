@@ -526,7 +526,9 @@ export async function runHeadless(args: HeadlessArgs, host: HeadlessHost = {}): 
   approval.setSandboxConfined(sandboxConfined, config.autoAllowSandboxedCommands !== false)
   approval.setSandboxExcludedCommands(config.allowUnsandboxedCommands !== false ? config.sandboxExcludedCommands : undefined)
   if (host.readOnlyWorkspace) {
-    const names = new Set(["read_file", "list_tree", "read_document", "read_pdf", "read_docx", "read_tool_output", "current_time", "http_fetch"])
+    // No network tools: read-only Goal roles take worker output and workspace
+    // files as untrusted input, and an injected URL could carry them off-host.
+    const names = new Set(["read_file", "list_tree", "read_document", "read_pdf", "read_docx", "read_tool_output", "current_time"])
     if (sandboxConfined && registry.has("bash")) {
       registry.unregister("bash"); registry.register(readOnlyBashTool(cwd)); names.add("bash")
     }

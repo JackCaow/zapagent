@@ -44,7 +44,12 @@ for (const { git, machine, denied } of [{ git: false, machine: false, denied: fa
       else if (userText.includes("Work on the user's goal")) {
         if (body.messages.some(x => x.role === "tool")) { requests.push("worker-result:" + String(body.messages.find(x => x.role === "tool")?.content)); value = { content: "Created the report." } }
         else { requests.push("worker-write"); finish = "tool_calls"; value = { tool_calls: [{ index: 0, id: "write-1", type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: "report.txt", content: "goal passed\n" }) } }] } }
-      } else if (userText.includes("You are an independent verifier")) { requests.push(userText.includes("goal passed") ? "verify-evidence" : "verify-missing"); value = { content: JSON.stringify({ status: "passed", detail: "The report contains the required text." }) } }
+      } else if (userText.includes("You are an independent verifier")) {
+        requests.push(userText.includes("goal passed") ? "verify-evidence" : "verify-missing")
+        const deniedWrite = /"permissionDenials":\[\{"tool":"write_file","code":"[A-Z_]+"\}\]/.test(userText)
+        if (deniedWrite) requests.push("verify-denied")
+        value = { content: JSON.stringify(deniedWrite ? { status: "unverified", detail: "The report write was denied.", nextAction: "needs_input" } : { status: "passed", detail: "The report contains the required text." }) }
+      }
       else if (userText.includes("Inspect the frozen final Goal")) { requests.push("finalization"); value = { content: "A report and a test." } }
       else { requests.push("other"); value = { content: "Finished." } }
       const chunk = (delta: object, reason: string | null) => `data: ${JSON.stringify({ id: "goal", object: "chat.completion.chunk", created: 1, model: "fixture", choices: [{ index: 0, delta, finish_reason: reason }], usage: { prompt_tokens: 500_000, completion_tokens: 5 } })}\n\n`
@@ -79,7 +84,9 @@ for (const { git, machine, denied } of [{ git: false, machine: false, denied: fa
       expect(result?.deadlineAt).toBeUndefined()
       if (!denied && (!git || process.platform === "darwin")) expect(accounting.totals.tokensUsed).toBeGreaterThan(1_000_000)
       if (denied) {
-        expect(result?.status).toBe("blocked")
+        // The denial is ordinary turn feedback; the verifier sees it and asks for input.
+        expect(result?.status).toBe("awaiting_acceptance")
+        expect(requests).toContain("verify-denied")
         await expect(readFile(join(cwd, "report.txt"), "utf8")).rejects.toThrow()
         return
       }
