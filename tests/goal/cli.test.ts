@@ -31,6 +31,10 @@ for (const { git, machine, denied } of [{ git: false, machine: false, denied: fa
     }
     const sourceHead = git ? execFileSync("git", ["-C", cwd, "rev-parse", "HEAD"], { encoding: "utf8" }).trim() : ""
     const sourceIndex = git ? execFileSync("git", ["-C", cwd, "diff", "--cached", "--binary"]).toString() : ""
+    if (denied) {
+      await mkdir(join(cwd, ".zapcode"), { recursive: true })
+      await writeFile(join(cwd, ".zapcode", "settings.json"), JSON.stringify({ rules: [{ pattern: "write_file", type: "deny" }] }))
+    }
     const requests: string[] = []
     const model = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(request) {
       const body = await request.json() as { messages: Array<{ role: string; content: unknown }> }
@@ -50,7 +54,7 @@ for (const { git, machine, denied } of [{ git: false, machine: false, denied: fa
       const provider = createCustomProvider({ name: "Fixture", baseURL: `http://127.0.0.1:${model.port}/v1`, apiKey: "fixture", models: ["fixture"], contextWindow: 128000 })
       await writeFile(join(data, "config.json"), JSON.stringify({ ...getDefaultConfig(), permissionMode: "acceptEdits", providers: [provider], active: { providerId: provider.id, model: "fixture" } }))
       const env = { ZAPCODE_DATA_DIR: data }
-      const start = await processRun(cwd, env, ["goal", "write report and pass tests", "--background", ...(!denied ? ["--accept-edits"] : []), ...(git ? ["--strict"] : []), ...(machine ? ["--check=bun"] : [])])
+      const start = await processRun(cwd, env, ["goal", "write report and pass tests", "--background", ...(!denied ? ["--accept-edits"] : []), ...(git ? ["--strict"] : []), ...(machine ? ["--artifact", "--check=bun"] : [])])
       if (machine) {
         expect(start.code).toBe(1)
         expect(start.output).toContain("--check machine verification is currently unavailable")
@@ -74,12 +78,6 @@ for (const { git, machine, denied } of [{ git: false, machine: false, denied: fa
       expect(accounting.limits).toEqual({ strict: git })
       expect(result?.deadlineAt).toBeUndefined()
       if (!denied && (!git || process.platform === "darwin")) expect(accounting.totals.tokensUsed).toBeGreaterThan(1_000_000)
-      if (git && process.platform !== "darwin") {
-        expect(result?.status).toBe("blocked")
-        expect(result?.stopReason).toContain("requires macOS Seatbelt")
-        await expect(readFile(join(cwd, "report.txt"), "utf8")).rejects.toThrow()
-        return
-      }
       if (denied) {
         expect(result?.status).toBe("blocked")
         await expect(readFile(join(cwd, "report.txt"), "utf8")).rejects.toThrow()
@@ -94,7 +92,7 @@ for (const { git, machine, denied } of [{ git: false, machine: false, denied: fa
       try { expect(await readFile(join(cwd, "report.txt"), "utf8")).toBe("goal passed\n") }
       catch (error) { throw new Error(`Missing report: ${JSON.stringify({ requests, status: result?.status, delivery: result?.delivery, error: String(error) })}`) }
       expect(requests.filter(x => x === "verify-evidence")).toHaveLength(2)
-      expect(requests).toContain("finalization")
+      expect(requests).not.toContain("finalization")
       if (git) {
         expect(execFileSync("git", ["-C", cwd, "rev-parse", "HEAD"], { encoding: "utf8" }).trim()).toBe(sourceHead)
         expect(execFileSync("git", ["-C", cwd, "diff", "--cached", "--binary"]).toString()).toBe(sourceIndex)
@@ -103,7 +101,7 @@ for (const { git, machine, denied } of [{ git: false, machine: false, denied: fa
   }, 30_000)
 }
 
-it("pauses a real Goal process, preserves budget and safely resumes its interrupted worker", async () => {
+it("resumes a shared Goal only after the ordinary runtime confirms its cancelled turn", async () => {
   const root = await mkdtemp(join(tmpdir(), "zap-goal-pause-")); const data = join(root, "data"), cwd = join(root, "project")
   await mkdir(data); await mkdir(cwd)
   let workerCalls = 0; let markWorker!: () => void
@@ -141,7 +139,9 @@ it("pauses a real Goal process, preserves budget and safely resumes its interrup
     for (let i = 0; i < 150; i++) { await new Promise(resolve => setTimeout(resolve, 100)); const store = new GoalStore(db); completed = store.get(id!); store.close(); if (completed && ["completed", "blocked"].includes(completed.status)) break }
     if (completed?.status !== "completed") throw new Error(`Resume: ${completed?.status} ${completed?.stopReason}`)
     expect(await readFile(join(cwd, "result.txt"), "utf8")).toBe("completed\n")
-    expect(completed.ownerEpoch).toBeGreaterThan(1); expect(completed.tasks[0]?.attempt).toBe(2)
+    expect(completed.ownerEpoch).toBeGreaterThan(1)
+    expect(completed.tasks[0]?.attempt).toBe(2)
+
   } finally { model.stop(); await rm(root, { recursive: true, force: true }) }
 }, 30_000)
 
@@ -166,7 +166,7 @@ it("keeps a real Goal repairing task and final failures until accepted, beyond t
         value = { tool_calls: [{ index: 0, id: "write", type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: "report.txt", content: correction ? "goal passed\nfinal marker\n" : `goal passed\nrevision ${workerWrites}\n` }) } }] }
       }
     } else if (text.includes("You are an independent verifier")) {
-      const final = text.includes("Task: Produce the accepted report\n")
+      const final = text.includes("Verification scope: final-goal")
       if (final) {
         const passed = ++finalChecks > 1 && text.includes("final marker")
         value = { content: JSON.stringify({ status: passed ? "passed" : "failed", detail: passed ? "All objective requirements met" : "Add the final marker" }) }

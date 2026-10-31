@@ -51,13 +51,13 @@ it("runs a Goal with managed npm dependencies for worker, child and final check"
   try {
     const provider = createCustomProvider({ name: "Fixture", baseURL: `http://127.0.0.1:${model.port}/v1`, apiKey: "fixture", models: ["fixture"], contextWindow: 128000 })
     await writeFile(join(data, "config.json"), JSON.stringify({ ...getDefaultConfig(), executionBackend: "vm", permissionMode: "bypassPermissions", providers: [provider], active: { providerId: provider.id, model: "fixture" } }))
-    const started = await cli(["goal", "make a report", "--background", "--install=npm", "--check=npm", "--permission-mode=bypassPermissions"])
+    const started = await cli(["goal", "make a report", "--artifact", "--background", "--install=npm", "--check=npm", "--permission-mode=bypassPermissions"])
     expect(started.code).toBe(0)
     const id = /goal_[a-f0-9-]+/.exec(started.output)?.[0]; expect(id).toBeDefined()
     const db = join(data, "goal", "goals.sqlite"); let result: ReturnType<GoalStore["get"]>
     for (let i = 0; i < 200; i++) { await new Promise(resolve => setTimeout(resolve, 100)); const store = new GoalStore(db); result = store.get(id!); store.close(); if (result && ["completed", "blocked", "awaiting_acceptance", "failed"].includes(result.status)) break }
     if (result?.status !== "completed") { const log = await readFile(join(data, "goal", "runs", createHash("sha256").update(id!).digest("hex"), "runner.log"), "utf8").catch(() => "missing log"); throw new Error(`Goal ended ${result?.status}: ${result?.stopReason}\n${log}`) }
-    expect(await readFile(join(cwd, "report.txt"), "utf8")).toBe("complete\n")
+    expect(await readFile(join((result!.delivery as { path: string }).path, "report.txt"), "utf8")).toBe("complete\n")
     await expect(readFile(join(cwd, "node_modules/fixture/index.js"))).rejects.toThrow()
     const events = (await readFile(audit, "utf8")).trim().split("\n")
     expect(events.filter(item => item === "install")).toHaveLength(3)

@@ -17,22 +17,22 @@ it("rejects Windows resume before accessing state", () => {
   expect(() => goalCommand(["resume"], root, "default", "win32")).toThrow("not yet supported on Windows")
   expect(existsSync(goalDatabasePath())).toBe(false)
 })
-it("rejects unsupported machine checks before creating a Goal or ledger", () => {
-  expect(() => goalCommand(["Create a report", "--check=bun"], root)).toThrow("--check machine verification is currently unavailable")
-  expect(() => goalCommand(["Create a report", "--check"], root)).toThrow("--check machine verification is currently unavailable")
+it("rejects unsupported isolated machine checks before creating a Goal or ledger", () => {
+  expect(() => goalCommand(["Create a report", "--artifact", "--check=bun"], root)).toThrow("--check machine verification is currently unavailable")
+  expect(() => goalCommand(["Create a report", "--artifact", "--check"], root)).toThrow("--check machine verification is currently unavailable")
   expect(existsSync(goalDatabasePath())).toBe(false)
 })
 it("help clearly identifies unavailable Goal capabilities", () => {
   const usage = goalCommand(["help"], root)
-  expect(usage).toContain("--check requires a VM backend with verified process sealing")
+  expect(usage).toContain("current workspace and ordinary tool permissions")
   expect(usage).toContain("not yet supported on Windows")
   expect(usage).toContain("--install=npm")
-  expect(usage).toContain("lifecycle scripts disabled")
+  expect(usage).toContain("normal tool permissions")
   expect(usage).toContain("does not authorize shell commands or artifact merges")
 })
 
 it("rejects unsupported npm installation and conflicting approval modes before creating state", () => {
-  expect(() => goalCommand(["Create a report", "--install=npm"], root)).toThrow("requires a VM backend")
+  expect(() => goalCommand(["Create a report", "--artifact", "--install=npm"], root)).toThrow("requires a VM backend")
   expect(() => goalCommand(["Create a report", "--install=other"], root)).toThrow("Invalid Goal dependency installation")
   expect(() => goalCommand(["Create a report", "--accept-edits", "--permission-mode=bypassPermissions"], root)).toThrow("Invalid Goal permission mode")
   expect(() => goalCommand(["Create a report", "--permission-mode=unknown"], root)).toThrow("Invalid Goal permission mode")
@@ -69,4 +69,9 @@ it("selects the current chat's Goal instead of a newer Goal from another chat", 
     const status = goalCommand(["status"], root, "default", process.platform, "mine")
     expect(status).toContain(mine.id); expect(status).not.toContain(other.id)
   } finally { ledger.close(); store.close() }
+})
+
+it("rejects a foreground permission override that ordinary session execution cannot honor", () => {
+  expect(() => goalCommand(["Report", "--permission-mode=default"], root, "bypassPermissions", process.platform, "chat", () => {}, true)).toThrow("current session permission mode")
+  expect(() => goalCommand(["Report", "--accept-edits"], root, "default", process.platform, "chat", () => {}, true)).toThrow("current session permission mode")
 })

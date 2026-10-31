@@ -67,17 +67,15 @@ export function startGoalBackgroundRunner(goal: GoalRecord): void {
 }
 
 /** The same command implementation is used by the TUI and the CLI. */
-export function goalCommand(args: string[], cwd: string, currentMode: import("./config.js").PermissionMode = "default", platform: NodeJS.Platform = process.platform, sessionId?: string, onForeground?: (goal: GoalRecord) => void): string {
+export function goalCommand(args: string[], cwd: string, currentMode: import("./config.js").PermissionMode = "default", platform: NodeJS.Platform = process.platform, sessionId?: string, onForeground?: (goal: GoalRecord) => void, enforceSessionMode = false): string {
   const action = args[0] ?? ""
   if (!action || action === "help") return [
     "Usage: /goal <objective> [--background] [--artifact] [--strict] [--accept-edits | --permission-mode=MODE] [--check=bun|npm|pytest|go] [--install=npm] [--tokens=N] [--minutes=N] [--model-calls=N] [--tool-calls=N] | status [id] | list | pause [id] | resume [id] | cancel [id] | budget extend [id] --tokens=N --minutes=N",
     "Goals run in the current session by default. Use --background to detach, or /goal background to hand off at a safe boundary.",
     "Goals run until independent acceptance and delivery, with no default token, call or time limit. Use pause or cancel to interrupt.",
-    "Goal execution is not yet supported on Windows; --check requires a VM backend with verified process sealing.",
-    "Git Goal currently supports macOS repository roots with an existing commit and ordinary SHA-1 metadata; linked worktrees, alternates, shallow and SHA-256 repositories are unavailable.",
-    "Git commits remain private to the Goal; delivery changes files only, not the source index or refs. The private index starts from HEAD and does not preserve staged/unstaged grouping.",
-    "--install=npm uses package-lock v3, official npm registry tarballs and an offline VM install with lifecycle scripts disabled.",
-    "The lockfile must exist before starting; changing package.json or package-lock.json during the Goal blocks it. Existing node_modules is never overwritten. Verifier workspaces are read-only.",
+    "Goals use the current workspace and ordinary tool permissions. --artifact explicitly selects the legacy isolated-artifact workflow.",
+    "Goal execution is not yet supported on Windows.",
+    "--check runs the requested test command through normal tool permissions. --install=npm requests ordinary dependency installation; it does not grant shell permission.",
     "--accept-edits authorizes file edits but does not authorize shell commands or artifact merges requiring confirmation.",
   ].join("\n")
   const control = ["list", "status", "watch", "pause", "cancel", "resume", "budget"].includes(action)
@@ -87,8 +85,8 @@ export function goalCommand(args: string[], cwd: string, currentMode: import("./
   const modeArgs = args.filter(arg => arg === "--permission-mode" || arg.startsWith("--permission-mode="))
   if (!control && (modeArgs.length > 1 || modeArgs.some(arg => !/^--permission-mode=(default|acceptEdits|bypassPermissions|plan)$/.test(arg)) || modeArgs.length > 0 && args.includes("--accept-edits"))) throw new Error("Invalid Goal permission mode")
   if (!control && (installArgs.length > 1 || installArgs.some(arg => arg !== "--install=npm"))) throw new Error("Invalid Goal dependency installation; use --install=npm")
-  if (!control && installArgs.length && !machineCheckSupported(cwd)) throw new Error("Goal --install=npm requires a VM backend with verified process sealing.")
-  if (!control && checkArgs.length && !machineCheckSupported(cwd)) throw new Error("Goal --check machine verification is currently unavailable: process-tree sealing cannot be verified.")
+  if (!control && args.includes("--artifact") && installArgs.length && !machineCheckSupported(cwd)) throw new Error("Goal --install=npm requires a VM backend with verified process sealing.")
+  if (!control && args.includes("--artifact") && checkArgs.length && !machineCheckSupported(cwd)) throw new Error("Goal --check machine verification is currently unavailable: process-tree sealing cannot be verified.")
   if (!control && (checkArgs.length > 1 || checkArgs.some(arg => !/^--check=(bun|npm|pytest|go)$/.test(arg)))) throw new Error("Invalid Goal machine check; use --check=bun, npm, pytest or go")
   const background = args.includes("--background")
   if (args.filter(arg => arg === "--background").length > 1 || args.some(arg => arg.startsWith("--background="))) throw new Error("Invalid Goal background flag")
@@ -107,6 +105,10 @@ export function goalCommand(args: string[], cwd: string, currentMode: import("./
   }
   if (limits.maxTokens !== undefined) limits.reservedTokens = Math.min(50_000, Math.floor(limits.maxTokens * 0.05))
   if ((!control || action === "resume") && !background && !onForeground) throw new Error("A foreground Goal launcher is required")
+  if (enforceSessionMode && !control && !background) {
+    const requested = args.includes("--accept-edits") ? "acceptEdits" : modeArgs[0]?.slice("--permission-mode=".length) ?? currentMode
+    if (requested !== currentMode) throw new Error("Goal uses the current session permission mode; change the session mode before starting a Goal")
+  }
   const launch = (goal: GoalRecord) => background ? startGoalBackgroundRunner(goal) : onForeground!(goal)
   const store = new GoalStore(goalDatabasePath(), { requireLedger: true })
   try {
@@ -126,7 +128,7 @@ export function goalCommand(args: string[], cwd: string, currentMode: import("./
           ...(goal.failure ? [`Failure: ${JSON.stringify(goal.failure)}`] : []),
           ...(goal.progress ? [`Progress: ${JSON.stringify(goal.progress)}`] : []),
           `Tasks: ${goal.tasks.filter(task => task.status === "passed").length}/${goal.tasks.length}`,
-          ...(goal.dependencyInstall ? ["Dependencies: npm (official registry, package-lock v3, scripts disabled)"] : []),
+          ...(goal.dependencyInstall ? ["Dependencies: npm (normal tool permissions)"] : []),
           `Usage: ${budget.totals.modelCalls} model calls · ${budget.totals.toolCalls} tool calls · ${budget.totals.tokensUsed} tokens · ${budget.totals.unknownUsage} unknown usage · ${budget.totals.opaqueToolCalls} unmetered tool calls (${budget.limits.strict === false ? "observed" : "strict"})`,
           ...(goal.delivery ? [`Artifact: ${JSON.stringify(goal.delivery)}`] : []),
           `Log: ${join(goalHome(goal.id), "runner.log")}`,
@@ -152,7 +154,8 @@ export function goalCommand(args: string[], cwd: string, currentMode: import("./
     }
     if (action === "resume") {
       const goal = selectGoal(store, cwd, args[1], sessionId)
-      if ((goal.machineCheck || goal.dependencyInstall) && !machineCheckSupported(cwd)) throw new Error("Goal VM execution is currently unavailable: process-tree sealing cannot be verified.")
+      if (goal.executionMode !== "session" && (goal.machineCheck || goal.dependencyInstall) && !machineCheckSupported(cwd)) throw new Error("Goal VM execution is currently unavailable: process-tree sealing cannot be verified.")
+      if (enforceSessionMode && !background && goal.executionMode === "session" && goal.permissionMode !== currentMode) throw new Error("Goal permission mode differs from the current session; restore its mode before resuming")
       const stopped = recoverStoppedOwner(store, goal)
       if (sessionId && stopped.sessionId === sessionId) store.pauseForInput(cwd, sessionId)
       launch(store.prepareResume(stopped.id))
@@ -165,7 +168,7 @@ export function goalCommand(args: string[], cwd: string, currentMode: import("./
     if (!objective) throw new Error("Goal objective is required")
     const machineCheck = checkArgs[0]?.slice("--check=".length) as "bun" | "npm" | "pytest" | "go" | undefined
     if (sessionId) store.pauseForInput(cwd, sessionId)
-    const goal = store.create({ objective, cwd, sessionId, deadlineAt: limits.deadlineAt, deliveryPolicy, permissionMode, machineCheck, dependencyInstall: installArgs.length ? "npm" : undefined })
+    const goal = store.create({ executionMode: deliveryPolicy === "artifact" ? "isolated" : "session", objective, cwd, sessionId, deadlineAt: limits.deadlineAt, deliveryPolicy, permissionMode, machineCheck, dependencyInstall: installArgs.length ? "npm" : undefined })
     const ledger = new GoalBudgetLedger(goalDatabasePath())
     try {
       // Usage remains durable and shared across all phases and children; no

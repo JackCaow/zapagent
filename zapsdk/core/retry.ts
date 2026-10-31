@@ -39,6 +39,15 @@ export class RetryProvider implements LLMProvider {
     this.onRetry = options.onRetry;
   }
 
+  /** Per-run instrumentation inside retries, without mutating a shared provider. */
+  withInnerAdapter(adapter: (provider: LLMProvider) => LLMProvider): RetryProvider {
+    return new RetryProvider(adapter(this.inner), {
+      maxRetries: this.maxRetries, initialDelayMs: this.initialDelayMs,
+      maxDelayMs: this.maxDelayMs, backoffMultiplier: this.backoffMultiplier,
+      retryableErrors: this.retryableErrors, onRetry: this.onRetry,
+    });
+  }
+
   getImageTokenContext(options?: LLMCallOptions) {
     return this.inner.getImageTokenContext?.(options) ?? { model: options?.model };
   }

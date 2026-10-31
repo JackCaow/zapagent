@@ -109,7 +109,7 @@ const READONLY_BIN_ALLOWLIST = new Set([
   // Searching
   "find", "grep", "rg", "fgrep", "egrep",
   // Dir / file metadata
-  "tree", "file", "stat", "pwd", "basename", "dirname", "readlink", "realpath",
+  "tree", "file", "stat", "pwd", "du", "basename", "dirname", "readlink", "realpath",
   // Text inspection (read-only flags only; no `sed -i`, no awk `system`)
   "sort", "uniq", "cut", "tr", "comm", "diff", "cmp",
   "column", "paste", "fold", "rev", "od", "hexdump", "strings",
@@ -137,7 +137,7 @@ const READONLY_BIN_ALLOWLIST = new Set([
 const READONLY_GIT_SUBCOMMANDS = new Set([
   "log", "diff", "status", "blame", "show", "ls-files", "ls-tree",
   "rev-parse", "rev-list", "describe", "grep", "shortlog", "whatchanged",
-  "cat-file", "for-each-ref", "name-rev",
+  "cat-file", "for-each-ref", "name-rev", "merge-base", "worktree",
 ]);
 
 /** Returns null if safe, else a human-readable reject reason. */
@@ -147,7 +147,7 @@ export function validateReadOnlyBash(cmd: string): string | null {
 
   // Reject shell control that could chain unsafe commands or redirect output.
   // Pipes (|) are allowed because they compose read-only filters.
-  if (/;|&&|\|\||>|<|\$\(|`/.test(trimmed)) {
+  if (/[\r\n&;]|\|\||>|<|\$\(|`/.test(trimmed)) {
     return "shell control (;, &&, ||, >, <, $(), backticks) is not allowed in read-only mode. Plain pipes (|) are allowed.";
   }
   // Reject trailing `&` (background).
@@ -170,6 +170,7 @@ export function validateReadOnlyBash(cmd: string): string | null {
       if (!READONLY_GIT_SUBCOMMANDS.has(sub)) {
         return `git ${sub} is not in the read-only allowlist (allowed: log, diff, status, blame, show, ls-files, …)`;
       }
+      if (sub === "worktree" && parts[2] !== "list") return "only git worktree list is allowed in read-only mode";
       if (parts.some((part) => part === "--output" || part.startsWith("--output="))) {
         return "git --output is not allowed in read-only mode";
       }
@@ -205,8 +206,8 @@ export function validateReadOnlyBash(cmd: string): string | null {
  *  argument. Registered under the same name ("bash") so the subagent's
  *  tool schema is indistinguishable from the main agent's — the model
  *  doesn't need to learn a new tool name. */
-function readOnlyBashTool(defaultCwd?: string): Tool {
-  const inner = executeCommandTool({ defaultCwd, allowUnsandboxed: false });
+export function readOnlyBashTool(defaultCwd?: string): Tool {
+  const inner = executeCommandTool({ defaultCwd, allowUnsandboxed: false, sandboxNetwork: false, restrictedNetwork: false, disableBackgroundTasks: true });
   return {
     ...inner,
     definition: {
@@ -221,6 +222,7 @@ function readOnlyBashTool(defaultCwd?: string): Tool {
           kind: "process",
           operation: "spawn",
           commandClass: "read-only-shell",
+          readOnly: true,
           background: false,
         }],
         external: [],
@@ -229,16 +231,15 @@ function readOnlyBashTool(defaultCwd?: string): Tool {
       }),
     },
     handler: async (args, signal, context) => {
-      const command = args.command as string;
-      const reject = validateReadOnlyBash(command);
-      if (reject) {
-        return {
-          success: false,
-          output: "",
-          error: `bash blocked in read-only mode: ${reject}`,
-        };
+      const parsed = inner.definition.parameters.safeParse(args);
+      if (!parsed.success) return { success: false, output: "", error: `Invalid read-only bash arguments: ${parsed.error.message}` };
+      const checked = parsed.data as Record<string, unknown>;
+      const commands = Array.isArray(checked.check_steps) ? checked.check_steps : [checked.command];
+      for (const command of commands) {
+        const reject = typeof command === "string" ? validateReadOnlyBash(command) : "command or check_steps is required";
+        if (reject) return { success: false, output: "", error: `bash blocked in read-only mode: ${reject}` };
       }
-      return inner.handler(args, signal, context);
+      return inner.handler(checked, signal, context);
     },
   };
 }

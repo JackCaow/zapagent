@@ -5,6 +5,7 @@ import type { AgentEvent } from "../zapsdk/agent/events.js"
 import type { PermissionMode } from "./config.js"
 
 export interface GoalSessionOptions {
+  runTurn?: import("./goal-turn.js").GoalTurnExecutor
   permissionMode?: PermissionMode
   sessionId?: string
   signal?: AbortSignal
@@ -35,7 +36,7 @@ export async function executeGoalCommand(args: string[], cwd: string, options: G
   const message = goalCommand(args, cwd, options.permissionMode, process.platform, options.sessionId, goal => {
     if (attached.has(key)) throw new Error("A foreground Goal is already running in this session")
     foreground = goal
-  })
+  }, !!options.runTurn)
   options.onMessage(message)
   if (!foreground) return 0
   const goal = foreground as GoalRecord
@@ -58,7 +59,7 @@ export async function executeGoalCommand(args: string[], cwd: string, options: G
   try {
     options.onStart?.(goal)
     const { runGoalRunner } = await import("./goal-runner.js")
-    const code = await runGoalRunner(goal.id, { signal: options.signal, onState: options.onState,
+    const code = await runGoalRunner(goal.id, { runTurn: options.runTurn, signal: options.signal, onState: options.onState,
       onEvent: (event, operationId) => options.onEvent?.(event, `${goal.id}:${operationId}`),
       onOutcome: value => { outcome = value },
     })

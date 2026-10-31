@@ -1,3 +1,6 @@
+import { goalTurnMeter, type GoalTurnInput } from "../goal-turn.js"
+import { RetryProvider } from "../../zapsdk/core/retry.js"
+import type { AgentOutcomeV1 } from "../../zapsdk/runtime/outcome.js"
 import { executeGoalCommand } from "../goal-session.js"
 import { createGoalPresentation } from "../agent/goalPresentation.js"
 import { AgentBudget } from "../../zapsdk/agent/budget.js"
@@ -538,7 +541,7 @@ export function useAgentRunner({
     systemPrompt?: string,
     images?: import("../../zapsdk/core/types.js").ImageContent[],
     memoryQueryText?: string,
-    invocation?: { signal?: AbortSignal; propagateErrors?: boolean; resultSchema?: "outcome-v1" | "legacy" } & Pick<import("../../zapsdk/agent/loop.js").RunOptions,
+    invocation?: { goalTurn?: GoalTurnInput; goalController?: AbortController; onOutcome?: (outcome: AgentOutcomeV1) => void; signal?: AbortSignal; propagateErrors?: boolean; resultSchema?: "outcome-v1" | "legacy" } & Pick<import("../../zapsdk/agent/loop.js").RunOptions,
       "onInputAccepted" | "hasSteering" | "takeSteering" | "onSteeringAccepted">,
   ): Promise<LoopAgentResult | undefined> => {
     running.current = true
@@ -548,7 +551,7 @@ export function useAgentRunner({
     const forwardExternalAbort = () => controller.abort(externalSignal?.reason)
     if (externalSignal?.aborted) forwardExternalAbort()
     else externalSignal?.addEventListener("abort", forwardExternalAbort, { once: true })
-    abortRef.current = controller
+    abortRef.current = invocation?.goalController ?? controller
     setStatus("preparing")
     setProviderRequest(undefined)
     setStep(0)
@@ -574,11 +577,17 @@ export function useAgentRunner({
     let outcomeExecutionError: Error | undefined
     let caughtError: unknown
     let completedResult: LoopAgentResult | undefined
+    let goalMeter: ReturnType<typeof goalTurnMeter> | undefined
     let preview: ReturnType<typeof createStreamingPreview> | null = null
     let handlers: ReturnType<typeof createRunHandlers> | null = null
 
     try {
-      const { provider, registry, executor, createRegistryForCwd, executionFacts, executionCapacity } = agentRef.current
+      const objects = agentRef.current
+      const { registry, createRegistryForCwd, executionFacts, executionCapacity } = objects
+      goalMeter = invocation?.goalTurn ? goalTurnMeter(invocation.goalTurn) : undefined
+      const provider = goalMeter ? objects.provider instanceof RetryProvider
+        ? objects.provider.withInnerAdapter(goalMeter.providerAdapter) : goalMeter.providerAdapter(objects.provider) : objects.provider
+      const executor = goalMeter ? objects.executor.withExecutionAdmission(goalMeter.admitToolExecution) : objects.executor
       const currentConfig = config
       const cacheScope = makePromptCacheScope(
         currentConfig.active.providerId,
@@ -788,6 +797,7 @@ export function useAgentRunner({
     setPromptCacheDiagnostics(promptCacheDiagnosticsForRun)
 
       handlers.wire(agent)
+      if (invocation?.goalTurn) agent.on("*", invocation.goalTurn.onEvent)
 
     // ── Per-turn context attachments + turn-end guard ──
       const { contextPrefix, contextDelta, contextDiagnostics } = makeContextBuilders({
@@ -812,6 +822,7 @@ export function useAgentRunner({
         onSteeringAccepted: invocation?.onSteeringAccepted,
       }
       const execution = invocation?.resultSchema === "legacy" ? undefined : await agent.runWithOutcome(task, runOptions)
+      if (execution) invocation?.onOutcome?.(execution.outcome)
       const result = execution?.loopResult ?? await agent.run(task, runOptions)
       if (execution?.outcome.execution.status === "failed" || execution?.outcome.execution.status === "blocked") {
         runError = execution.outcome.execution.error?.message ?? execution.outcome.execution.stopReason
@@ -902,6 +913,7 @@ export function useAgentRunner({
       // has already ended. Nulling the callback in this finally re-introduces
       // the "ghost paragraph in tail" bug that commit 57a4bf2 fixed.
 
+      goalMeter?.close()
       running.current = false
       abortRef.current = null
       setActiveTool("")
@@ -946,6 +958,17 @@ export function useAgentRunner({
     let stateLabel = ""
     try {
       return await executeGoalCommand(args, cwd, {
+        runTurn: async input => {
+          presentation?.finish()
+          let outcome: AgentOutcomeV1 | undefined
+          try {
+            const result = await runAgent(input.prompt, undefined, undefined, input.prompt, {
+              signal: input.signal, goalTurn: input, goalController: controller, onOutcome: value => { outcome = value }, resultSchema: "outcome-v1", propagateErrors: true,
+            })
+            if (!result || !outcome) throw new Error("GOAL_TURN_OUTCOME_MISSING")
+            return { text: result.text, outcome, toolCalls: result.toolResults.length, sessionId: getCurrentSessionId() }
+          } finally { running.current = true; abortRef.current = controller }
+        },
         permissionMode: config.permissionMode, sessionId: getCurrentSessionId(), signal: controller.signal,
         onStart: () => {
           if (running.current) throw new Error("The current session is already running a task")
@@ -979,7 +1002,7 @@ export function useAgentRunner({
         setGoalRunning(false); setStatus("ready"); setActiveTool(""); setStep(0); setProviderRequest(undefined)
       }
     }
-  }, [config, cwd, addLog, replaceLog, peekNextLogId, getIsFrozen, registerStaticFlushCallback, agentRunStore])
+  }, [config, cwd, addLog, replaceLog, peekNextLogId, getIsFrozen, registerStaticFlushCallback, agentRunStore, runAgent])
 
   const runAgentRef = useRef(runAgent)
   runAgentRef.current = runAgent

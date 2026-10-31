@@ -171,6 +171,9 @@ describe("subagent salvage truncation", () => {
 describe("read-only bash validator defense in depth", () => {
   it("rejects indirect writers and mutating git subcommands", () => {
     expect(validateReadOnlyBash("env touch /tmp/probe")).not.toBeNull()
+    expect(validateReadOnlyBash("ls\nrm file")).not.toBeNull()
+    expect(validateReadOnlyBash("ls & touch file")).not.toBeNull()
+    expect(validateReadOnlyBash("git worktree remove path")).not.toBeNull()
     expect(validateReadOnlyBash("sort -o /tmp/out input.txt")).not.toBeNull()
     expect(validateReadOnlyBash("git branch probe")).not.toBeNull()
     expect(validateReadOnlyBash("git config user.name probe")).not.toBeNull()
@@ -180,6 +183,9 @@ describe("read-only bash validator defense in depth", () => {
 
   it("keeps basic inspection commands available to trusted callers", () => {
     expect(validateReadOnlyBash("git status")).toBeNull()
+    expect(validateReadOnlyBash("git worktree list --porcelain")).toBeNull()
+    expect(validateReadOnlyBash("git merge-base --is-ancestor HEAD HEAD")).toBeNull()
+    expect(validateReadOnlyBash("find . -maxdepth 1 -type d | wc -l")).toBeNull()
     expect(validateReadOnlyBash("cat README.md | head -20")).toBeNull()
   })
 })

@@ -1,3 +1,4 @@
+import { readOnlyBashTool } from "../../zapsdk/builtin-tools/subagent.js"
 import { connectLocalServiceOwner } from "../../zapsdk/services/local-owner.js"
 import { createExecutionEnvironment, resolveExecutionBackend } from "../execution-environment.js"
 import { executionExitCode, OutcomeProtocolError, type AgentOutcomeV1 } from "../../zapsdk/runtime/outcome.js"
@@ -292,6 +293,8 @@ export interface HeadlessHost {
   subagentIsolationRoot?: string
   /** Enforce the workspace boundary even in permissive approval modes. */
   isolateWorkspace?: boolean
+  /** Independent Goal reviewers can inspect the real workspace, never write. */
+  readOnlyWorkspace?: boolean
   privateGit?: PrivateGitBinding
   privateGitOwnerDirectory?: string
   serializeSubagent?: boolean
@@ -518,10 +521,17 @@ export async function runHeadless(args: HeadlessArgs, host: HeadlessHost = {}): 
       : baseExecutor.policyEngine.evaluate(request),
   }, baseExecutor.checkpointMode) : baseExecutor
   const guardedExecutor = resultGuard ? scopedExecutor.withResultGuard(resultGuard) : scopedExecutor
-  const isolatedExecutor = host.isolateWorkspace ? guardedExecutor.withWorkspace({ root: realpathSync(cwd), mode: "isolated-write", sandbox: sandboxConfined ? "enforced" : "none", ...(host.privateGit ? { privateGitDirectory: host.privateGit.directory, privateGitIdentity: { device: host.privateGit.device, inode: host.privateGit.inode } } : {}) }) : guardedExecutor
+  const isolatedExecutor = host.readOnlyWorkspace ? guardedExecutor.withWorkspace({ root: realpathSync(cwd), mode: "shared-readonly", sandbox: sandboxConfined ? "enforced" : "none" }) : host.isolateWorkspace ? guardedExecutor.withWorkspace({ root: realpathSync(cwd), mode: "isolated-write", sandbox: sandboxConfined ? "enforced" : "none", ...(host.privateGit ? { privateGitDirectory: host.privateGit.directory, privateGitIdentity: { device: host.privateGit.device, inode: host.privateGit.inode } } : {}) }) : guardedExecutor
   const executor = host.admitToolExecution ? isolatedExecutor.withExecutionAdmission(host.admitToolExecution) : isolatedExecutor
   approval.setSandboxConfined(sandboxConfined, config.autoAllowSandboxedCommands !== false)
   approval.setSandboxExcludedCommands(config.allowUnsandboxedCommands !== false ? config.sandboxExcludedCommands : undefined)
+  if (host.readOnlyWorkspace) {
+    const names = new Set(["read_file", "list_tree", "read_document", "read_pdf", "read_docx", "read_tool_output", "current_time", "http_fetch"])
+    if (sandboxConfined && registry.has("bash")) {
+      registry.unregister("bash"); registry.register(readOnlyBashTool(cwd)); names.add("bash")
+    }
+    for (const definition of registry.definitions()) if (!names.has(definition.name)) registry.unregister(definition.name)
+  }
   await host.prepareRegistry?.(registry)
   if (publicChecks) {
     // These tools start work outside the root provider admission budget.
@@ -653,7 +663,7 @@ export async function runHeadless(args: HeadlessArgs, host: HeadlessHost = {}): 
       storageSessionId: getCurrentSessionId(),
       storageProjectCwd: cwd,
       sessionId: getCurrentSessionId(),
-      subagentFactory: publicChecks || host.disableSubagent ? undefined : host.serializeSubagent ? options => {
+      subagentFactory: publicChecks || host.disableSubagent || host.readOnlyWorkspace ? undefined : host.serializeSubagent ? options => {
         const tool = subagentTool(options)
         const resolveEffects = tool.definition.resolveEffects
         return { ...tool, definition: { ...tool.definition, resolveEffects: (args, context) => {
@@ -662,7 +672,7 @@ export async function runHeadless(args: HeadlessArgs, host: HeadlessHost = {}): 
         } } }
       } : subagentTool,
     },
-    subagent: publicChecks || host.disableSubagent ? false : {
+    subagent: publicChecks || host.disableSubagent || host.readOnlyWorkspace ? false : {
       inheritedInstructions: inherited.instructions,
       publicPromptSections: inherited.publicPromptSections,
       onEvent: (event) => { formatter.onEvent(event); host.onEvent?.(event) },

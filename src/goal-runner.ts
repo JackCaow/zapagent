@@ -1,3 +1,5 @@
+import { GoalTurnHost } from "./goal-turn-host.js"
+import type { GoalTurnExecutor } from "./goal-turn.js"
 import { GoalController } from "../zapsdk/goal/controller.js"
 import { GoalStore } from "../zapsdk/goal/store.js"
 import { LocalGoalHost } from "./goal-host.js"
@@ -5,6 +7,7 @@ import { goalDatabasePath } from "./goal-command.js"
 
 /** Shared controller entry for attached sessions and explicitly detached runners. */
 export interface GoalRunnerObserver {
+  runTurn?: GoalTurnExecutor
   signal?: AbortSignal
   onEvent?: (event: import("../zapsdk/agent/events.js").AgentEvent, operationId: string) => void
   onState?: (goal: import("../zapsdk/goal/contracts.js").GoalRecord) => void
@@ -32,7 +35,7 @@ export async function runGoalRunner(id: string, observer: GoalRunnerObserver = {
   try {
     const goal = store.get(id)
     if (!goal || goal.cwd !== process.cwd()) throw new Error("Goal does not belong to the current workspace")
-    const controller = new GoalController(store, new LocalGoalHost(id, observer.onEvent), id)
+    const controller = new GoalController(store, (goal.executionMode === "session" ? new GoalTurnHost(id, observer.onEvent, observer.runTurn) : new LocalGoalHost(id, observer.onEvent)), id)
     if (goal.inFlight) {
       const reconciled = await controller.recover()
       if (reconciled.inFlight || reconciled.status === "blocked") {
