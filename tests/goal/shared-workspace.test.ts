@@ -7,6 +7,9 @@ import { createHash } from "node:crypto"
 import { captureGoalEntries, GoalTurnHost, appendGoalObservation } from "../../src/goal-turn-host.js"
 import { createCustomProvider, getDefaultConfig } from "../../src/config.js"
 import { GoalStore } from "../../zapsdk/goal/store.js"
+import { createPlatformSandbox } from "../../zapsdk/execution/sandbox.js"
+
+const HAS_SANDBOX = createPlatformSandbox().status().available
 
 it("captures only observed paths, preserving dangling/external links without traversing them", async () => {
   const root = await mkdtemp(join(tmpdir(), "goal-observed-"))
@@ -43,9 +46,12 @@ it("never replays interrupted effects in a shared workspace based on a stopped P
   expect(await host.reconcile({ inFlight: { phase: "planning", operationId: "op" } } as any)).toEqual({ kind: "retry" })
 })
 
-for (const mode of ["pass", "reject", "machine", "repair", "failed-needs-input", "contradictory-verdict", "verifier-shell", "verifier-shell-denied", "verifier-shell-steps", "verifier-shell-os-denied"] as const) {
-  const reject = ["reject", "failed-needs-input", "contradictory-verdict", "verifier-shell-denied", "verifier-shell-os-denied"].includes(mode), machine = mode === "machine"
-  it(`ordinary Goal runs in place with shell, subagent capability and independent ${reject ? mode : machine ? "machine and semantic" : mode === "repair" ? "repairable unverified" : "passed"} acceptance`, async () => {
+for (const mode of ["pass", "reject", "machine", "repair", "failed-needs-input", "contradictory-verdict", "verifier-shell", "verifier-shell-denied", "verifier-shell-steps", "verifier-shell-abbrev-denied"] as const) {
+  const reject = ["reject", "failed-needs-input", "contradictory-verdict", "verifier-shell-denied", "verifier-shell-abbrev-denied"].includes(mode), machine = mode === "machine"
+  // Machine checks and shell-based reviewers need an OS sandbox to run a shell without approval.
+  const needsShell = machine || mode.startsWith("verifier-shell")
+  const maybeIt = needsShell && !HAS_SANDBOX ? it.skip : it
+  maybeIt(`ordinary Goal runs in place with shell, subagent capability and independent ${reject ? mode : machine ? "machine and semantic" : mode === "repair" ? "repairable unverified" : "passed"} acceptance`, async () => {
     const root = await mkdtemp(join(tmpdir(), "goal-shared-cli-")), cwd = join(root, "workspace"), data = join(root, "data")
     await mkdir(cwd); await mkdir(data); await mkdir(join(cwd, "alpha")); await mkdir(join(cwd, "beta"))
     await symlink("missing", join(cwd, "dangling")); await symlink("/not/present", join(cwd, "external"))
@@ -66,12 +72,12 @@ for (const mode of ["pass", "reject", "machine", "repair", "failed-needs-input",
         const priorVerdict = body.messages.find((m: any) => m.role === "assistant" && typeof m.content === "string" && m.content.includes('"status":'))
         const needsRepair = mode === "repair" && verificationCalls++ === 0
         if (mode.startsWith("verifier-shell") && reviewTools.includes("bash") && !reviewed.length) {
-          delta = call("independent-check", "bash", mode === "verifier-shell-steps" ? { check_steps: ["pwd", "cat report.txt"] } : { command: mode === "verifier-shell-denied" ? "touch forbidden.txt" : mode === "verifier-shell-os-denied" ? "sort -oforbidden.txt report.txt" : "find . -maxdepth 1 -type d | wc -l" })
+          delta = call("independent-check", "bash", mode === "verifier-shell-steps" ? { check_steps: ["pwd", "cat report.txt"] } : { command: mode === "verifier-shell-denied" ? "touch forbidden.txt" : mode === "verifier-shell-abbrev-denied" ? "sort --out=forbidden.txt report.txt" : "find . -maxdepth 1 -type d | wc -l" })
         } else if (mode.startsWith("verifier-shell") && priorVerdict) delta = { content: priorVerdict.content }
         else {
         if (mode === "verifier-shell" && reviewTools.includes("bash")) expect(String(reviewed[0]?.content).trim()).toContain("3")
         if (mode === "verifier-shell-steps" && reviewTools.includes("bash")) expect(String(reviewed[0]?.content)).toContain("two")
-        if (mode === "verifier-shell-os-denied" && reviewTools.includes("bash")) expect(String(reviewed[0]?.content)).toMatch(/Operation not permitted|Permission denied|Read-only file system/)
+        if (mode === "verifier-shell-abbrev-denied" && reviewTools.includes("bash")) expect(String(reviewed[0]?.content)).toContain("bash blocked in read-only mode")
         delta = { content: JSON.stringify({ status: mode === "contradictory-verdict" ? "passed" : mode === "failed-needs-input" ? "failed" : reject || needsRepair ? "unverified" : "passed", detail: reject ? "Need external user input" : needsRepair ? "Read the actual report to supply the missing evidence" : "Observed report and two project directories verified", ...(reject || needsRepair ? { nextAction: needsRepair || mode === "contradictory-verdict" ? "repair" : "needs_input" } : {}) }) }
         }
       } else if (prompts.includes("Work on the user's goal")) {
@@ -80,10 +86,16 @@ for (const mode of ["pass", "reject", "machine", "repair", "failed-needs-input",
         if (mode === "repair" && prompts.includes("Independent verifier feedback")) {
           if (!results.some((m: any) => m.tool_call_id === "repair-read")) delta = call("repair-read", "read_file", { path: "report.txt" })
           else delta = { content: "Read and independently supported: two project directories." }
-        } else if (!results.length) delta = call("tree", "list_tree", { path: ".", depth: 1, max_entries: 1000 })
-        else if (results.length === 1) delta = call("shell", "bash", { command: "printf goal-shell-ok" })
-        else if (results.length === 2) { sawShell = String(results[1].content).includes("goal-shell-ok"); delta = call("write", "write_file", { path: "report.txt", content: "two\n" }) }
-        else delta = { content: "Two projects, alpha and beta. Links are entries and were not followed." }
+        } else {
+          // Ordinary shell calls are auto-approved only inside an OS sandbox; without one the
+          // headless worker (correctly) cannot get approval, so the fixture skips the shell step.
+          const steps = HAS_SANDBOX ? ["tree", "shell", "write"] : ["tree", "write"]
+          const step = steps[results.length]
+          if (step === "tree") delta = call("tree", "list_tree", { path: ".", depth: 1, max_entries: 1000 })
+          else if (step === "shell") delta = call("shell", "bash", { command: "printf goal-shell-ok" })
+          else if (step === "write") { if (HAS_SANDBOX) sawShell = String(results[1].content).includes("goal-shell-ok"); delta = call("write", "write_file", { path: "report.txt", content: "two\n" }) }
+          else delta = { content: "Two projects, alpha and beta. Links are entries and were not followed." }
+        }
       } else delta = { content: "Two projects verified in the current workspace." }
       const frame = (d: object, f: string | null) => `data: ${JSON.stringify({ id: "shared", object: "chat.completion.chunk", model: "fixture", choices: [{ index: 0, delta: d, finish_reason: f }], usage: { prompt_tokens: 10, completion_tokens: 5 } })}\n\n`
       return new Response(frame(delta, null) + frame({}, finish) + "data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } })
@@ -97,7 +109,7 @@ for (const mode of ["pass", "reject", "machine", "repair", "failed-needs-input",
       const store = new GoalStore(join(data, "goal", "goals.sqlite")), goal = store.list(await realpath(cwd))[0]!; store.close()
       if (!goal || goal.status !== (reject ? "awaiting_acceptance" : "completed")) throw new Error(output + JSON.stringify(goal))
       expect(goal.executionMode).toBe("session")
-      expect(sawShell).toBe(true)
+      expect(sawShell).toBe(HAS_SANDBOX)
       expect(workerTools).toContain("agent"); expect(workerTools).toContain("bash"); expect(workerTools).toContain("http_fetch")
       expect(reviewTools).not.toContain("write_file"); expect(reviewTools).not.toContain("agent")
       // A rejected candidate still exists in the actual source: no hidden copy
@@ -112,7 +124,7 @@ for (const mode of ["pass", "reject", "machine", "repair", "failed-needs-input",
       if (mode === "pass") expect((goal.delivery as { text: string }).text).toContain("Two projects, alpha and beta.")
       if (machine) expect((await lstat(join(cwd, "coverage"))).isDirectory()).toBe(true)
       if (mode === "repair") expect(goal.tasks[0]?.attempt).toBe(2)
-      if (mode === "verifier-shell-denied" || mode === "verifier-shell-os-denied") await expect(lstat(join(cwd, "forbidden.txt"))).rejects.toThrow()
+      if (mode === "verifier-shell-denied" || mode === "verifier-shell-abbrev-denied") await expect(lstat(join(cwd, "forbidden.txt"))).rejects.toThrow()
     } finally { server.stop(); await rm(root, { recursive: true, force: true }) }
   }, 30000)
 }
@@ -249,4 +261,33 @@ it("retains recent corrective tool evidence instead of an early exploration pref
   expect(appendGoalObservation(observations, { output: "early exploration" }, 60)).toBe(false)
   expect(appendGoalObservation(observations, { output: "latest verified correction" }, 60)).toBe(true)
   expect(observations).toEqual([{ output: "latest verified correction" }])
+})
+
+it("clears the active-turn marker when the in-process turn throws, without allowing a replay", async () => {
+  const root = await mkdtemp(join(tmpdir(), "goal-turn-throws-")), previousData = process.env.ZAPCODE_DATA_DIR
+  const cwd = join(root, "project"); await mkdir(cwd)
+  process.env.ZAPCODE_DATA_DIR = join(root, "data")
+  try {
+    const { GoalController } = await import("../../zapsdk/goal/controller.js")
+    const { GoalBudgetLedger } = await import("../../zapsdk/goal/budget.js")
+    const { goalDatabasePath } = await import("../../src/goal-command.js")
+    const store = new GoalStore(goalDatabasePath()), ledger = new GoalBudgetLedger(goalDatabasePath())
+    const goal = store.create({ objective: "Do work", cwd, executionMode: "session" }); ledger.create(goal.id, 0, { strict: false }); ledger.close()
+    try {
+      const host = new GoalTurnHost(goal.id, undefined, async () => { throw new Error("provider failed") })
+      const result = await new GoalController(store, host, goal.id).run()
+      expect(result.status).toBe("blocked")
+      // The runtime is gone: sealing and a fresh claim must not stay wedged on a stale marker.
+      await host.seal()
+      const next = new GoalTurnHost(goal.id)
+      await next.onClaim(store.get(goal.id)!)
+      // Effects of the failed turn are unknown, so an executing phase still must not be replayed.
+      const resolution = await next.reconcile(store.get(goal.id)!)
+      expect(resolution.kind).toBe("blocked")
+      expect((resolution as { reason?: string }).reason).toContain("inspect current workspace")
+    } finally { store.close() }
+  } finally {
+    if (previousData === undefined) delete process.env.ZAPCODE_DATA_DIR; else process.env.ZAPCODE_DATA_DIR = previousData
+    await rm(root, { recursive: true, force: true })
+  }
 })

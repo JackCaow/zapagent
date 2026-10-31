@@ -181,6 +181,26 @@ describe("read-only bash validator defense in depth", () => {
     expect(validateReadOnlyBash("yq -i '.x=1' config.yml")).not.toBeNull()
   })
 
+  it("rejects options that write files or run external programs", () => {
+    for (const command of [
+      "find . -fprint out.txt", "find . -fls out.txt", "tree -o out.txt", "tree -a -ofile",
+      "sort -oout.txt in.txt", "sort -uo out.txt in.txt", "sort --compress-program=sh in.txt",
+      "uniq in.txt out.txt", "rg --pre sh pattern", "rg --pre=sh pattern",
+      "git grep -O pattern", "git grep --open-files-in-pager=sh pattern",
+      // getopt_long / parse-options accept unique prefixes of long options.
+      "sort --out=out.txt in.txt", "sort --o=out.txt in.txt", "sort --comp=sh in.txt",
+      "tree --out=out.txt", "git grep --open-fi=sh pattern",
+    ]) expect([command, validateReadOnlyBash(command) !== null]).toEqual([command, true])
+  })
+
+  it("still allows ordinary read-only variants of those commands", () => {
+    for (const command of [
+      "find . -name '*.ts' -print", "tree -L 2", "sort -k1,1 -t, in.txt", "sort -rn in.txt",
+      "uniq -c", "uniq -f 1 in.txt", "rg -n pattern src", "git grep -n pattern",
+      "sort --reverse in.txt", "sort --check in.txt",
+    ]) expect([command, validateReadOnlyBash(command)]).toEqual([command, null])
+  })
+
   it("keeps basic inspection commands available to trusted callers", () => {
     expect(validateReadOnlyBash("git status")).toBeNull()
     expect(validateReadOnlyBash("git worktree list --porcelain")).toBeNull()

@@ -177,7 +177,16 @@ export class GoalTurnHost implements GoalHost {
       role, prompt, permissionMode: context.goal.permissionMode, signal: context.signal, onEvent: this.executeTurn && ["worker", "repair"].includes(role) ? event => observe?.(event) : onEvent, sessionId: this.state!.sessionId }
     if (this.executeTurn && ["worker", "repair"].includes(role)) {
       this.state!.activeTurn = { operationId: context.operationId, role }; this.persist()
-      const result = await this.executeTurn(input)
+      let result: GoalTurnResult
+      try { result = await this.executeTurn(input) }
+      catch (error) {
+        // The in-process runtime has stopped, so no writer is alive and pause/seal/claim must not stay
+        // wedged. Whether its effects completed is still unknown: with no settled outcome recorded,
+        // reconcile() keeps executing/repairing blocked instead of replaying. A process that disappears
+        // never reaches this branch, so its activeTurn marker survives for the next claim.
+        this.state!.activeTurn = undefined; this.persist()
+        throw error
+      }
       if (result.outcome.execution.unresolvedActions.length) throw new Error("GOAL_TURN_RECONCILIATION_REQUIRED")
       if (result.sessionId) this.state!.sessionId = result.sessionId
       this.state!.settledTurn = { operationId: context.operationId, outcome: result.outcome }

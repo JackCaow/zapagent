@@ -140,6 +140,14 @@ const READONLY_GIT_SUBCOMMANDS = new Set([
   "cat-file", "for-each-ref", "name-rev", "merge-base", "worktree",
 ]);
 
+/** getopt_long accepts any unique prefix of a long option (`sort --out=FILE`), so a plain
+ *  `startsWith("--output")` check is bypassed by abbreviations. */
+function isLongOptionAbbreviation(part: string, full: string, minLength: number): boolean {
+  if (!part.startsWith("--")) return false;
+  const name = part.split("=")[0]!;
+  return name.length >= minLength && full.startsWith(name);
+}
+
 /** Returns null if safe, else a human-readable reject reason. */
 export function validateReadOnlyBash(cmd: string): string | null {
   const trimmed = cmd.trim();
@@ -148,7 +156,7 @@ export function validateReadOnlyBash(cmd: string): string | null {
   // Reject shell control that could chain unsafe commands or redirect output.
   // Pipes (|) are allowed because they compose read-only filters.
   if (/[\r\n&;]|\|\||>|<|\$\(|`/.test(trimmed)) {
-    return "shell control (;, &&, ||, >, <, $(), backticks) is not allowed in read-only mode. Plain pipes (|) are allowed.";
+    return "shell control (;, &, &&, ||, >, <, $(), backticks, newlines) is not allowed in read-only mode. Plain pipes (|) are allowed.";
   }
   // Reject trailing `&` (background).
   if (/&\s*$/.test(trimmed)) return "background (&) is not allowed in read-only mode";
@@ -174,6 +182,9 @@ export function validateReadOnlyBash(cmd: string): string | null {
       if (parts.some((part) => part === "--output" || part.startsWith("--output="))) {
         return "git --output is not allowed in read-only mode";
       }
+      if (sub === "grep" && parts.some((part) => part.startsWith("-O") || isLongOptionAbbreviation(part, "--open-files-in-pager", 4))) {
+        return "git grep -O / --open-files-in-pager run external programs and are not allowed";
+      }
     }
 
     if (first === "find") {
@@ -181,10 +192,33 @@ export function validateReadOnlyBash(cmd: string): string | null {
       if (/\s-(exec|delete|ok|execdir|okdir)\b/.test(seg)) {
         return "find -exec / -delete / -ok / -execdir / -okdir are not allowed";
       }
+      // -fprint* / -fls write their results to a file.
+      if (/\s-(fprint|fprint0|fprintf|fls)\b/.test(seg)) {
+        return "find -fprint / -fprint0 / -fprintf / -fls write files and are not allowed";
+      }
     }
 
-    if (first === "sort" && parts.some((part) => part === "-o" || part.startsWith("--output"))) {
-      return "sort output-file options are not allowed in read-only mode";
+    // Short-option clusters such as `-oFILE` or `-uo FILE` also select an output file.
+    if (first === "sort" && parts.slice(1).some((part) => /^-[A-Za-z]*o/.test(part) || isLongOptionAbbreviation(part, "--output", 3) || isLongOptionAbbreviation(part, "--compress-program", 4))) {
+      return "sort output-file / compress-program options are not allowed in read-only mode";
+    }
+
+    if (first === "tree" && parts.slice(1).some((part) => /^-[A-Za-z]*o/.test(part) || isLongOptionAbbreviation(part, "--output", 3))) {
+      return "tree output-file options are not allowed in read-only mode";
+    }
+
+    if (first === "rg" && parts.slice(1).some((part) => /^--(pre|hostname-bin)(=|$)/.test(part))) {
+      return "rg --pre / --hostname-bin run external programs and are not allowed";
+    }
+
+    if (first === "uniq") {
+      // `uniq INPUT OUTPUT` writes OUTPUT. Option values (-f/-s/-w N) are not files.
+      const operands: string[] = [];
+      for (let i = 1; i < parts.length; i++) {
+        if (/^-[fsw]$/.test(parts[i]!)) { i++; continue; }
+        if (!parts[i]!.startsWith("-")) operands.push(parts[i]!);
+      }
+      if (operands.length > 1) return "uniq with an output operand is not allowed in read-only mode";
     }
 
     if (first === "yq" && parts.some((part) => part === "-i" || part === "--inplace")) {
