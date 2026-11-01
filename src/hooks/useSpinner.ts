@@ -7,12 +7,15 @@ const DIAG = process.env.ZAPCODE_DIAG === "1"
 export function useSpinner(status: string) {
   const [spinIdx, setSpinIdx] = useState(0)
   const [elapsed, setElapsed] = useState(0)
+  const [elapsedStatus, setElapsedStatus] = useState(status)
   // Per-second tick counter — when CPU spikes we want log evidence of how
   // many frames the spinner is forcing through React per second. Reset on
   // each second boundary; emit only when DIAG is on so prod logs stay clean.
   const tickStatsRef = useRef({ ticks: 0, windowStart: Date.now() })
 
   useEffect(() => {
+    setElapsedStatus(status)
+    setElapsed(0)
     if (DIAG) appLogger.debug("spinner_status", { status })
     if (status === "ready" || status === "cancelled") {
       setElapsed(0)
@@ -36,5 +39,5 @@ export function useSpinner(status: string) {
     return () => clearInterval(timer)
   }, [status])
 
-  return { spinIdx, elapsed, spinnerFrames: SPINNER_FRAMES }
+  return { spinIdx, elapsed: elapsedStatus === status ? elapsed : 0, spinnerFrames: SPINNER_FRAMES }
 }

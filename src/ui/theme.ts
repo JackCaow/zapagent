@@ -41,6 +41,7 @@ const palette = {
   olive:    "#94b369",    // success — was #7d9655
   mustard:  "#dab74a",    // warning — was #cba037
   brick:    "#cc6651",    // error   — was #b85543
+  periwinkle: "#91a4ff",  // context maintenance — distinct from warnings
   sage:     "#b6c7b7",    // info    — was #9fb0a0
 
   // Absolute — cool warm-white (slightly brighter than gray100), peat-deep ink
@@ -76,6 +77,7 @@ export const c = {
   warning: palette.mustard,
   error:   palette.brick,
   info:    palette.sage,
+  maintenance: palette.periwinkle,
 
   // Cursor / selection
   cursor: palette.tundra400,

@@ -1,27 +1,38 @@
 /** @jsxImportSource react */
 import { useEffect, useRef, useState } from "react"
 import { Text, useInput } from "ink"
+import { useUpdateCheck } from "../hooks/useUpdateCheck.js"
+import { VERSION } from "../version.js"
 import { DialogFrame } from "./dialog-frame.js"
 import { installSelfUpdate, planSelfUpdate, type RestartRequest, type UpdatePlan } from "../self-update.js"
 
-export function UpdateDialog({ version, busy, sessionId, beforeInstall, onRestart, onCancel }: {
-  version: string | null; busy: boolean; sessionId: string
+export function UpdateDialog({ busy, sessionId, beforeInstall, onRestart, onCancel }: {
+  busy: boolean; sessionId: string
   beforeInstall: () => void
   onRestart: (request: RestartRequest) => void; onCancel: () => void
 }) {
+  const check = useUpdateCheck(true)
   const [plan, setPlan] = useState<UpdatePlan | null>(null)
-  const [message, setMessage] = useState("Checking installation…")
+  const [message, setMessage] = useState("Checking for zapAgent updates…")
   const [installing, setInstalling] = useState(false)
   const started = useRef(false)
   useEffect(() => {
     let active = true
-    if (!version) { setMessage("No newer version is available yet."); return }
+    setPlan(null)
+    if (check.status !== "available") {
+      setMessage(check.status === "current" ? `zapAgent v${VERSION} is up to date.`
+        : check.status === "error" ? "Could not check for updates. Close and reopen /update to retry."
+        : "Checking for zapAgent updates…")
+      return
+    }
+    const version = check.version
     if (busy) { setMessage("Wait for the current task and queued messages to finish before updating."); return }
+    setMessage("Checking installation…")
     void planSelfUpdate(version).then(result => {
       if (active) { setPlan(result); setMessage(`Install v${version} and restart? Your saved session will be restored.`) }
     }, error => { if (active) setMessage(error instanceof Error ? error.message : "Could not prepare update") })
     return () => { active = false }
-  }, [version, busy])
+  }, [check, busy])
   useInput((input, key) => {
     if (started.current) return
     if (key.escape || input === "n") { onCancel(); return }
@@ -38,7 +49,7 @@ export function UpdateDialog({ version, busy, sessionId, beforeInstall, onRestar
       setMessage(`Update failed: ${error instanceof Error ? error.message : "unknown error"}. Close this dialog to continue.`)
     })
   })
-  return <DialogFrame title="Update zapAgent" hint={installing ? "Please wait — restart follows successful installation" : "y download, install and restart · esc/n later"}>
+  return <DialogFrame title="Update zapAgent" hint={installing ? "Please wait — restart follows successful installation" : plan ? "y download, install and restart · esc/n later" : "esc/n close"}>
     <Text>{message}</Text>
   </DialogFrame>
 }

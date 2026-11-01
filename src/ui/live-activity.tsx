@@ -13,6 +13,7 @@ import { useSpinner } from "../hooks/useSpinner.js"
 import {
   activityProgress,
   buildLiveActivityCopy,
+  formatActivityDuration,
   type ActivityProgressKind,
 } from "./activity-status.js"
 
@@ -128,6 +129,23 @@ function statusLabel(status: string, activeTool: string): string {
   return STATUS_LABELS[status] ?? status ?? "Working"
 }
 
+/** A quiet, transient maintenance row; never appended to conversation history. */
+export function CompactActivity({ elapsed, stopHint = "Esc twice to stop", termWidth }: {
+  elapsed: number; stopHint?: string; termWidth: number
+}) {
+  return (
+    <Box flexDirection="column" paddingLeft={2} marginTop={1}>
+      <Text wrap="truncate-end">
+        <Text color={c.maintenance}>· Compacting conversation…</Text>
+        <Text color={c.text.faint}> ({formatActivityDuration(elapsed)})</Text>
+      </Text>
+      <Text color={c.text.faint} wrap="truncate-end">
+        {truncateToWidth(`  └ Tip: ${stopHint} compaction.`, Math.max(1, termWidth - 2))}
+      </Text>
+    </Box>
+  )
+}
+
 export const LiveActivity = memo(function LiveActivity({
   isRunning, isStreaming, isThinking, thinkingChars,
   status, activeTool, activeToolBytes = 0, termWidth, pendingTools,
@@ -157,6 +175,8 @@ export const LiveActivity = memo(function LiveActivity({
       progressRef.current = { kind: progress.kind, value: progress.value, changedAt: Date.now() }
     }
   }, [isRunning, progress.kind, progress.value])
+
+  if (status === "compacting") return <CompactActivity elapsed={elapsed} stopHint={stopHint} termWidth={termWidth} />
 
   // Always render a single-row Box (even when idle) so the frame
   // height stays stable across the running→idle transition. Without
@@ -200,11 +220,7 @@ export const LiveActivity = memo(function LiveActivity({
   const hintWidth = displayWidth(interruptHint)
   const segmentBudget = Math.max(20, termWidth - spinnerWidth - hintWidth - 4)
   const truncated = truncateToWidth(segments, segmentBudget)
-  // Compact uses a distinct spinner color (warning) so the user can tell at
-  // a glance "this isn't the agent thinking, it's the context being
-  // compressed". Matches the Claude Code pattern of swapping to a system-
-  // colored spinner during compact_start → compact_end.
-  const spinnerColor = status === "compacting" || copy.mayBeStalled ? c.warning : c.accent
+  const spinnerColor = copy.mayBeStalled ? c.warning : c.accent
   return (
     <Box flexDirection="row" paddingLeft={2} marginTop={1}>
       <Text color={spinnerColor} wrap="truncate-end">{spinner} </Text>

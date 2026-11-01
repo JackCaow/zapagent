@@ -58,7 +58,7 @@ async function writeCache(path: string, value: Cache): Promise<void> {
   finally { await unlink(temporary).catch(() => {}) }
 }
 
-export async function fetchLatestRelease(options: UpdateCheckOptions): Promise<string> {
+export async function fetchLatestRelease(options: Omit<UpdateCheckOptions, "cachePath"> & { cachePath?: string }): Promise<string> {
   const controller = new AbortController()
   let timer: ReturnType<typeof setTimeout> | undefined
   let onAbort: (() => void) | undefined
@@ -125,5 +125,31 @@ export function startUpdateCheck(options: Omit<UpdateCheckOptions, "signal">, no
   void checkForUpdate({ ...options, signal: controller.signal }).then(version => {
     if (version && !controller.signal.aborted) notify(version)
   }).catch(() => {})
+  return () => controller.abort()
+}
+
+/** UI checks are fresh: a newly published release must not be hidden by yesterday's cache. */
+export type UpdateCheckState =
+  | { status: "checking" | "disabled" }
+  | { status: "current"; version: string }
+  | { status: "available"; version: string }
+  | { status: "error" }
+
+export async function checkForUpdateStatus(options: Omit<UpdateCheckOptions, "cachePath">): Promise<UpdateCheckState> {
+  try {
+    const latest = await fetchLatestRelease(options)
+    if (options.signal?.aborted) return { status: "error" }
+    return { status: isNewerRelease(latest, options.currentVersion) ? "available" : "current", version: latest }
+  } catch { return { status: "error" } }
+}
+
+/** Each mount/request owns its cancellation; closed dialogs cannot publish stale results. */
+export function startUpdateStatusCheck(options: Omit<UpdateCheckOptions, "signal" | "cachePath">,
+  notify: (state: UpdateCheckState) => void): () => void {
+  const controller = new AbortController()
+  notify({ status: "checking" })
+  void checkForUpdateStatus({ ...options, signal: controller.signal }).then(state => {
+    if (!controller.signal.aborted) notify(state)
+  })
   return () => controller.abort()
 }
