@@ -611,10 +611,18 @@ export class AgentCoordinator {
   }
 
   private async waitForMessage(runId: string): Promise<AgentMailboxMessage> {
-    const available = await this.drainMailbox(runId);
-    if (available[0]) return available[0];
     const control = this.controls.get(runId);
     if (!control) throw new Error(`Unknown Agent run: ${runId}`);
+    control.controller.signal.throwIfAborted();
+    // Claim only the returned message, before yielding to another receiver.
+    const available = this.current().messages.find((message) =>
+      message.toRunId === runId && message.consumedAt === undefined
+    );
+    if (available) {
+      available.consumedAt = this.clock();
+      await this.persist();
+      return structuredClone(available);
+    }
     return new Promise((resolve, reject) => {
       const deliver = (message: AgentMailboxMessage) => {
         control.controller.signal.removeEventListener("abort", abort);
@@ -625,13 +633,14 @@ export class AgentCoordinator {
         if (index >= 0) control.messageWaiters.splice(index, 1);
         reject(control.controller.signal.reason ?? new Error("Agent cancelled"));
       };
-      if (control.controller.signal.aborted) abort();
-      else control.controller.signal.addEventListener("abort", abort, { once: true });
+      control.controller.signal.addEventListener("abort", abort, { once: true });
       control.messageWaiters.push(deliver);
     });
   }
 
   private deliverMessage(message: AgentMailboxMessage): void {
+    // A receiver may have claimed this message while send() persisted it.
+    if (message.consumedAt !== undefined) return;
     const control = this.controls.get(message.toRunId);
     const waiter = control?.messageWaiters.shift();
     if (!waiter) return;
