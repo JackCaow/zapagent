@@ -51,3 +51,37 @@ it("explicit update rechecks on reopen despite automatic opt-out, with truthful 
     else process.env.ZAP_DISABLE_UPDATE_CHECK = originalDisable
   }
 })
+
+it("retries a failed explicit check with r without approving installation", async () => {
+  const originalFetch = globalThis.fetch
+  let calls = 0, installs = 0
+  globalThis.fetch = (async () => {
+    if (++calls === 1) throw Error("offline")
+    return Response.json({ latest: VERSION })
+  }) as typeof fetch
+  const stdin = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {}, ref() {}, unref() {} })
+  const stdout = Object.assign(new PassThrough(), { columns: 100 })
+  let text = ""
+  stdout.on("data", chunk => { text += chunk.toString() })
+  const instance = render(createElement(UpdateDialog, { busy: false, sessionId: "fixture",
+    beforeInstall: () => { installs++ }, onRestart: () => { installs++ }, onCancel() {},
+  }), { stdin: stdin as unknown as NodeJS.ReadStream, stdout: stdout as unknown as NodeJS.WriteStream,
+    stderr: stdout as unknown as NodeJS.WriteStream, debug: true, exitOnCtrlC: false, patchConsole: false })
+  const until = async (expected: string) => {
+    const deadline = Date.now() + 2000
+    while (!text.includes(expected) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10))
+    expect(text).toContain(expected)
+  }
+  try {
+    await until("Press r to retry")
+    stdin.write("r")
+    await until("is up to date")
+    stdin.write("r"); stdin.write("y"); stdin.write("\r")
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(calls).toBe(2)
+    expect(installs).toBe(0)
+  } finally {
+    instance.unmount(); instance.cleanup(); stdin.destroy(); stdout.destroy()
+    globalThis.fetch = originalFetch
+  }
+})

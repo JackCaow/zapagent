@@ -4,16 +4,16 @@ import { renderToString } from "ink"
 import { UpdateNotice } from "../../src/ui/UpdateNotice.js"
 import { VERSION } from "../../src/version.js"
 
-it("distinguishes checking, current, failed and disabled checks", () => {
-  for (const [state, expected] of [
-    [{ status: "checking" }, "Checking for zapAgent updates"],
-    [{ status: "current", version: VERSION }, "is up to date"],
-    [{ status: "error" }, "Could not check"],
-    [{ status: "disabled" }, "disabled"],
+it("keeps non-actionable automatic check states out of the terminal input area", () => {
+  for (const state of [
+    { status: "checking" },
+    { status: "current", version: VERSION },
+    { status: "error" },
+    { status: "disabled" },
+    { status: "idle" },
   ] as const) {
     const text = renderToString(createElement(UpdateNotice, { state }))
-    expect(text).toContain(expected)
-    if (state.status !== "current") expect(text).not.toContain("up to date")
+    expect(text).toBe("")
   }
 })
 

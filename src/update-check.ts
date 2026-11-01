@@ -128,9 +128,9 @@ export function startUpdateCheck(options: Omit<UpdateCheckOptions, "signal">, no
   return () => controller.abort()
 }
 
-/** UI checks are fresh: a newly published release must not be hidden by yesterday's cache. */
+/** Explicit UI checks are fresh; automatic checks stay quiet and cache-aware. */
 export type UpdateCheckState =
-  | { status: "checking" | "disabled" }
+  | { status: "checking" | "disabled" | "idle" }
   | { status: "current"; version: string }
   | { status: "available"; version: string }
   | { status: "error" }

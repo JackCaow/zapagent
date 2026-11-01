@@ -11,7 +11,8 @@ export function UpdateDialog({ busy, sessionId, beforeInstall, onRestart, onCanc
   beforeInstall: () => void
   onRestart: (request: RestartRequest) => void; onCancel: () => void
 }) {
-  const check = useUpdateCheck(true)
+  const [request, setRequest] = useState(0)
+  const check = useUpdateCheck(true, request)
   const [plan, setPlan] = useState<UpdatePlan | null>(null)
   const [message, setMessage] = useState("Checking for zapAgent updates…")
   const [installing, setInstalling] = useState(false)
@@ -21,7 +22,7 @@ export function UpdateDialog({ busy, sessionId, beforeInstall, onRestart, onCanc
     setPlan(null)
     if (check.status !== "available") {
       setMessage(check.status === "current" ? `zapAgent v${VERSION} is up to date.`
-        : check.status === "error" ? "Could not check for updates. Close and reopen /update to retry."
+        : check.status === "error" ? "Could not check for updates. Press r to retry."
         : "Checking for zapAgent updates…")
       return
     }
@@ -36,6 +37,7 @@ export function UpdateDialog({ busy, sessionId, beforeInstall, onRestart, onCanc
   useInput((input, key) => {
     if (started.current) return
     if (key.escape || input === "n") { onCancel(); return }
+    if (input === "r" && check.status === "error") { setRequest(value => value + 1); return }
     // Enter does not approve: a deliberate 'y' prevents a trailing slash-command
     // Return event from accidentally confirming installation.
     if (input !== "y" || !plan || busy) return
@@ -49,7 +51,7 @@ export function UpdateDialog({ busy, sessionId, beforeInstall, onRestart, onCanc
       setMessage(`Update failed: ${error instanceof Error ? error.message : "unknown error"}. Close this dialog to continue.`)
     })
   })
-  return <DialogFrame title="Update zapAgent" hint={installing ? "Please wait — restart follows successful installation" : plan ? "y download, install and restart · esc/n later" : "esc/n close"}>
+  return <DialogFrame title="Update zapAgent" hint={installing ? "Please wait — restart follows successful installation" : plan ? "y download, install and restart · esc/n later" : check.status === "error" ? "r retry · esc/n close" : "esc/n close"}>
     <Text>{message}</Text>
   </DialogFrame>
 }
