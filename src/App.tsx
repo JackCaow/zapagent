@@ -1089,7 +1089,7 @@ export function App() {
 
       {!inModal && (
         <>
-          {dialog !== "queue" && !goalStatus && <TodosPanel todos={todos} />}
+          {dialog !== "queue" && <TodosPanel todos={todos} goalId={goalStatus?.id} goalAttached={goalRunning} todoGoalId={goalTodoId} />}
 
           <ToastContainer toasts={toasts} />
           <UpdateNotice version={availableUpdate} />
