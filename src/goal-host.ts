@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto"
+import { createGoalContentFilter } from "./goal-output.js"
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { cp, lstat, rm } from "node:fs/promises"
 import { join, relative, sep } from "node:path"
@@ -185,8 +186,9 @@ export class LocalGoalHost implements GoalHost {
   }
   private getWorkspace(): GoalWorkspace { if (!this.workspace) throw new Error("Goal workspace unavailable"); return this.workspace }
   private phaseHooks(context: GoalOperationContext) {
+    const present = createGoalContentFilter(["planning", "verifying", "final_verifying"].includes(context.goal.phase ?? ""))
     return {
-      ...(this.onEvent ? { onEvent: (event: import("../zapsdk/agent/events.js").AgentEvent) => this.onEvent!(event, context.operationId) } : {}),
+      ...(this.onEvent ? { onEvent: (event: import("../zapsdk/agent/events.js").AgentEvent) => { const visible = present(event); if (visible) this.onEvent!(visible, context.operationId) } } : {}),
       onSpawn: (pid: number, mayLaunchSealedProcess: boolean) => {
         if (this.state?.phaseProcess) throw new Error("Previous Goal child process is unresolved")
         this.state!.phaseProcess = { pid, operationId: context.operationId, requiresReceipt: mayLaunchSealedProcess }; this.persist()

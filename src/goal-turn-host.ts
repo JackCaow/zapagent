@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { createGoalContentFilter } from "./goal-output.js"
 import { canonicalizeWithNearestExistingAncestorSync } from "../zapsdk/builtin-tools/filesystem.js"
 import { createHash, randomUUID } from "node:crypto"
 import { constants, existsSync, mkdirSync, readFileSync } from "node:fs"
@@ -207,7 +208,8 @@ export class GoalTurnHost implements GoalHost {
     return { kind: "retry" as const }
   }
   private async turn(context: GoalOperationContext, role: GoalTurnInput["role"], prompt: string, observe?: (event: AgentEvent) => void): Promise<GoalTurnResult> {
-    const onEvent = (event: AgentEvent) => { observe?.(event); this.onEvent?.(event, context.operationId) }
+    const present = createGoalContentFilter(role === "planner" || role === "verifier")
+    const onEvent = (event: AgentEvent) => { observe?.(event); const visible = present(event); if (visible) this.onEvent?.(visible, context.operationId) }
     const input: GoalTurnInput = { cwd: context.goal.cwd, goalId: context.goal.id, epoch: context.goal.ownerEpoch, ledgerPath: goalDatabasePath(),
       role, prompt, permissionMode: context.goal.permissionMode, signal: context.signal, onEvent: this.executeTurn && ["worker", "repair"].includes(role) ? event => observe?.(event) : onEvent, sessionId: this.state!.sessionId }
     if (this.executeTurn && ["worker", "repair"].includes(role)) {

@@ -46,12 +46,12 @@ it("never replays interrupted effects in a shared workspace based on a stopped P
   expect(await host.reconcile({ inFlight: { phase: "planning", operationId: "op" } } as any)).toEqual({ kind: "retry" })
 })
 
-for (const mode of ["pass", "reject", "machine", "repair", "failed-needs-input", "contradictory-verdict", "verifier-shell", "verifier-shell-denied", "verifier-shell-steps", "verifier-shell-abbrev-denied"] as const) {
+for (const mode of ["pass", "output", "reject", "machine", "repair", "failed-needs-input", "contradictory-verdict", "verifier-shell", "verifier-shell-denied", "verifier-shell-steps", "verifier-shell-abbrev-denied"] as const) {
   const reject = ["reject", "failed-needs-input", "contradictory-verdict", "verifier-shell-denied", "verifier-shell-abbrev-denied"].includes(mode), machine = mode === "machine"
   // Machine checks and shell-based reviewers need an OS sandbox to run a shell without approval.
   const needsShell = machine || mode.startsWith("verifier-shell")
   const maybeIt = needsShell && !HAS_SANDBOX ? it.skip : it
-  maybeIt(`ordinary Goal runs in place with shell, subagent capability and independent ${reject ? mode : machine ? "machine and semantic" : mode === "repair" ? "repairable unverified" : "passed"} acceptance`, async () => {
+  maybeIt(`ordinary Goal runs in place with shell, subagent capability and independent ${reject ? mode : machine ? "machine and semantic" : mode === "repair" ? "repairable unverified" : mode === "output" ? "Markdown output" : "passed"} acceptance`, async () => {
     const root = await mkdtemp(join(tmpdir(), "goal-shared-cli-")), cwd = join(root, "workspace"), data = join(root, "data")
     await mkdir(cwd); await mkdir(data); await mkdir(join(cwd, "alpha")); await mkdir(join(cwd, "beta"))
     await symlink("missing", join(cwd, "dangling")); await symlink("/not/present", join(cwd, "external"))
@@ -78,7 +78,7 @@ for (const mode of ["pass", "reject", "machine", "repair", "failed-needs-input",
         if (mode === "verifier-shell" && reviewTools.includes("bash")) expect(String(reviewed[0]?.content).trim()).toContain("3")
         if (mode === "verifier-shell-steps" && reviewTools.includes("bash")) expect(String(reviewed[0]?.content)).toContain("two")
         if (mode === "verifier-shell-abbrev-denied" && reviewTools.includes("bash")) expect(String(reviewed[0]?.content)).toContain("bash blocked in read-only mode")
-        delta = { content: JSON.stringify({ status: mode === "contradictory-verdict" ? "passed" : mode === "failed-needs-input" ? "failed" : reject || needsRepair ? "unverified" : "passed", detail: reject ? "Need external user input" : needsRepair ? "Read the actual report to supply the missing evidence" : "Observed report and two project directories verified", ...(reject || needsRepair ? { nextAction: needsRepair || mode === "contradictory-verdict" ? "repair" : "needs_input" } : {}) }) }
+        delta = { content: JSON.stringify({ status: mode === "contradictory-verdict" ? "passed" : mode === "failed-needs-input" ? "failed" : reject || needsRepair ? "unverified" : "passed", detail: mode === "output" ? "PRIVATE_VERIFIER_RECEIPT" : reject ? "Need external user input" : needsRepair ? "Read the actual report to supply the missing evidence" : "Observed report and two project directories verified", ...(reject || needsRepair ? { nextAction: needsRepair || mode === "contradictory-verdict" ? "repair" : "needs_input" } : {}) }) + (mode === "output" ? "</｜｜DSML｜｜ parameter>" : "") }
         }
       } else if (prompts.includes("Work on the user's goal")) {
         workerTools = body.tools.map((t: any) => t.function.name)
@@ -93,11 +93,14 @@ for (const mode of ["pass", "reject", "machine", "repair", "failed-needs-input",
           if (step === "tree") delta = call("tree", "list_tree", { path: ".", depth: 1, max_entries: 1000 })
           else if (step === "shell") delta = call("shell", "bash", { command: "printf goal-shell-ok" })
           else if (step === "write") { sawShell = String(results[1].content).includes("goal-shell-ok"); delta = call("write", "write_file", { path: "report.txt", content: "two\n" }) }
-          else delta = { content: "Two projects, alpha and beta. Links are entries and were not followed." }
+          else delta = { content: mode === "output" ? '# Projects\n\n**Two projects**, alpha and beta.\n\n```json\n{"userRequested":true}\n```\n</｜｜DSML｜｜ invoke>\nLiteral less-than sign: <' : "Two projects, alpha and beta. Links are entries and were not followed." }
         }
       } else delta = { content: "Two projects verified in the current workspace." }
       const frame = (d: object, f: string | null) => `data: ${JSON.stringify({ id: "shared", object: "chat.completion.chunk", model: "fixture", choices: [{ index: 0, delta: d, finish_reason: f }], usage: { prompt_tokens: 10, completion_tokens: 5 } })}\n\n`
-      return new Response(frame(delta, null) + frame({}, finish) + "data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } })
+      const thought = mode === "output" && prompts.includes("You are an independent verifier") ? frame({ reasoning_content: "PRIVATE_VERIFIER_REASONING</｜｜DSML｜｜ calls>" }, null) : ""
+      const content = (delta as { content?: string }).content
+      const frames = mode === "output" && content ? [...content].map(char => frame({ content: char }, null)).join("") : frame(delta, null)
+      return new Response(thought + frames + frame({}, finish) + "data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } })
     } })
     try {
       const provider = createCustomProvider({ name: "Fixture", baseURL: `http://127.0.0.1:${server.port}/v1`, apiKey: "fixture", models: ["fixture"], contextWindow: 128000 })
@@ -126,6 +129,15 @@ for (const mode of ["pass", "reject", "machine", "repair", "failed-needs-input",
         // A denied shell call is recorded for the verifier instead of failing the turn.
         const report = JSON.parse(await readFile(delivery.report, "utf8"))
         expect(report.permissionDenials?.map((denial: { tool: string }) => denial.tool)).toEqual(HAS_SANDBOX ? undefined : ["bash"])
+      }
+      if (mode === "output") {
+        expect(output).toContain("Goal 验收通过。")
+        expect(output).toContain("# Projects\n\n**Two projects**")
+        expect(output).toContain('```json\n{"userRequested":true}\n```')
+        expect(output.split("Goal running/verifying")[0]).toContain("Literal less-than sign: <")
+        for (const hidden of ["PRIVATE_VERIFIER_RECEIPT", "PRIVATE_VERIFIER_REASONING", "DSML", "Goal delivery:", '"snapshotId":', '"status":"passed"']) expect(output).not.toContain(hidden)
+        expect(goal.finalReceipt?.detail).toBe("PRIVATE_VERIFIER_RECEIPT")
+        expect((goal.delivery as { text: string }).text).toContain("DSML")
       }
       if (machine) expect((await lstat(join(cwd, "coverage"))).isDirectory()).toBe(true)
       if (mode === "repair") expect(goal.tasks[0]?.attempt).toBe(2)

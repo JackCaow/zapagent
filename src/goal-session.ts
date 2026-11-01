@@ -3,6 +3,7 @@ import { GoalStore } from "../zapsdk/goal/store.js"
 import type { GoalRecord } from "../zapsdk/goal/contracts.js"
 import type { AgentEvent } from "../zapsdk/agent/events.js"
 import type { PermissionMode } from "./config.js"
+import { goalAcceptanceSummary, goalDeliveryMarkdown } from "./goal-output.js"
 
 export interface GoalSessionOptions {
   runTurn?: import("./goal-turn.js").GoalTurnExecutor
@@ -11,6 +12,7 @@ export interface GoalSessionOptions {
   signal?: AbortSignal
   onStart?: (goal: GoalRecord) => void
   onMessage: (text: string) => void
+  onResult?: (markdown: string) => void
   onState?: (goal: GoalRecord) => void
   onEvent?: (event: AgentEvent, scope: string) => void
 }
@@ -70,7 +72,10 @@ export async function executeGoalCommand(args: string[], cwd: string, options: G
     }
     if (outcome) {
       options.onMessage(`Goal ${outcome.id} · ${outcome.status}${outcome.stopReason ? ` · ${outcome.stopReason}` : ""}`)
-      if (outcome.delivery) options.onMessage(`Goal delivery: ${JSON.stringify(outcome.delivery)}`)
+      const acceptance = goalAcceptanceSummary(outcome)
+      if (acceptance) options.onMessage(acceptance)
+      const markdown = ["completed", "ready_for_delivery"].includes(outcome.status) ? goalDeliveryMarkdown(outcome.delivery) : undefined
+      if (markdown) (options.onResult ?? options.onMessage)(markdown)
     }
     return code
   } finally { attached.delete(key); settle() }
