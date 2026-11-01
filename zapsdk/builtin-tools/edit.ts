@@ -24,7 +24,7 @@ export function editFileTool(options: EditFileOptions = {}): Tool {
         "**Do not use edit_file to rewrite an entire file**: when `new_string` (or `old_string`) would be more than ~50 lines, prefer an intentional full replacement with `write_file` instead.",
       parameters: z.object({
         path: z.string().describe("Path to the file to edit"),
-        old_string: z.string().describe("The exact string to find and replace"),
+        old_string: z.string().min(1).describe("The exact string to find and replace"),
         new_string: z.string().describe("The replacement string"),
         replace_all: z.boolean().optional().describe("Replace all occurrences (default: false, requires unique match)"),
         skip_syntax_check: z.boolean().optional().describe("Skip the pre-write syntax check (TS/JS/JSON only). Use only when the validator gives a known false positive — e.g. an intentional intermediate state, an exotic JSX form, or a fragment that will be valid after a follow-up edit."),
@@ -54,6 +54,11 @@ export function editFileTool(options: EditFileOptions = {}): Tool {
       try {
         const statBefore = await stat(filePath);
         const content = await readFile(filePath, "utf-8");
+
+        // Direct SDK handlers can bypass parameter-schema validation.
+        if (oldString.length === 0) {
+          return { success: false, output: "", error: "old_string must not be empty." };
+        }
 
         let count = 0;
         let searchPos = 0;

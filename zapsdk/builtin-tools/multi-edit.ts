@@ -19,7 +19,7 @@ export interface MultiEditOptions {
 // buffer produced by edits 0..N-1, which is what lets the model chain rewrites
 // like (A→B, B→C) in a single call.
 const editSchema = z.object({
-  old_string: z.string().describe("Exact string to find and replace"),
+  old_string: z.string().min(1).describe("Exact string to find and replace"),
   new_string: z.string().describe("Replacement string"),
   replace_all: z.boolean().optional().describe("Replace all occurrences (default: false)"),
 });
@@ -68,6 +68,11 @@ export function multiEditTool(options: MultiEditOptions = {}): Tool {
         for (let i = 0; i < edits.length; i++) {
           const { old_string, new_string, replace_all } = edits[i];
           const replaceAll = replace_all ?? false;
+
+          // Direct SDK handlers can bypass parameter-schema validation.
+          if (old_string.length === 0) {
+            return { success: false, output: "", error: `Edit #${i + 1} failed: old_string must not be empty.` };
+          }
 
           let count = 0;
           let searchPos = 0;
