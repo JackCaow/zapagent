@@ -5,6 +5,20 @@ import type { AppConfig } from "../../src/config.js"
 import { z } from "zod"
 
 describe("dispatchSlashCommand /compact diagnostics", () => {
+  it("does not add a start log while manual compression is pending", async () => {
+    const original = conversation.compress
+    const logs: string[] = []
+    let release!: () => void
+    conversation.compress = async () => { await new Promise<void>(resolve => { release = resolve }); return null }
+    try {
+      const pending = dispatchSlashCommand("/compact", makeDeps({ addLog: (_type, text) => logs.push(text) }))
+      expect(logs).toEqual([])
+      release()
+      await pending
+      expect(logs).toEqual([])
+    } finally { conversation.compress = original }
+  })
+
   it("keeps the last actual runtime schemas when the factory registry is smaller", async () => {
     const original = conversation.compress
     const context = conversation.getCompactionContext()

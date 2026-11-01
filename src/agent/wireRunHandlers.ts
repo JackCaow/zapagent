@@ -575,13 +575,7 @@ export function createRunHandlers(deps: RunHandlersDeps): RunHandlers {
         const d = e.detail as
           | { messageCount?: number; tokenEstimate?: number; trigger?: string }
           | undefined
-        const msgs = d?.messageCount ?? 0
         const tok = d?.tokenEstimate ?? 0
-        const reason = d?.trigger === "force" ? "overflow recovery" : d?.trigger === "tokens" ? "token threshold" : "char threshold"
-        deps.addLog(
-          "system",
-          `🗜 Compacting context — ${msgs} messages / ~${Math.round(tok / 1000)}k tokens (${reason})`,
-        )
         // The shared planner already counted schemas and transient context.
         // Do not add the previous provider-calibrated overhead a second time.
         if (tok > 0) {

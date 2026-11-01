@@ -72,6 +72,7 @@ describe("createRunHandlers context diagnostics", () => {
       }).wire(agent as any)
       agent.emit({ type: "observation", kind: "autocompact_start", detail: { tokenEstimate: 831508, trigger: "tokens", messageCount: 40 } })
       expect(values.at(-1)).toBe(831508)
+      expect(logs).toEqual([])
       agent.emit({ type: "observation", kind: "autocompact_done", detail: { outputTokens: 500000,
         status: "target_not_met", sourceTruncated: true, summary: "summary", messagesBefore: 40, messagesAfter: 5 } })
       expect(values.at(-1)).toBe(500000)

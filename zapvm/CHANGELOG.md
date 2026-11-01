@@ -8,6 +8,8 @@ changes that are called out explicitly.
 
 ### Fixed
 
+- Base r13 refreshes both signed Alpine kernel closures to linux-virt 6.18.60-r0,
+  retaining exact input constraints and complete installed-database verification.
 - Base r8 refreshes the signed Alpine package closure for both architectures.
 - CI and release builds generate the locked web assets before Go embeds them;
   patched frontend dependencies and their npm lockfile are now tracked.

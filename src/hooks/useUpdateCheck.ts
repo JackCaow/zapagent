@@ -1,15 +1,21 @@
 import { useEffect, useState } from "react"
 import { join } from "node:path"
 import { getAppDataDir } from "../../zapsdk/utils/platform.js"
-import { shouldCheckForUpdates, startUpdateCheck } from "../update-check.js"
+import { shouldCheckForUpdates, startUpdateCheck, startUpdateStatusCheck, type UpdateCheckState } from "../update-check.js"
 import { VERSION } from "../version.js"
 
-export function useUpdateCheck(): string | null {
-  const [version, setVersion] = useState<string | null>(null)
+/** Explicit /update requests bypass the automatic-check opt-out as well as the cache. */
+export function useUpdateCheck(manual = false, request = 0): UpdateCheckState {
+  const enabled = manual || shouldCheckForUpdates()
+  const [state, setState] = useState<UpdateCheckState>({ status: !enabled ? "disabled" : manual ? "checking" : "idle" })
   useEffect(() => {
-    if (!shouldCheckForUpdates()) return
+    if (!enabled) { setState({ status: "disabled" }); return }
+    if (manual) return startUpdateStatusCheck({ currentVersion: VERSION }, setState)
+    // A quiet automatic check retains the success/failure cache. Only explicit
+    // dialog requests need fresh metadata and a full checking/error state.
+    setState({ status: "idle" })
     return startUpdateCheck({ currentVersion: VERSION,
-      cachePath: join(getAppDataDir(), "cache", "update-check.json") }, setVersion)
-  }, [])
-  return version
+      cachePath: join(getAppDataDir(), "cache", "update-check.json") }, version => setState({ status: "available", version }))
+  }, [enabled, manual, request])
+  return state
 }
