@@ -189,7 +189,7 @@ describe("Responses transport", () => {
         // Some compatible servers omit output_item.added. Actual argument
         // bytes must also count as progress, even without a text/thinking delta.
         for (const delta of ['{"value":', '"', 'o', 'k', '"', '}']) {
-          await new Promise(resolve => setTimeout(resolve, 15));
+          await new Promise(resolve => setTimeout(resolve, 25));
           yield { type: "response.function_call_arguments.delta", item_id: "fc_call_1", output_index: 0, delta };
         }
         terminalSent = true;
@@ -202,7 +202,10 @@ describe("Responses transport", () => {
       chunks.push(chunk);
     }
     expect(chunks.filter(chunk => chunk.type === "tool_call_start")).toHaveLength(1);
-    expect(phases).toEqual(["requesting", "waiting_output", "streaming", "completed"]);
+    // Streaming heartbeats repeat after 100ms. Validate phase transitions,
+    // not their count, which depends on scheduler latency.
+    expect(phases.filter((phase, index) => phase !== phases[index - 1]))
+      .toEqual(["requesting", "waiting_output", "streaming", "completed"]);
   });
 
   for (const visible of [true, false]) test(`LoopAgent preserves incomplete reasoning and phase on continuation (text=${visible})`, async () => {

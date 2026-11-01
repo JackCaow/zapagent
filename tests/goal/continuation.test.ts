@@ -90,7 +90,13 @@ for (const mode of ["format", "resume-verifier", "explicit-limit", "foreground"]
       if (goal.status !== "completed") throw new Error(`Goal ${goal.status}: ${goal.stopReason}\n${await readFile(join(home, "runner.log"), "utf8")}`)
       expect(await readFile(join(cwd, "report.txt"), "utf8")).toBe("verified\n")
       expect(workers).toBe(1); expect(goal.finalReceipt?.status).toBe("passed")
-      if (mode === "format") { expect(planner).toBe(0); expect(verifier).toBe(3) }
+      if (mode === "format") {
+        expect(planner).toBe(0)
+        // One malformed verdict plus its format repair; the identical final
+        // result reuses the persisted independent receipt, not another LLM call.
+        expect(verifier).toBe(2)
+        expect((goal.finalReceipt!.evidence as { reusedVerificationId?: string }).reusedVerificationId).toBeTruthy()
+      }
       const ledger = new GoalBudgetLedger(join(data, "goal", "goals.sqlite"))
       try { expect(ledger.snapshot(id!).totals.modelCalls).toBeGreaterThanOrEqual(planner + workers + verifier) } finally { ledger.close() }
     } finally { model.stop(); await rm(root, { recursive: true, force: true }) }
