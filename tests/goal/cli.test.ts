@@ -98,7 +98,8 @@ for (const { git, machine, denied } of [{ git: false, machine: false, denied: fa
       }
       try { expect(await readFile(join(cwd, "report.txt"), "utf8")).toBe("goal passed\n") }
       catch (error) { throw new Error(`Missing report: ${JSON.stringify({ requests, status: result?.status, delivery: result?.delivery, error: String(error) })}`) }
-      expect(requests.filter(x => x === "verify-evidence")).toHaveLength(2)
+      expect(requests.filter(x => x === "verify-evidence")).toHaveLength(1)
+      expect((result.finalReceipt!.evidence as { reusedVerificationId?: string }).reusedVerificationId).toBeTruthy()
       expect(requests).not.toContain("finalization")
       if (git) {
         expect(execFileSync("git", ["-C", cwd, "rev-parse", "HEAD"], { encoding: "utf8" }).trim()).toBe(sourceHead)
@@ -152,7 +153,7 @@ it("resumes a shared Goal only after the ordinary runtime confirms its cancelled
   } finally { model.stop(); await rm(root, { recursive: true, force: true }) }
 }, 30_000)
 
-it("keeps a real Goal repairing task and final failures until accepted, beyond the old token budget", async () => {
+it("keeps a real Goal repairing until independently accepted beyond the old token budget, then reuses final acceptance", async () => {
   const root = await mkdtemp(join(tmpdir(), "zap-goal-unlimited-")), data = join(root, "data"), cwd = join(root, "project")
   await mkdir(data); await mkdir(cwd)
   let taskChecks = 0, finalChecks = 0, workerWrites = 0, correctionWrites = 0
@@ -199,9 +200,10 @@ it("keeps a real Goal repairing task and final failures until accepted, beyond t
       const log = await readFile(join(data, "goal", "runs", createHash("sha256").update(id!).digest("hex"), "runner.log"), "utf8").catch(() => "missing log")
       throw new Error(`Goal ended ${result?.status}: ${result?.stopReason}\n${log}`)
     }
-    expect(result.tasks).toHaveLength(2); expect(result.tasks[0]?.attempt).toBe(5)
-    expect(workerWrites).toBe(5); expect(correctionWrites).toBe(1); expect(finalChecks).toBe(2)
-    expect(await readFile(join(cwd, "report.txt"), "utf8")).toBe("goal passed\nfinal marker\n")
+    expect(result.tasks).toHaveLength(1); expect(result.tasks[0]?.attempt).toBe(5)
+    expect(workerWrites).toBe(5); expect(correctionWrites).toBe(0); expect(finalChecks).toBe(0)
+    expect(await readFile(join(cwd, "report.txt"), "utf8")).toBe("goal passed\nrevision 5\n")
+    expect((result.finalReceipt!.evidence as { reusedVerificationId?: string }).reusedVerificationId).toBeTruthy()
     const ledger = new GoalBudgetLedger(db)
     try { expect(ledger.snapshot(id!).totals.tokensUsed).toBeGreaterThan(1_000_000) } finally { ledger.close() }
     expect(result.finalReceipt?.status).toBe("passed")
