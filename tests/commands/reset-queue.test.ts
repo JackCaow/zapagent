@@ -38,6 +38,48 @@ describe("dispatchSlashCommand reset commands", () => {
     expect(resetRuntime).toBe(1)
   })
 
+  it("/new preserves runtime state and queued input on a persistence failure", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "zap-reset-failure-"))
+    try {
+      const script = `
+        import assert from "node:assert/strict";
+        import { renameSync } from "node:fs";
+        import { dispatchSlashCommand } from "./src/commands/dispatcher.ts";
+        import { appendLog, getCurrentSessionId, readCurrentSessionLogs, __test } from "./src/session.ts";
+        import { enqueue, getQueueLength } from "./src/queue/inputQueue.ts";
+        import { pushSystemEvent, getSystemInboxLength } from "./src/queue/systemInbox.ts";
+        appendLog("user", "preserve me");
+        readCurrentSessionLogs();
+        const id = getCurrentSessionId();
+        const dir = __test.resolveProjectSessionDirs(process.env.ZAPCODE_DATA_DIR, process.cwd())[0];
+        renameSync(dir, dir + ".offline");
+        appendLog("agent", "pending answer");
+        enqueue({ text: "queued", displayForm: "queued" });
+        pushSystemEvent({ kind: "task-notification", payload: "notice", ts: 1 });
+        const toasts = [];
+        // Any attempted reset or checkpoint rebind fails this test.
+        const unexpected = () => { throw new Error("state must not reset"); };
+        const deps = { addToast: (...args) => toasts.push(args), setLogs: unexpected,
+          setTodos: unexpected, bumpTranscript: unexpected, onResetRuntimeState: unexpected,
+          checkpointRef: { current: { setSessionId: unexpected } } };
+        assert.equal(dispatchSlashCommand("/new", deps), true);
+        assert.equal(getCurrentSessionId(), id);
+        assert.equal(getQueueLength(), 1);
+        assert.equal(getSystemInboxLength(), 1);
+        assert.equal(toasts.length, 1);
+        assert.equal(toasts[0][1].variant, "error");
+        assert.ok(toasts[0][0].includes("Retry /new"));
+        renameSync(dir + ".offline", dir);
+        assert.ok(readCurrentSessionLogs().some(log => log.text === "pending answer"));
+        console.log("preserved");
+      `
+      const raw = execFileSync(process.execPath, ["--eval", script], {
+        cwd: process.cwd(), env: { ...process.env, ZAPCODE_DATA_DIR: dataDir }, encoding: "utf-8",
+      })
+      expect(raw.trim()).toBe("preserved")
+    } finally { rmSync(dataDir, { recursive: true, force: true }) }
+  })
+
   it("/new drops queued user input and system events before rebinding the session", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "zap-reset-queue-"))
     try {
