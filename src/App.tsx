@@ -452,7 +452,7 @@ export function App() {
 
   // ── Toasts ──
   const { toasts, addToast } = useToasts()
-  const availableUpdate = useUpdateCheck()
+  const updateCheck = useUpdateCheck()
 
   // ── Pending images attached to next user turn ──
   const [pendingImages, setPendingImages] = useState<import("./queue/inputQueue.js").PendingImage[]>([])
@@ -1092,7 +1092,7 @@ export function App() {
           {dialog !== "queue" && <TodosPanel todos={todos} goalId={goalStatus?.id} goalAttached={goalRunning} todoGoalId={goalTodoId} />}
 
           <ToastContainer toasts={toasts} />
-          <UpdateNotice version={availableUpdate} />
+          <UpdateNotice state={updateCheck} />
 
           <TokenWarning contextBudget={contextBudget} />
 
@@ -1186,7 +1186,7 @@ export function App() {
        *  defocused while the dialog owns the keyboard (see focused= prop
        *  above). */}
       {dialog === "restoring" && <Text>Restoring saved session…</Text>}
-      {dialog === "update" && <UpdateDialog version={availableUpdate} busy={isRunning} sessionId={getCurrentSessionId()} beforeInstall={() => {
+      {dialog === "update" && <UpdateDialog busy={isRunning} sessionId={getCurrentSessionId()} beforeInstall={() => {
         readCurrentSessionLogs()
         const persistence = getSessionPersistenceStatus()
         if (persistence.pendingWrites || persistence.lastFailure) throw new Error("Save the current session successfully before updating.")

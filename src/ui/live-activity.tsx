@@ -1,6 +1,6 @@
 /** @jsxImportSource react */
 import { shellCommandDisplay } from "../../zapsdk/utils/shell.js";
-import { memo, useEffect, useRef } from "react"
+import { memo, useEffect, useRef, type ReactNode } from "react"
 import { Box, Text } from "ink"
 import type { LogEntry } from "./types.js"
 import { GoalStatus } from "./goal-status.js"
@@ -16,6 +16,7 @@ import { useSpinner } from "../hooks/useSpinner.js"
 import {
   activityProgress,
   buildLiveActivityCopy,
+  formatActivityDuration,
   type ActivityProgressKind,
 } from "./activity-status.js"
 
@@ -135,6 +136,23 @@ function statusLabel(status: string, activeTool: string): string {
   return STATUS_LABELS[status] ?? status ?? "Working"
 }
 
+/** A quiet, transient maintenance row; never appended to conversation history. */
+export function CompactActivity({ elapsed, stopHint = "Esc twice to stop", termWidth, embedded = false }: {
+  elapsed: number; stopHint?: string; termWidth: number; embedded?: boolean
+}) {
+  return (
+    <Box flexDirection="column" paddingLeft={embedded ? 0 : 2} marginTop={embedded ? 0 : 1}>
+      <Text wrap="truncate-end">
+        <Text color={c.maintenance}>· Compacting conversation…</Text>
+        <Text color={c.text.faint}> ({formatActivityDuration(elapsed)})</Text>
+      </Text>
+      <Text color={c.text.faint} wrap="truncate-end">
+        {truncateToWidth(`  └ Tip: ${stopHint} compaction.`, Math.max(1, termWidth - (embedded ? 4 : 2)))}
+      </Text>
+    </Box>
+  )
+}
+
 export const LiveActivity = memo(function LiveActivity({
   isRunning, isStreaming, isThinking, thinkingChars,
   status, activeTool, activeToolBytes = 0, termWidth, pendingTools,
@@ -167,6 +185,13 @@ export const LiveActivity = memo(function LiveActivity({
       progressRef.current = { kind: progress.kind, value: progress.value, changedAt: Date.now() }
     }
   }, [isRunning, progress.kind, progress.value])
+
+  const withGoal = (activity: ReactNode) => goal ? <GoalStatus goal={goal} termWidth={termWidth} attached={goalAttached} todos={goalTodos}>
+    {!goalActive && <Text color={c.text.muted} wrap="truncate-end">{truncateToWidth(goalActionText(goal, goalAttached), Math.max(1, termWidth - 4))}</Text>}
+    {activity}
+  </GoalStatus> : activity
+
+  if (status === "compacting") return withGoal(<CompactActivity elapsed={elapsed} stopHint={stopHint} termWidth={termWidth} embedded={!!goal} />)
 
   // Always render a single-row Box (even when idle) so the frame
   // height stays stable across the running→idle transition. Without
@@ -216,11 +241,7 @@ export const LiveActivity = memo(function LiveActivity({
   const hintWidth = displayWidth(interruptHint)
   const segmentBudget = Math.max(goal ? 1 : 20, termWidth - spinnerWidth - hintWidth - 4)
   const truncated = truncateToWidth(segments, segmentBudget)
-  // Compact uses a distinct spinner color (warning) so the user can tell at
-  // a glance "this isn't the agent thinking, it's the context being
-  // compressed". Matches the Claude Code pattern of swapping to a system-
-  // colored spinner during compact_start → compact_end.
-  const spinnerColor = status === "compacting" || copy.mayBeStalled ? c.warning : c.accent
+  const spinnerColor = copy.mayBeStalled ? c.warning : c.accent
   const activity = (
     <Box flexDirection="row" paddingLeft={goal ? 0 : 2} marginTop={goal ? 0 : 1}>
       <Text color={spinnerColor} wrap="truncate-end">{spinner} </Text>
@@ -228,10 +249,7 @@ export const LiveActivity = memo(function LiveActivity({
       <Text color={c.text.faint} wrap="truncate-end">{interruptHint}</Text>
     </Box>
   )
-  return goal ? <GoalStatus goal={goal} termWidth={termWidth} attached={goalAttached} todos={goalTodos}>
-    {!goalActive && <Text color={c.text.muted} wrap="truncate-end">{truncateToWidth(goalActionText(goal, goalAttached), Math.max(1, termWidth - 4))}</Text>}
-    {activity}
-  </GoalStatus> : activity
+  return withGoal(activity)
 })
 
 export function liveActivityHeight(active: boolean): number {

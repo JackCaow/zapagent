@@ -140,3 +140,40 @@ describe("background update check", () => {
     expect(shouldCheckForUpdates({ ZAP_DISABLE_UPDATE_CHECK: "1" })).toBe(false)
   })
 })
+
+describe("fresh UI checks", () => {
+  it("bypasses a fresh success cache on every explicit check", async () => {
+    const { checkForUpdateStatus } = await import("../src/update-check.js")
+    cache("1.14.8")
+    let calls = 0
+    options.fetch = mockFetch(async () => { calls++; return response("1.15.0") })
+    expect(await checkForUpdateStatus(options)).toEqual({ status: "available", version: "1.15.0" })
+    expect(await checkForUpdateStatus(options)).toEqual({ status: "available", version: "1.15.0" })
+    expect(calls).toBe(2)
+  })
+  it("does not call failed or timed-out checks up to date, even with a success cache", async () => {
+    const { checkForUpdateStatus } = await import("../src/update-check.js")
+    cache("1.14.8")
+    options.fetch = mockFetch(async () => { throw new Error("offline") })
+    expect(await checkForUpdateStatus(options)).toEqual({ status: "error" })
+    options.fetch = mockFetch(async () => new Promise<Response>(() => {}))
+    expect(await checkForUpdateStatus({ ...options, timeoutMs: 20 })).toEqual({ status: "error" })
+    options.fetch = mockFetch(async () => response("1.14.8"))
+    expect(await checkForUpdateStatus(options)).toEqual({ status: "current", version: "1.14.8" })
+  })
+  it("reports checking immediately and suppresses an old request after close/reopen", async () => {
+    const { startUpdateStatusCheck } = await import("../src/update-check.js")
+    const old: unknown[] = [], current: unknown[] = []
+    let finish!: (response: Response) => void
+    options.fetch = mockFetch(async () => new Promise<Response>(resolve => { finish = resolve }))
+    const cancel = startUpdateStatusCheck(options, (state: unknown) => old.push(state))
+    expect(old).toEqual([{ status: "checking" }])
+    cancel()
+    const stop = startUpdateStatusCheck({ ...options, fetch: mockFetch(async () => response("1.16.0")) }, (state: unknown) => current.push(state))
+    finish(response("1.15.0"))
+    await new Promise(resolve => setTimeout(resolve, 10))
+    expect(old).toEqual([{ status: "checking" }])
+    expect(current).toEqual([{ status: "checking" }, { status: "available", version: "1.16.0" }])
+    stop()
+  })
+})

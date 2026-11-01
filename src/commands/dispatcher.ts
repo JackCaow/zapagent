@@ -499,17 +499,7 @@ export function dispatchSlashCommand(
       // conversation.compress).
       return (async () => {
         const controller = deps.beginManualCompact?.() ?? new AbortController()
-        // Mirror the in-loop autocompact_start log so manual /compact also
-        // signals "this is going to take a few seconds" up front. compactLogs
-        // below will replace the log array post-success anyway; the row's
-        // job is to bridge the 3-10s wait.
-        const ctxTokens = conversation.estimatedTokens
-        deps.addLog("system", `🗜 Compacting context — ~${Math.round(ctxTokens / 1000)}k tokens (manual)`)
-        // Flip the App-level status so LiveActivity renders its spinner +
-        // "Compacting" label during the 3-10s LLM summary call. Without
-        // this, the manual path had a start log but no live indicator,
-        // making the UI look frozen. Reset to "ready" in finally so we
-        // never leave the bar spinning if compress throws.
+        // Show transient inline maintenance without adding a scrollback row.
         deps.setStatus("compacting")
         try {
           // Capture pre-compact messages BEFORE compress so the post-compact
