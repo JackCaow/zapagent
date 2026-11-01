@@ -20,7 +20,7 @@ export const GoalStatus = memo(function GoalStatus({ goal, termWidth, attached =
   const prefix = "◇ 目标："
   const progress = attached && todos.length && width >= 40 ? `已完成 ${todos.filter(todo => todo.status === "completed").length}/${todos.length} 步` : ""
   const title = truncateToWidth(prefix + goalObjectiveText(goal.objective), Math.max(1, width - (progress ? displayWidth(progress) + 2 : 0)))
-  const warning = ["blocked", "paused", "awaiting_acceptance", "budget_limited"].includes(goal.status)
+  const warning = ["blocked", "paused", "awaiting_acceptance", "budget_limited", "failed"].includes(goal.status)
   const symbol = goal.status === "completed" ? "✓" : goal.status === "paused" ? "Ⅱ" : warning ? "!" : "·"
   return (
     <Box flexDirection="column" paddingX={2} marginTop={1}>
@@ -28,7 +28,7 @@ export const GoalStatus = memo(function GoalStatus({ goal, termWidth, attached =
         <Text color={c.text.primary} wrap="truncate-end">{title}</Text>
         {progress ? <Text color={c.text.faint}>{`  ${progress}`}</Text> : null}
       </Box>
-      {children ?? <Text color={warning ? c.warning : c.text.muted} wrap="truncate-end">
+      {children ?? <Text color={goal.status === "failed" ? c.error : warning ? c.warning : c.text.muted} wrap="truncate-end">
         {truncateToWidth(`${symbol} ${goalActionText(goal, attached, todos)}`, width)}
       </Text>}
     </Box>

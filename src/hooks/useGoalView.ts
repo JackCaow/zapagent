@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import type { GoalRecord } from "../../zapsdk/goal/contracts.js"
+import type { Logger } from "../../zapsdk/debug/logger.js"
 import { goalView, isFinishedGoal, readSessionGoalView, type GoalView } from "../goal-view.js"
+import { startGoalViewPolling } from "../goal-view-poller.js"
 
 interface Binding { sessionId: string; selectedId?: string; view?: GoalView; hidden?: boolean }
 
-export function useGoalView(sessionId: string, cwd: string, attached: boolean, databasePath?: string) {
+export function useGoalView(sessionId: string, cwd: string, attached: boolean, databasePath?: string, logger?: Pick<Logger, "debug">) {
   const activeSession = useRef(sessionId)
   activeSession.current = sessionId
   const [binding, setBinding] = useState<Binding>({ sessionId })
@@ -26,24 +28,22 @@ export function useGoalView(sessionId: string, cwd: string, attached: boolean, d
 
   useEffect(() => {
     if (attached || current?.hidden) return
-    let timer: ReturnType<typeof setInterval> | undefined
     let disposed = false
-    let unavailable = false
-    const refresh = () => {
-      try {
-        const view = readSessionGoalView(cwd, sessionId, current?.selectedId, databasePath)
-        if (disposed || activeSession.current !== sessionId) return undefined
+    const stop = startGoalViewPolling({
+      read: () => readSessionGoalView(cwd, sessionId, current?.selectedId, databasePath),
+      publish: view => {
+        if (disposed || activeSession.current !== sessionId) return
         setBinding(previous => previous.sessionId === sessionId && (previous.hidden || previous.selectedId !== current?.selectedId) ? previous
           : previous.sessionId === sessionId && JSON.stringify(previous.view) === JSON.stringify(view) ? previous
             : { sessionId, selectedId: current?.selectedId, view })
-        if (view && isFinishedGoal(view.status) && timer) clearInterval(timer)
-        return view
-      } catch { unavailable = true; return undefined } // Preserve the view and retry a busy ledger.
-    }
-    const initial = refresh()
-    if (unavailable || initial && !isFinishedGoal(initial.status)) timer = setInterval(refresh, 1000)
-    return () => { disposed = true; if (timer) clearInterval(timer) }
-  }, [sessionId, cwd, attached, current?.selectedId, current?.hidden, databasePath])
+      },
+      // Do not log record contents, paths or raw SQLite errors.
+      onReadError: error => logger?.debug("goal_view_read_failed", {
+        category: error instanceof Error && error.message === "CORRUPT_GOAL_STATE" ? "corrupt" : "unavailable",
+      }),
+    })
+    return () => { disposed = true; stop() }
+  }, [sessionId, cwd, attached, current?.selectedId, current?.hidden, databasePath, logger])
 
   return { view: current?.hidden ? undefined : current?.view, select, update, clear }
 }

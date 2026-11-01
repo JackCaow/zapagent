@@ -362,7 +362,7 @@ export function useAgentRunner({
 }: UseAgentRunnerOptions) {
   const [status, setStatus] = useState("ready")
   const [goalRunning, setGoalRunning] = useState(false)
-  const { view: goalStatus, select: selectGoalView, update: updateGoalView, clear: resetGoalView } = useGoalView(currentSessionId, cwd, goalRunning)
+  const { view: goalStatus, select: selectGoalView, update: updateGoalView, clear: resetGoalView } = useGoalView(currentSessionId, cwd, goalRunning, undefined, appLogger)
   const [goalTodoId, setGoalTodoId] = useState<string>()
   useEffect(() => { setGoalTodoId(undefined) }, [currentSessionId])
   const [outputThroughput, setOutputThroughput] = useState<OutputThroughputSample>()

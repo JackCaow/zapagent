@@ -81,3 +81,19 @@ it("uses the fixed Goal view during idle pause/background and preserves ordinary
   const narrow = stripVTControlCharacters(renderToString(createElement(LiveActivity, { ...props, termWidth: 24, isRunning: true, goal, goalAttached: true }), { columns: 24 }))
   for (const line of narrow.split("\n")) expect(displayWidth(line)).toBeLessThanOrEqual(24)
 })
+
+it("keeps truthful stop hints for ordinary work beside a retained Goal on narrow terminals", () => {
+  for (const stopHint of ["Esc twice to stop", "Ctrl+C to stop"]) {
+    const text = stripVTControlCharacters(renderToString(createElement(LiveActivity, {
+      isRunning: true, isStreaming: false, isThinking: false, thinkingChars: 0,
+      status: "working", activeTool: "", termWidth: 40, pendingTools: [], stopHint,
+      goal: { ...goal, status: "paused" }, goalAttached: false,
+    }), { columns: 40 }))
+    expect(text).toContain(stopHint.startsWith("Ctrl+C") ? "Ctrl+C" : "Esc×2")
+    for (const line of text.split("\n")) expect(displayWidth(line)).toBeLessThanOrEqual(40)
+  }
+})
+
+it("marks failed Goals explicitly instead of displaying them like ordinary idle progress", () => {
+  expect(render({ goal: { ...goal, status: "failed" }, attached: false })).toContain("! 目标执行失败")
+})

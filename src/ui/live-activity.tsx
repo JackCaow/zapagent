@@ -209,7 +209,9 @@ export const LiveActivity = memo(function LiveActivity({
   const segments = [goalActive ? waitingForGoalInput ? "等待你确认操作" : goalActionText(goal!, goalAttached, goalTodos, goalTool) : copy.primaryLabel, copy.elapsed, waitingForGoalInput ? "" : copy.progress, goalActive ? "" : lastActionSegment]
     .filter(Boolean)
     .join("  ·  ")
-  const interruptHint = goal && termWidth < 70 ? "" : `  ⏎ ${stopHint}`
+  const interruptHint = goal && termWidth < 70
+    ? goalActive ? "" : stopHint.startsWith("Ctrl+C") ? "  Ctrl+C" : termWidth < 40 ? "  Esc×2" : "  Esc×2 stop"
+    : `  ⏎ ${stopHint}`
   const spinnerWidth = displayWidth(spinner) + 1
   const hintWidth = displayWidth(interruptHint)
   const segmentBudget = Math.max(goal ? 1 : 20, termWidth - spinnerWidth - hintWidth - 4)
