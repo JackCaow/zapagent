@@ -75,6 +75,7 @@ function makeFakeTransport() {
 // We import the real modules ONCE and then swap their exported constructors.
 let fakeClient: ReturnType<typeof makeFakeClient> | null = null
 let fakeTransport: ReturnType<typeof makeFakeTransport> | null = null
+let transportGate: Promise<void> | null = null
 
 const factoryModule = await import("../../mcp/client-factory.js")
 const transportModule = await import("../../mcp/transport/index.js")
@@ -85,10 +86,11 @@ mock.module("../../mcp/client-factory.js", () => ({
 }))
 mock.module("../../mcp/transport/index.js", () => ({
   ...transportModule,
-  createTransport: async () => ({
-    transport: fakeTransport,
-    authProvider: null,
-  }),
+  createTransport: async () => {
+    const transport = fakeTransport
+    await transportGate
+    return { transport, authProvider: null }
+  },
 }))
 
 // After mocks are installed, re-import manager so it picks up our shims.
@@ -98,6 +100,7 @@ describe("MCPManager resilience", () => {
   beforeEach(() => {
     fakeClient = null
     fakeTransport = null
+    transportGate = null
   })
 
   it("surfaces invalid server names as config errors without starting transports", async () => {
@@ -282,6 +285,135 @@ describe("MCPManager resilience", () => {
     ])
   })
 
+  it("closes a transport produced after stop without connecting an untracked client", async () => {
+    const gate = deferred<void>()
+    transportGate = gate.promise
+    fakeClient = makeFakeClient({ serverCaps: {} })
+    fakeTransport = makeFakeTransport()
+    const connect = mock(async () => {})
+    const close = mock(async () => {})
+    fakeClient.client.connect = connect
+    fakeTransport.close = close
+    const mgr = new PatchedManager()
+    const events: unknown[] = []
+    mgr.on(event => events.push(event))
+    await mgr.reconcile([{ name: "stopped", transport: "stdio", command: "x" }])
+    await mgr.stopAll()
+    const stoppedEvents = events.length
+    gate.resolve()
+    await settle()
+    await mgr.stopAll()
+    expect(mgr.snapshots()).toEqual([])
+    expect(connect.mock.calls).toHaveLength(0)
+    expect(close.mock.calls).toHaveLength(1)
+    expect(events).toHaveLength(stoppedEvents)
+  })
+
+  it("preserves the SDK close callback without scheduling reconnect on intentional stop", async () => {
+    fakeClient = makeFakeClient({ serverCaps: {} })
+    fakeTransport = makeFakeTransport()
+    const transport = fakeTransport
+    let sdkClosed = false
+    fakeClient.client.connect = async () => {
+      // Protocol.connect wraps the manager's callback with SDK request cleanup.
+      const managerClose = transport.onclose
+      transport.onclose = () => { managerClose?.(); sdkClosed = true }
+    }
+    fakeClient.client.close = async () => { transport.onclose?.() }
+    const mgr = new PatchedManager()
+    const statuses: string[] = []
+    mgr.on(event => { if (event.type === "status") statuses.push(event.status) })
+    await mgr.reconcile([{ name: "closed", transport: "stdio", command: "x" }])
+    await settle()
+    await mgr.stopAll()
+    expect(sdkClosed).toBe(true)
+    expect(statuses).toEqual(["ready", "disconnected"])
+  })
+
+  for (const rejects of [false, true]) {
+    it(`ignores a stopped handshake that later ${rejects ? "rejects" : "resolves"}`, async () => {
+      const gate = deferred<void>()
+      fakeClient = makeFakeClient({ serverCaps: {} })
+      fakeTransport = makeFakeTransport()
+      const connect = mock(() => gate.promise)
+      fakeClient.client.connect = connect
+      const original = fakeClient
+      const mgr = new PatchedManager()
+      const events: unknown[] = []
+      mgr.on(event => events.push(event))
+      await mgr.reconcile([{ name: "stopped", transport: "stdio", command: "x" }])
+      await settle()
+      expect(connect.mock.calls).toHaveLength(1)
+      await mgr.stopAll()
+      const stoppedEvents = events.length
+      if (rejects) gate.reject(new Error("late handshake failure"))
+      else gate.resolve()
+      await settle()
+      expect(mgr.snapshots()).toEqual([])
+      expect(original.calls.close).toBe(1)
+      expect(events).toHaveLength(stoppedEvents)
+    })
+  }
+
+  it("does not let a removed server's late transport affect its same-name replacement", async () => {
+    const gate = deferred<void>()
+    transportGate = gate.promise
+    fakeClient = makeFakeClient({ serverCaps: {} })
+    fakeTransport = makeFakeTransport()
+    const oldTransportClose = mock(async () => {})
+    fakeTransport.close = oldTransportClose
+    const mgr = new PatchedManager()
+    await mgr.reconcile([{ name: "same", transport: "stdio", command: "old" }])
+    await mgr.stop("same")
+    transportGate = null
+    fakeClient = makeFakeClient({ serverCaps: {} })
+    const replacement = fakeClient
+    const connect = mock(async () => {})
+    replacement.client.connect = connect
+    fakeTransport = makeFakeTransport()
+    await mgr.reconcile([{ name: "same", transport: "stdio", command: "new" }])
+    await settle()
+    gate.resolve()
+    await settle()
+    expect(mgr.snapshots()[0]?.status).toBe("ready")
+    expect(connect.mock.calls).toHaveLength(1)
+    expect(replacement.calls.close).toBe(0)
+    expect(oldTransportClose.mock.calls).toHaveLength(1)
+    await mgr.stopAll()
+    expect(replacement.calls.close).toBe(1)
+  })
+
+  for (const rejects of [false, true]) {
+    it(`ignores stale tool discovery after reconnect when it ${rejects ? "rejects" : "resolves"}`, async () => {
+      const gate = deferred<{ tools: Array<{ name: string; inputSchema: object }> }>()
+      fakeClient = makeFakeClient({ serverCaps: { tools: {} } })
+      fakeClient.client.listTools = () => gate.promise
+      fakeTransport = makeFakeTransport()
+      const original = fakeClient
+      const mgr = new PatchedManager()
+      const toolEvents: string[][] = []
+      mgr.on(event => {
+        if (event.type === "tools_changed") toolEvents.push(event.tools.map(t => t.definition.name))
+      })
+      await mgr.reconcile([{ name: "same", transport: "stdio", command: "x" }])
+      await settle()
+      fakeClient = makeFakeClient({ serverCaps: { tools: {} }, tools: [{ name: "new", inputSchema: { type: "object" } }] })
+      const replacement = fakeClient
+      fakeTransport = makeFakeTransport()
+      await mgr.reconnect("same")
+      const eventCount = toolEvents.length
+      if (rejects) gate.reject(new Error("late discovery failure"))
+      else gate.resolve({ tools: [{ name: "old", inputSchema: { type: "object" } }] })
+      await settle()
+      expect(mgr.snapshots()[0]?.status).toBe("ready")
+      expect(mgr.allTools().map(t => t.definition.name)).toEqual(["mcp__same__new"])
+      expect(toolEvents).toHaveLength(eventCount)
+      expect(original.calls.close).toBe(1)
+      expect(replacement.calls.close).toBe(0)
+      await mgr.stopAll()
+    })
+  }
+
   it("manual reconnect preserves resource subscriptions", async () => {
     fakeClient = makeFakeClient({
       serverCaps: { resources: { subscribe: true } },
@@ -350,4 +482,15 @@ function fakeManagedServer(opts: {
     fingerprint: opts.name,
     generation: 0,
   }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (error: Error) => void
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no })
+  return { promise, resolve, reject }
+}
+
+async function settle() {
+  await new Promise(resolve => setTimeout(resolve, 10))
 }
