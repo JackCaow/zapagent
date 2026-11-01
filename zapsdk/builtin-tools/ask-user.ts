@@ -20,7 +20,7 @@ export interface AskUserAnswer {
 /** The app layer owns the UI. Resolve with the answers, or null when the user
  *  dismissed the question without answering. */
 export interface AskUserCallbacks {
-  ask(questions: AskUserQuestion[]): Promise<AskUserAnswer[] | null>;
+  ask(questions: AskUserQuestion[], signal?: AbortSignal): Promise<AskUserAnswer[] | null>;
 }
 
 export interface AskUserToolOptions {
@@ -63,7 +63,7 @@ export function askUserQuestionTool(options: AskUserToolOptions): Tool {
       // The user may take as long as they like.
       timeoutMs: 24 * 60 * 60 * 1000,
     },
-    handler: async (args, _signal, context) => {
+    handler: async (args, signal, context) => {
       const questions = args.questions as AskUserQuestion[];
       const observation = currentRuntimeObservation();
       const publish = (phase: "requested" | "settled") => {
@@ -72,7 +72,7 @@ export function askUserQuestionTool(options: AskUserToolOptions): Tool {
       };
       publish("requested");
       let answers: AskUserAnswer[] | null;
-      try { answers = await options.callbacks.ask(questions); }
+      try { answers = await options.callbacks.ask(questions, signal); }
       finally { publish("settled"); }
       if (!answers) {
         return {

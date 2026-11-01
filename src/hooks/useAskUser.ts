@@ -1,5 +1,7 @@
-import { useMemo, useState } from "react"
+import { useMemo } from "react"
 import type { AskUserAnswer, AskUserCallbacks, AskUserQuestion } from "../../zapsdk/index.js"
+
+import { usePendingInteraction } from "./usePendingInteraction.js"
 
 export interface PendingQuestions {
   questions: AskUserQuestion[]
@@ -17,14 +19,10 @@ export interface UseAskUserResult {
 /** One question set at a time: the tool executor runs `ask_user_question`
  *  exclusively, so a second `ask` can only arrive after the first resolved. */
 export function useAskUser(): UseAskUserResult {
-  const [pendingQuestions, setPending] = useState<PendingQuestions | null>(null)
+  const { pending, request } = usePendingInteraction<AskUserQuestion[], AskUserAnswer[] | null>()
   const askUserCallbacks = useMemo<AskUserCallbacks>(() => ({
-    ask: (questions) => new Promise((resolve) => {
-      setPending({
-        questions,
-        resolve: (answers) => { setPending(null); resolve(answers) },
-      })
-    }),
-  }), [])
+    ask: (questions, signal) => request(questions, null, signal),
+  }), [request])
+  const pendingQuestions = pending ? { questions: pending.value, resolve: pending.resolve } : null
   return { askUserCallbacks, pendingQuestions }
 }
