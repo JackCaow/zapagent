@@ -67,7 +67,7 @@ export function startGoalBackgroundRunner(goal: GoalRecord): void {
 }
 
 /** The same command implementation is used by the TUI and the CLI. */
-export function goalCommand(args: string[], cwd: string, currentMode: import("./config.js").PermissionMode = "default", platform: NodeJS.Platform = process.platform, sessionId?: string, onForeground?: (goal: GoalRecord) => void, enforceSessionMode = false): string {
+export function goalCommand(args: string[], cwd: string, currentMode: import("./config.js").PermissionMode = "default", platform: NodeJS.Platform = process.platform, sessionId?: string, onForeground?: (goal: GoalRecord) => void, enforceSessionMode = false, onSelected?: (goal: GoalRecord) => void): string {
   const action = args[0] ?? ""
   if (!action || action === "help") return [
     "Usage: /goal <objective> [--background] [--artifact] [--strict] [--accept-edits | --permission-mode=MODE] [--check=bun|npm|pytest|go] [--install=npm] [--tokens=N] [--minutes=N] [--model-calls=N] [--tool-calls=N] | status [id] | list | pause [id] | resume [id] | cancel [id] | budget extend [id] --tokens=N --minutes=N",
@@ -109,7 +109,7 @@ export function goalCommand(args: string[], cwd: string, currentMode: import("./
     const requested = args.includes("--accept-edits") ? "acceptEdits" : modeArgs[0]?.slice("--permission-mode=".length) ?? currentMode
     if (requested !== currentMode) throw new Error("Goal uses the current session permission mode; change the session mode before starting a Goal")
   }
-  const launch = (goal: GoalRecord) => background ? startGoalBackgroundRunner(goal) : onForeground!(goal)
+  const launch = (goal: GoalRecord) => { onSelected?.(goal); return background ? startGoalBackgroundRunner(goal) : onForeground!(goal) }
   const store = new GoalStore(goalDatabasePath(), { requireLedger: true })
   try {
     if (action === "list") {
