@@ -34,6 +34,9 @@ it("uses host acceptance/pause states instead of stale active tools or unrelated
   expect(goalActionText({ ...goal, status: "completed", accepted: false }, false)).not.toContain("验收通过")
   expect(goalActionText({ ...goal, status: "awaiting_acceptance" }, false)).toContain("等待")
   expect(goalActionText({ ...goal, status: "ready_for_delivery" }, false)).toContain("等待交付授权")
+  for (const status of ["blocked", "failed"] as const) {
+    expect(render({ goal: { ...goal, status }, attached: false })).toContain("/goal status")
+  }
   expect(goalActionText(goal, false, todos, "bash")).toBe("后台目标 · 正在推进目标")
   expect(render({ attached: false, todos })).not.toContain("1/3")
 })
