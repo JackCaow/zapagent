@@ -11,6 +11,9 @@ export interface GoalSessionOptions {
   sessionId?: string
   signal?: AbortSignal
   onStart?: (goal: GoalRecord) => void
+  onSelected?: (goal: GoalRecord) => void
+  /** The TUI keeps Goal state above input instead of appending protocol notices. */
+  compact?: boolean
   onMessage: (text: string) => void
   onResult?: (markdown: string) => void
   onState?: (goal: GoalRecord) => void
@@ -30,16 +33,19 @@ export async function executeGoalCommand(args: string[], cwd: string, options: G
     const detach = attached.get(key)
     if (!detach || args.length > 2 || args[1] && args[1] !== detach.id) throw new Error("No foreground Goal in this session")
     detach.background()
-    options.onMessage("Goal will switch to background at the next safe phase boundary.")
+    options.onMessage(options.compact ? "将在当前步骤安全结束后转为后台。" : "Goal will switch to background at the next safe phase boundary.")
     return 0
   }
   if (attached.has(key) && (!args[0] || !["status", "watch", "list", "pause", "cancel", "budget", "help"].includes(args[0]))) throw new Error("A foreground Goal is already running in this session")
   let foreground: GoalRecord | undefined
+  let selected: GoalRecord | undefined
   const message = goalCommand(args, cwd, options.permissionMode, process.platform, options.sessionId, goal => {
     if (attached.has(key)) throw new Error("A foreground Goal is already running in this session")
     foreground = goal
-  }, !!options.runTurn)
-  options.onMessage(message)
+  }, !!options.runTurn, goal => { selected = goal; options.onSelected?.(goal) })
+  if (!options.compact) options.onMessage(message)
+  else if (!selected) options.onMessage(args[0] === "pause" ? "已请求暂停目标。" : args[0] === "cancel" ? "已请求取消目标。" : message)
+  else if (!foreground) options.onMessage("目标已在后台启动。")
   if (!foreground) return 0
   const goal = foreground as GoalRecord
   let backgroundRequested = false
@@ -66,12 +72,14 @@ export async function executeGoalCommand(args: string[], cwd: string, options: G
       onOutcome: value => { outcome = value },
     })
     if (backgroundRequested && outcome?.status === "paused" && outcome.stopReason === "USER_INPUT_PENDING") {
-      options.onMessage(goalCommand(["resume", goal.id, "--background"], cwd, options.permissionMode, process.platform, options.sessionId))
-      options.onMessage(`Goal ${goal.id} is now running in background.`)
+      const resumed = goalCommand(["resume", goal.id, "--background"], cwd, options.permissionMode, process.platform, options.sessionId)
+      if (!options.compact) options.onMessage(resumed)
+      options.onMessage(options.compact ? "目标已转为后台运行。" : `Goal ${goal.id} is now running in background.`)
       return 0
     }
     if (outcome) {
-      options.onMessage(`Goal ${outcome.id} · ${outcome.status}${outcome.stopReason ? ` · ${outcome.stopReason}` : ""}`)
+      if (!options.compact) options.onMessage(`Goal ${outcome.id} · ${outcome.status}${outcome.stopReason ? ` · ${outcome.stopReason}` : ""}`)
+      else if (outcome.status === "blocked" || outcome.status === "failed") options.onMessage(`目标暂时无法继续：${outcome.stopReason ?? "执行未完成"}`)
       const acceptance = goalAcceptanceSummary(outcome)
       if (acceptance) options.onMessage(acceptance)
       const markdown = ["completed", "ready_for_delivery"].includes(outcome.status) ? goalDeliveryMarkdown(outcome.delivery) : undefined

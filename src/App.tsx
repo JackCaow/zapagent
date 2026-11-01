@@ -536,6 +536,9 @@ export function App() {
     runAgent,
     runGoalCommand,
     goalRunning,
+    goalStatus,
+    goalTodoId,
+    resetGoalView,
     abortRef,
     status: runnerStatus,
     providerRequest,
@@ -774,6 +777,7 @@ export function App() {
           dispatchUserTurn(text, systemPrompt, images, displayText, silent, restoreText, memoryQueryText, meta?.onAccepted),
         getContextTokens: () => contextTokensRef.current,
         onResetRuntimeState: () => {
+          resetGoalView()
           tokenAccounting.promptOverhead = 0
           setContextTokens(0, "estimated", null)
           resetRunDiagnostics()
@@ -805,7 +809,7 @@ export function App() {
     // stable; refs aren't deps. Only addLog/addToast/compactLogs/dispatchUserTurn
     // could realistically change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [addLog, addToast, compactLogs, dispatchUserTurn, runGoalCommand, exit, updateConfig, setContextTokens, resetRunDiagnostics, restoreMemoryQueryHistoryFromLogs, setCompactFailure, setMemoryFailure, bindQueue],
+    [addLog, addToast, compactLogs, dispatchUserTurn, runGoalCommand, exit, updateConfig, setContextTokens, resetRunDiagnostics, resetGoalView, restoreMemoryQueryHistoryFromLogs, setCompactFailure, setMemoryFailure, bindQueue],
   )
 
   // ── Turn dispatcher (unified handleSubmit + drain) ──
@@ -1085,22 +1089,7 @@ export function App() {
 
       {!inModal && (
         <>
-          {dialog !== "queue" && <TodosPanel todos={todos} />}
-
-          <LiveActivity
-            isRunning={isRunning}
-            isStreaming={isStreaming}
-            isThinking={isThinking}
-            thinkingChars={thinkingText.length}
-            status={turnActivity.status}
-            providerRequest={providerRequest}
-            activeTool={activeTool}
-            activeToolBytes={activeToolBytes}
-            termWidth={termWidth}
-            pendingTools={pendingTools}
-            lastCompletedTool={lastCompletedTool}
-            stopHint={inputQueue.length || editingMessageId || pendingImages.length || dialog || palettes.slashOpen || palettes.fileOpen ? "Ctrl+C to stop" : undefined}
-          />
+          {dialog !== "queue" && <TodosPanel todos={todos} goalId={goalStatus?.id} goalAttached={goalRunning} todoGoalId={goalTodoId} />}
 
           <ToastContainer toasts={toasts} />
           <UpdateNotice state={updateCheck} />
@@ -1111,6 +1100,25 @@ export function App() {
           {editingMessageId && <Text color={c.accent}>Editing queued message · Enter saves · Esc cancels · original draft is kept</Text>}
         </>
       )}
+
+      {!inModal && <LiveActivity
+        isRunning={isRunning}
+        isStreaming={isStreaming}
+        isThinking={isThinking}
+        thinkingChars={thinkingText.length}
+        status={turnActivity.status}
+        providerRequest={providerRequest}
+        activeTool={activeTool}
+        activeToolBytes={activeToolBytes}
+        termWidth={termWidth}
+        pendingTools={pendingTools}
+        lastCompletedTool={lastCompletedTool}
+        goal={goalStatus}
+        goalAttached={goalRunning}
+        goalTodos={goalStatus?.id === goalTodoId ? todos : []}
+        goalAwaitingInput={!!pendingApproval || !!pendingPlan || !!pendingQuestions}
+        stopHint={inputQueue.length || editingMessageId || pendingImages.length || dialog || palettes.slashOpen || palettes.fileOpen ? "Ctrl+C to stop" : undefined}
+      />}
 
       {!inModal && pendingApproval && (
         <ApprovalBar
@@ -1159,7 +1167,7 @@ export function App() {
           // LiveActivity above provides its own marginTop=1; doubling it
           // on the prompt creates the "live indicator floats too far from
           // the prompt" gap.
-          noTopMargin={isRunning || isStreaming || isThinking || pendingTools.length > 0}
+          noTopMargin={!!goalStatus || isRunning || isStreaming || isThinking || pendingTools.length > 0}
         />
       )}
 

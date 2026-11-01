@@ -3,6 +3,7 @@ import { RetryProvider } from "../../zapsdk/core/retry.js"
 import type { AgentOutcomeV1 } from "../../zapsdk/runtime/outcome.js"
 import { executeGoalCommand } from "../goal-session.js"
 import { createGoalContentFilter } from "../goal-output.js"
+import { useGoalView } from "./useGoalView.js"
 import { createGoalPresentation } from "../agent/goalPresentation.js"
 import { AgentBudget } from "../../zapsdk/agent/budget.js"
 import { RequestMeter } from "../../zapsdk/agent/request-meter.js"
@@ -361,6 +362,9 @@ export function useAgentRunner({
 }: UseAgentRunnerOptions) {
   const [status, setStatus] = useState("ready")
   const [goalRunning, setGoalRunning] = useState(false)
+  const { view: goalStatus, select: selectGoalView, update: updateGoalView, clear: resetGoalView } = useGoalView(currentSessionId, cwd, goalRunning, undefined, appLogger)
+  const [goalTodoId, setGoalTodoId] = useState<string>()
+  useEffect(() => { setGoalTodoId(undefined) }, [currentSessionId])
   const [outputThroughput, setOutputThroughput] = useState<OutputThroughputSample>()
   const [providerRequest, setProviderRequest] = useState<ProviderRequestEvent>()
   const [step, setStep] = useState(0)
@@ -545,6 +549,7 @@ export function useAgentRunner({
     invocation?: { goalTurn?: GoalTurnInput; goalController?: AbortController; onOutcome?: (outcome: AgentOutcomeV1) => void; signal?: AbortSignal; propagateErrors?: boolean; resultSchema?: "outcome-v1" | "legacy" } & Pick<import("../../zapsdk/agent/loop.js").RunOptions,
       "onInputAccepted" | "hasSteering" | "takeSteering" | "onSteeringAccepted">,
   ): Promise<LoopAgentResult | undefined> => {
+    if (!invocation?.goalTurn) { resetGoalView(true); setGoalTodoId(undefined) }
     running.current = true
     agentRunStore.clear()
     const controller = new AbortController()
@@ -947,6 +952,7 @@ export function useAgentRunner({
     recordContextDiagnostics,
     recordUsage,
     registerStaticFlushCallback,
+    resetGoalView,
     replaceLog,
     todoStore,
     todosRef,
@@ -957,15 +963,19 @@ export function useAgentRunner({
   const runGoalCommand = useCallback(async (args: string[]): Promise<number> => {
     const controller = new AbortController()
     let presentation: ReturnType<typeof createGoalPresentation> | undefined
-    let stateLabel = ""
     try {
       return await executeGoalCommand(args, cwd, {
+        compact: true,
+        onSelected: goal => { selectGoalView(goal); setGoalTodoId(previous => previous === goal.id ? previous : undefined) },
         runTurn: async input => {
           presentation?.finish()
           let outcome: AgentOutcomeV1 | undefined
           try {
             const result = await runAgent(input.prompt, undefined, undefined, input.prompt, {
-              signal: input.signal, goalTurn: input, goalController: controller, onOutcome: value => { outcome = value }, resultSchema: "outcome-v1", propagateErrors: true,
+              signal: input.signal, goalTurn: { ...input, onEvent: event => {
+                input.onEvent(event)
+                if (!event.path?.length && event.type === "content_final" && event.kind === "tool_result" && event.toolName === "todo_write" && event.result.success) setGoalTodoId(input.goalId)
+              } }, goalController: controller, onOutcome: value => { outcome = value }, resultSchema: "outcome-v1", propagateErrors: true,
             })
             if (!result || !outcome) throw new Error("GOAL_TURN_OUTCOME_MISSING")
             return { text: result.text, outcome, toolCalls: result.toolResults.length, sessionId: getCurrentSessionId() }
@@ -988,12 +998,8 @@ export function useAgentRunner({
         },
         onEvent: (event, scope) => presentation?.event(event, scope),
         onState: goal => {
-          const label = `${goal.status}/${goal.phase ?? "preparing"} · ${goal.tasks.filter(task => task.status === "passed").length}/${goal.tasks.length} tasks`
-          if (label !== stateLabel) {
-            stateLabel = label
-            addLog("system", `Goal ${label}${goal.stopReason ? ` · ${goal.stopReason}` : ""}`)
-            if (!controller.signal.aborted) setStatus(goal.phase ?? "preparing")
-          }
+          updateGoalView(goal)
+          if (!controller.signal.aborted) setStatus(goal.phase ?? "preparing")
         },
         onMessage: text => addLog("system", text),
         onResult: text => { presentation?.finish(); addLog("agent", text) },
@@ -1005,7 +1011,7 @@ export function useAgentRunner({
         setGoalRunning(false); setStatus("ready"); setActiveTool(""); setStep(0); setProviderRequest(undefined)
       }
     }
-  }, [config, cwd, addLog, replaceLog, peekNextLogId, getIsFrozen, registerStaticFlushCallback, agentRunStore, runAgent])
+  }, [config, cwd, addLog, replaceLog, peekNextLogId, getIsFrozen, registerStaticFlushCallback, agentRunStore, runAgent, selectGoalView, updateGoalView])
 
   const runAgentRef = useRef(runAgent)
   runAgentRef.current = runAgent
@@ -1049,6 +1055,9 @@ export function useAgentRunner({
     runAgent,
     runGoalCommand,
     goalRunning,
+    goalStatus,
+    goalTodoId,
+    resetGoalView,
     running,
     abortRef,
     status,

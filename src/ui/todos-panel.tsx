@@ -19,8 +19,16 @@ function countBy(todos: Todo[], status: Todo["status"]): number {
   return n
 }
 
-export const TodosPanel = memo(function TodosPanel({ todos }: { todos: Todo[] }) {
-  if (todos.length === 0) return null
+export interface TodosPanelProps {
+  todos: Todo[]
+  goalId?: string
+  goalAttached?: boolean
+  todoGoalId?: string
+}
+
+export const TodosPanel = memo(function TodosPanel({ todos, goalId, goalAttached = false, todoGoalId }: TodosPanelProps) {
+  // A retained paused/background Goal must not hide a new ordinary turn's list.
+  if (todos.length === 0 || goalId && (goalAttached || todoGoalId === goalId)) return null
   const doneCount = countBy(todos, "completed")
   return (
     <Box flexDirection="column" paddingX={2}>

@@ -1,8 +1,11 @@
 /** @jsxImportSource react */
 import { shellCommandDisplay } from "../../zapsdk/utils/shell.js";
-import { memo, useEffect, useRef } from "react"
+import { memo, useEffect, useRef, type ReactNode } from "react"
 import { Box, Text } from "ink"
 import type { LogEntry } from "./types.js"
+import { GoalStatus } from "./goal-status.js"
+import { goalActionText, type GoalView } from "../goal-view.js"
+import type { Todo } from "../../zapsdk/index.js"
 import type { ProviderRequestEvent } from "../../zapsdk/core/llm.js"
 import { c } from "./theme.js"
 import { shortAgentLabel } from "./group-logs.js"
@@ -100,6 +103,10 @@ export function collectPendingTools(logs: LogEntry[]): LogEntry[] {
 }
 
 export interface LiveActivityProps {
+  goal?: GoalView
+  goalAttached?: boolean
+  goalTodos?: readonly Todo[]
+  goalAwaitingInput?: boolean
   isRunning: boolean
   isStreaming: boolean
   isThinking: boolean
@@ -130,17 +137,17 @@ function statusLabel(status: string, activeTool: string): string {
 }
 
 /** A quiet, transient maintenance row; never appended to conversation history. */
-export function CompactActivity({ elapsed, stopHint = "Esc twice to stop", termWidth }: {
-  elapsed: number; stopHint?: string; termWidth: number
+export function CompactActivity({ elapsed, stopHint = "Esc twice to stop", termWidth, embedded = false }: {
+  elapsed: number; stopHint?: string; termWidth: number; embedded?: boolean
 }) {
   return (
-    <Box flexDirection="column" paddingLeft={2} marginTop={1}>
+    <Box flexDirection="column" paddingLeft={embedded ? 0 : 2} marginTop={embedded ? 0 : 1}>
       <Text wrap="truncate-end">
         <Text color={c.maintenance}>· Compacting conversation…</Text>
         <Text color={c.text.faint}> ({formatActivityDuration(elapsed)})</Text>
       </Text>
       <Text color={c.text.faint} wrap="truncate-end">
-        {truncateToWidth(`  └ Tip: ${stopHint} compaction.`, Math.max(1, termWidth - 2))}
+        {truncateToWidth(`  └ Tip: ${stopHint} compaction.`, Math.max(1, termWidth - (embedded ? 4 : 2)))}
       </Text>
     </Box>
   )
@@ -150,10 +157,13 @@ export const LiveActivity = memo(function LiveActivity({
   isRunning, isStreaming, isThinking, thinkingChars,
   status, activeTool, activeToolBytes = 0, termWidth, pendingTools,
   lastCompletedTool, providerRequest, stopHint = "Esc twice to stop",
+  goal, goalAttached = false, goalTodos = [], goalAwaitingInput = false,
 }: LiveActivityProps) {
   // Keep the 150ms animation state inside this small row. Hosting it in App
   // made every spinner tick reconcile the transcript, prompt and palettes.
-  const { spinIdx, elapsed } = useSpinner(status)
+  const { spinIdx, elapsed, spinnerFrames } = useSpinner(status)
+  const goalActive = !!goal && goalAttached && ["created", "running"].includes(goal.status)
+  const waitingForGoalInput = goalActive && goalAwaitingInput
   const progress = activityProgress(isThinking, thinkingChars, activeToolBytes)
   const progressRef = useRef<{
     kind: ActivityProgressKind
@@ -176,7 +186,12 @@ export const LiveActivity = memo(function LiveActivity({
     }
   }, [isRunning, progress.kind, progress.value])
 
-  if (status === "compacting") return <CompactActivity elapsed={elapsed} stopHint={stopHint} termWidth={termWidth} />
+  const withGoal = (activity: ReactNode) => goal ? <GoalStatus goal={goal} termWidth={termWidth} attached={goalAttached} todos={goalTodos}>
+    {!goalActive && <Text color={c.text.muted} wrap="truncate-end">{truncateToWidth(goalActionText(goal, goalAttached), Math.max(1, termWidth - 4))}</Text>}
+    {activity}
+  </GoalStatus> : activity
+
+  if (status === "compacting") return withGoal(<CompactActivity elapsed={elapsed} stopHint={stopHint} termWidth={termWidth} embedded={!!goal} />)
 
   // Always render a single-row Box (even when idle) so the frame
   // height stays stable across the running→idle transition. Without
@@ -184,7 +199,10 @@ export const LiveActivity = memo(function LiveActivity({
   // dismounts and leaves a stray horizontal artifact above the
   // prompt after the first agent response. Cheap: just one blank
   // row of vertical space.
-  if (!isRunning && !isStreaming && !isThinking && pendingTools.length === 0) {
+  if (goal && !goalActive && (!isRunning || goalAttached)) {
+    return <GoalStatus goal={goal} termWidth={termWidth} attached={goalAttached} todos={goalTodos} />
+  }
+  if (!isRunning && !isStreaming && !isThinking && pendingTools.length === 0 && !goal) {
     return <Box height={1} marginTop={1} />
   }
   // Spinner ticks freely and elapsed updates every 150ms. This is safe
@@ -197,7 +215,7 @@ export const LiveActivity = memo(function LiveActivity({
   // output policy. (The earlier "freeze spinner during streaming" patch
   // was a defensive no-op against a tall-frame yank that no longer
   // exists in this architecture.)
-  const spinner = SPINNER_FRAMES[spinIdx % SPINNER_FRAMES.length]
+  const spinner = goalActive ? spinnerFrames[spinIdx % spinnerFrames.length] : SPINNER_FRAMES[spinIdx % SPINNER_FRAMES.length]
   const toolsSegment = formatPendingToolsLabel(pendingTools)
   const primaryLabel = toolsSegment || statusLabel(status, activeTool)
   const copy = buildLiveActivityCopy({
@@ -212,22 +230,26 @@ export const LiveActivity = memo(function LiveActivity({
   const lastActionSegment = pendingTools.length === 0 && lastCompletedTool?.tool
     ? `after ${formatToolLabel(lastCompletedTool.tool.name, lastCompletedTool.tool.arguments)}`
     : ""
-  const segments = [copy.primaryLabel, copy.elapsed, copy.progress, lastActionSegment]
+  const goalTool = pendingTools.length > 0 || activeToolBytes > 0 ? activeTool : ""
+  const segments = [goalActive ? waitingForGoalInput ? "等待你确认操作" : goalActionText(goal!, goalAttached, goalTodos, goalTool) : copy.primaryLabel, copy.elapsed, waitingForGoalInput ? "" : copy.progress, goalActive ? "" : lastActionSegment]
     .filter(Boolean)
     .join("  ·  ")
-  const interruptHint = `  ⏎ ${stopHint}`
+  const interruptHint = goal && termWidth < 70
+    ? goalActive ? "" : stopHint.startsWith("Ctrl+C") ? "  Ctrl+C" : termWidth < 40 ? "  Esc×2" : "  Esc×2 stop"
+    : `  ⏎ ${stopHint}`
   const spinnerWidth = displayWidth(spinner) + 1
   const hintWidth = displayWidth(interruptHint)
-  const segmentBudget = Math.max(20, termWidth - spinnerWidth - hintWidth - 4)
+  const segmentBudget = Math.max(goal ? 1 : 20, termWidth - spinnerWidth - hintWidth - 4)
   const truncated = truncateToWidth(segments, segmentBudget)
   const spinnerColor = copy.mayBeStalled ? c.warning : c.accent
-  return (
-    <Box flexDirection="row" paddingLeft={2} marginTop={1}>
+  const activity = (
+    <Box flexDirection="row" paddingLeft={goal ? 0 : 2} marginTop={goal ? 0 : 1}>
       <Text color={spinnerColor} wrap="truncate-end">{spinner} </Text>
       <Text color={c.text.muted} wrap="truncate-end">{truncated}</Text>
       <Text color={c.text.faint} wrap="truncate-end">{interruptHint}</Text>
     </Box>
   )
+  return withGoal(activity)
 })
 
 export function liveActivityHeight(active: boolean): number {
