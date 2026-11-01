@@ -542,11 +542,11 @@ export class MCPManager {
     };
 
     const retire = async () => {
-      if (!current()) return false;
+      if (!current()) return undefined;
       const disposal = this.disposeClient(s);
       const retiredGeneration = s.generation;
       await disposal;
-      return this.isCurrent(s, retiredGeneration);
+      return retiredGeneration;
     };
 
     const connectTimeout = s.config.connectTimeoutMs ?? DEFAULTS.connectTimeoutMs;
@@ -561,12 +561,14 @@ export class MCPManager {
       // We do NOT auto-trigger the browser flow on every connect — that
       // would race on app startup and pop a window without user intent.
       if (err instanceof UnauthorizedError) {
-        if (!await retire()) return;
+        const retiredGeneration = await retire();
+        if (retiredGeneration === undefined || !this.isCurrent(s, retiredGeneration)) return;
         s.lastError = "authorization required";
         this.setStatus(s, "needs_auth");
         return;
       }
-      if (!await retire()) return;
+      const retiredGeneration = await retire();
+      if (retiredGeneration === undefined || !this.isCurrent(s, retiredGeneration)) return;
       this.markError(s, err);
       this.scheduleReconnect(s);
       return;
@@ -586,7 +588,8 @@ export class MCPManager {
     try {
       if (caps.tools) await this.refreshTools(s);
     } catch (err) {
-      if (!await retire()) return;
+      const retiredGeneration = await retire();
+      if (retiredGeneration === undefined || !this.isCurrent(s, retiredGeneration)) return;
       this.markError(s, err);
       this.scheduleReconnect(s);
       return;

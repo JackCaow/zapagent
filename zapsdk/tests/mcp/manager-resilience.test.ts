@@ -414,6 +414,32 @@ describe("MCPManager resilience", () => {
     })
   }
 
+  it("revalidates after failed-client disposal before publishing a late error", async () => {
+    const closed = deferred<void>()
+    fakeClient = makeFakeClient({ serverCaps: {} })
+    fakeClient.client.connect = async () => { throw new Error("old handshake failed") }
+    fakeClient.client.close = () => closed.promise
+    fakeTransport = makeFakeTransport()
+    const mgr = new PatchedManager()
+    const statuses: string[] = []
+    mgr.on(event => { if (event.type === "status") statuses.push(event.status) })
+    await mgr.reconcile([{ name: "same", transport: "stdio", command: "x" }])
+    await settle()
+    fakeClient = makeFakeClient({ serverCaps: {} })
+    const replacement = fakeClient
+    fakeTransport = makeFakeTransport()
+    let reconnect: Promise<void> | undefined
+    // Interleave after retirement's disposal await but before its caller resumes.
+    void closed.promise.then(() => queueMicrotask(() => { reconnect = mgr.reconnect("same") }))
+    closed.resolve()
+    await settle()
+    await reconnect
+    expect(statuses).toEqual(["ready"])
+    expect(mgr.snapshots()[0]?.lastError).toBeUndefined()
+    expect(replacement.calls.close).toBe(0)
+    await mgr.stopAll()
+  })
+
   it("manual reconnect preserves resource subscriptions", async () => {
     fakeClient = makeFakeClient({
       serverCaps: { resources: { subscribe: true } },
