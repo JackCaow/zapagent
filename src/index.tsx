@@ -115,7 +115,7 @@ if (args[0] === "goal") {
   const [{ executeGoalCommand }, { loadAppConfig }, { getAppDataDir }] = await Promise.all([
     import("./goal-session.js"), import("./config.js"), import("../zapsdk/utils/platform.js"),
   ])
-  const displayed = new Set<string>()
+  const displayed = new Map<string, string>()
   let lastPhase = ""
   try { process.exit(await executeGoalCommand(args.slice(1), process.cwd(), {
     permissionMode: loadAppConfig(join(getAppDataDir(), "config.json")).permissionMode,
@@ -123,9 +123,13 @@ if (args[0] === "goal") {
     onState: goal => { const phase = `${goal.status}/${goal.phase ?? "preparing"}`; if (phase !== lastPhase) { lastPhase = phase; process.stdout.write(`\nGoal ${phase} · ${goal.tasks.filter(t => t.status === "passed").length}/${goal.tasks.length} tasks\n`) } },
     onEvent: (event, scope) => {
       if ((event.type === "content_delta" || event.type === "content_final") && (event.kind === "text" || event.kind === "thinking")) {
-        const key = `${scope}:${event.id}`
-        if (event.type === "content_delta") { displayed.add(key); process.stdout.write(event.text) }
-        else { if (!displayed.has(key)) process.stdout.write(event.text); process.stdout.write("\n") }
+        const key = JSON.stringify([scope, event.path ?? [], event.kind, event.id])
+        if (event.type === "content_delta") { displayed.set(key, (displayed.get(key) ?? "") + event.text); process.stdout.write(event.text) }
+        else {
+          const prior = displayed.get(key) ?? ""
+          if (event.text.startsWith(prior)) process.stdout.write(event.text.slice(prior.length))
+          displayed.delete(key); process.stdout.write("\n")
+        }
       } else if (event.type === "content_final" && event.kind === "tool_call") process.stdout.write(`\n${event.path?.length ? "Child " : ""}Tool ${event.toolName}: ${JSON.stringify(event.arguments)}\n`)
       else if (event.type === "content_final" && event.kind === "tool_result") process.stdout.write(`Tool ${event.toolName}: ${event.result.success ? "ok" : "failed"} ${event.result.output ?? event.result.error ?? ""}\n`)
       else if (event.type === "error") process.stderr.write(event.error + "\n")

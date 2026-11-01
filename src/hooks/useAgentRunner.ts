@@ -2,6 +2,7 @@ import { goalTurnMeter, type GoalTurnInput } from "../goal-turn.js"
 import { RetryProvider } from "../../zapsdk/core/retry.js"
 import type { AgentOutcomeV1 } from "../../zapsdk/runtime/outcome.js"
 import { executeGoalCommand } from "../goal-session.js"
+import { createGoalContentFilter } from "../goal-output.js"
 import { createGoalPresentation } from "../agent/goalPresentation.js"
 import { AgentBudget } from "../../zapsdk/agent/budget.js"
 import { RequestMeter } from "../../zapsdk/agent/request-meter.js"
@@ -726,6 +727,7 @@ export function useAgentRunner({
       currentConfig,
       controller,
       preview: runPreview,
+      presentContent: invocation?.goalTurn ? createGoalContentFilter() : undefined,
       setStatus, setStep, setActiveTool, setActiveToolBytes,
       setProviderRequest, setOutputThroughput,
       setContextTokens, setContextPending, setContextDiagnostics: recordContextDiagnostics,
@@ -994,6 +996,7 @@ export function useAgentRunner({
           }
         },
         onMessage: text => addLog("system", text),
+        onResult: text => { presentation?.finish(); addLog("agent", text) },
       })
     } finally {
       if (presentation) {

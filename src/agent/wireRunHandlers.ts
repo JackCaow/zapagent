@@ -53,6 +53,8 @@ export interface RunHandlersDeps {
   currentConfig: AppConfig
   controller: AbortController
   preview: StreamingPreview
+  /** Optional display-only projection; persisted runtime events stay intact. */
+  presentContent?: (event: AgentEvent) => AgentEvent | undefined
 
   setStatus: (s: string) => void
   setOutputThroughput?: (sample: OutputThroughputSample | undefined) => void
@@ -332,8 +334,9 @@ export function createRunHandlers(deps: RunHandlersDeps): RunHandlers {
       // as part of the next successful response.
       deps.preview.onThinkingFinal(e.id)
     })
-    agent.on("content_delta", (e: AgentEvent) => {
-      if (e.type !== "content_delta") return
+    agent.on("content_delta", (event: AgentEvent) => {
+      const e = deps.presentContent ? deps.presentContent(event) : event
+      if (e?.type !== "content_delta") return
       if (e.kind === "text") {
         deps.setStatus("writing")
         deps.preview.onTextDelta(e.id, e.text)
@@ -343,8 +346,9 @@ export function createRunHandlers(deps: RunHandlersDeps): RunHandlers {
       }
     })
 
-    agent.on("content_final", (e: AgentEvent) => {
-      if (e.type !== "content_final") return
+    agent.on("content_final", (event: AgentEvent) => {
+      const e = deps.presentContent ? deps.presentContent(event) : event
+      if (e?.type !== "content_final") return
       switch (e.kind) {
         case "text": {
           // Flush every paragraph + the trailing in-flight paragraph as a
