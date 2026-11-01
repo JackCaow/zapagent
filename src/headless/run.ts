@@ -7,6 +7,15 @@ import { parseHeadlessArgs, readStdinIfPiped, HEADLESS_HELP } from "./args.js"
 const EXIT_BAD_ARGS = 2
 
 async function runParsedHeadless(args: import("./args.js").HeadlessArgs, watch?: import("../watch/args.js").WatchOptions): Promise<number> {
+  // Apply the fully parsed value exactly once, before importing singletons
+  // through Watch/runtime. Repeated --cwd follows the parser's last-value rule.
+  if (args.cwd) {
+    try { process.chdir(args.cwd) }
+    catch (err) {
+      process.stderr.write(`bad --cwd: ${err instanceof Error ? err.message : String(err)}\n`)
+      return EXIT_BAD_ARGS
+    }
+  }
   const viewer = watch?.enabled ? await import("../watch/integration.js") : undefined
   if (viewer) {
     try { await viewer.startWatch(watch!) }

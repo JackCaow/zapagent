@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test"
-import { devtoolsPortFromArgs, headlessCwdFromArgs, isHeadlessInvocation } from "../src/cli-routing.js"
+import { devtoolsPortFromArgs, isHeadlessInvocation } from "../src/cli-routing.js"
 
 describe("CLI headless routing", () => {
   it("routes --help-headless to the headless shim even in an interactive TTY", () => {
@@ -33,22 +33,4 @@ describe("CLI headless routing", () => {
     expect(isHeadlessInvocation(["--dev", "9230", "-p", "hello"], true)).toBe(true)
   })
 
-  it("extracts a headless cwd before singletons are loaded", () => {
-    expect(headlessCwdFromArgs(["-p", "hello"])).toEqual({ ok: true })
-    expect(headlessCwdFromArgs(["--cwd", "/tmp/project", "-p", "hello"])).toEqual({
-      ok: true,
-      cwd: "/tmp/project",
-    })
-  })
-
-  it("rejects missing headless cwd values before attempting chdir", () => {
-    expect(headlessCwdFromArgs(["--cwd"])).toEqual({
-      ok: false,
-      message: "--cwd requires a value",
-    })
-    expect(headlessCwdFromArgs(["--cwd", "-p", "hello"])).toEqual({
-      ok: false,
-      message: "--cwd requires a value",
-    })
-  })
 })

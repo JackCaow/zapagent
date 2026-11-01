@@ -31,20 +31,6 @@ export function devtoolsPortFromArgs(argv: readonly string[]): string | null {
   return maybePort && /^\d+$/.test(maybePort) ? maybePort : "9229"
 }
 
-export type HeadlessCwdArg =
-  | { ok: true; cwd?: string }
-  | { ok: false; message: string }
-
-export function headlessCwdFromArgs(argv: readonly string[]): HeadlessCwdArg {
-  const cwdIdx = argv.findIndex(a => a === "--cwd")
-  if (cwdIdx < 0) return { ok: true }
-  const value = argv[cwdIdx + 1]
-  if (value === undefined || (value.startsWith("-") && !/^-?\d/.test(value))) {
-    return { ok: false, message: "--cwd requires a value" }
-  }
-  return { ok: true, cwd: value }
-}
-
 function isValueFlag(flag: string): boolean {
   return flag === "--cwd" ||
     flag === "--public-checks" ||
