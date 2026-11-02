@@ -6,6 +6,8 @@ import type { LLMCallOptions, LLMProvider } from "../../core/llm.js";
 import type { LLMChunk } from "../../core/types.js";
 import { ProviderRequest } from "../../core/provider-request.js";
 import { RetryProvider } from "../../core/retry.js";
+import { AgentLogger } from "../../debug/agent-logger.js";
+import { Logger } from "../../debug/logger.js";
 import { ConversationManager } from "../../memory/conversation.js";
 import { ToolExecutor } from "../../tools/executor.js";
 import { ToolRegistry } from "../../tools/registry.js";
@@ -77,7 +79,17 @@ describe("failed provider request usage accounting", () => {
       },
     };
     const f = fixture(new RetryProvider(provider, { maxRetries: 1, initialDelayMs: 1 }));
+    const logged: Record<string, unknown>[] = [];
+    const sink = Object.create(Logger.prototype) as Logger;
+    sink.info = (event, fields) => { logged.push({ event, ...fields }); };
+    new AgentLogger(sink).attach(f.agent);
     const result = await f.agent.run("hello");
+    expect(logged.filter(e => e.event === "run_usage").at(-1)).toMatchObject({
+      inputTokens: 10, outputTokens: 3, providerUsageReported: true, usageIncomplete: true,
+    });
+    expect(logged.find(e => e.event === "run_ended")).toMatchObject({
+      inputTokens: 10, outputTokens: 3, providerUsageReported: true, usageIncomplete: true,
+    });
     expect(calls).toBe(2);
     expect(result.totalUsage).toMatchObject({ inputTokens: 10, outputTokens: 3, usageIncomplete: true });
     expect(f.events.filter(e => e.type === "content_abandoned")).toHaveLength(0);
