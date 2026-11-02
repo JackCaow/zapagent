@@ -182,6 +182,21 @@ export class ReactiveCompact {
     // caused by the tail message itself, so preserve its head/tail and retry.
     this.compactOversizedMessages(result, protectedMessages);
 
+    // Multimodal providers send text blocks instead of `content`. Keep mirrored
+    // text in sync after both reducers; independent blocks are not disposable.
+    messages.forEach((original, index) => {
+      const candidate = result[index]!;
+      if (original.role !== "user" || !original.contentBlocks?.length
+        || original.content === candidate.content) return;
+      const textBlocks = original.contentBlocks.filter(block => block.type === "text");
+      if (textBlocks.length !== 1 || textBlocks[0]!.text !== original.content) {
+        result[index] = original;
+        return;
+      }
+      result[index] = { ...candidate, contentBlocks: original.contentBlocks.map(block =>
+        block.type === "text" ? { ...block, text: candidate.content } : block) };
+    });
+
     // Step 3: If still overflowing, drop middle messages.
     // Keep: leading system messages, last 6 messages, drop the middle. Trigger whenever
     // at least one old non-system message can be replaced; context overflows can

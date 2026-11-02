@@ -369,8 +369,13 @@ export function dispatchSlashCommand(
       // session linger in memory under the old id (harmless — listSnapshots
       // filters by the current id and won't surface them), but newly
       // committed snapshots all label + persist under the new id.
+      try {
+        startNewSession()
+      } catch (error) {
+        deps.addToast(`Could not start a new session: ${error instanceof Error ? error.message : String(error)}. Retry /new after storage recovers.`, { variant: "error" })
+        return true
+      }
       wipeTerminalScrollback()
-      startNewSession()
       resetConversationState()
       deps.checkpointRef.current.setSessionId(getCurrentSessionId())
       deps.bumpTranscript()
