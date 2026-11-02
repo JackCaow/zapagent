@@ -388,8 +388,11 @@ export class CheckpointManager {
             }
           }
         }
+        // UI positions belong to the source process's rendered transcript.
+        // Restoring merges streaming rows, so a fork must map its durable
+        // journal boundary instead. Do this after archive substitution too.
         const snap = remap
-          ? { ...persisted, sessionId: this.sessionId }
+          ? { ...persisted, sessionId: this.sessionId, uiLogIndex: undefined }
           : persisted;
         const safeSnap = this.sanitizeSnapshot(snap);
         if (safeSnap && !this.isExpired(safeSnap)) this.snaps.hydrateOne(safeSnap);
