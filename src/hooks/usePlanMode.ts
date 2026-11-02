@@ -1,8 +1,10 @@
-import { useMemo, useRef, useState } from "react"
+import { useMemo, useRef } from "react"
 import { saveAppConfig, type AppConfig, type PermissionMode } from "../config.js"
 import { configPath } from "../session.js"
 import type { PlanModeCallbacks } from "../../zapsdk/index.js"
 import type { PlanChoice } from "../ui/dialog-plan-approval.js"
+
+import { usePendingInteraction } from "./usePendingInteraction.js"
 
 interface PendingPlan {
   plan: string
@@ -37,7 +39,7 @@ export interface UsePlanModeResult {
  */
 export function usePlanMode(opts: UsePlanModeOptions): UsePlanModeResult {
   const { configRef, setConfig } = opts
-  const [pendingPlan, setPendingPlan] = useState<PendingPlan | null>(null)
+  const { pending, request } = usePendingInteraction<string, PlanChoice>()
   const prevModeBeforePlanRef = useRef<PermissionMode | null>(null)
 
   const planCallbacks = useMemo<PlanModeCallbacks>(() => ({
@@ -53,34 +55,24 @@ export function usePlanMode(opts: UsePlanModeOptions): UsePlanModeResult {
       saveAppConfig(configPath, next)
     },
     isActive: () => configRef.current.permissionMode === "plan",
-    requestExit: (plan: string) =>
-      new Promise((resolveExit) => {
-        setPendingPlan({
-          plan,
-          resolve: (choice) => {
-            setPendingPlan(null)
-            if (choice.kind === "approve") {
-              // Restore the mode the user had before entering plan. Only
-              // fall back to "default" defensively — under normal flow the
-              // ref is always set by the enter callback above.
-              const restored = prevModeBeforePlanRef.current ?? "default"
-              prevModeBeforePlanRef.current = null
-              const next = { ...configRef.current, permissionMode: restored }
-              setConfig(next)
-              saveAppConfig(configPath, next)
-              resolveExit({ approved: true })
-            } else {
-              // Reject keeps mode = plan so the model can revise. Do NOT
-              // clear the snapshot here — the next approve still needs to
-              // restore the original mode.
-              resolveExit({ approved: false, reason: choice.reason })
-            }
-          },
-        })
-      }),
-  // configRef + setConfig are refs/stable callbacks — empty deps is correct.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [])
+    requestExit: async (plan, signal) => {
+      const choice = await request(plan, { kind: "reject", reason: "Plan interaction cancelled" }, signal)
+      if (signal?.aborted) return { approved: false, reason: "Plan interaction cancelled" }
+      if (choice.kind === "approve") {
+        const restored = prevModeBeforePlanRef.current ?? "default"
+        prevModeBeforePlanRef.current = null
+        const next = { ...configRef.current, permissionMode: restored }
+        setConfig(next)
+        saveAppConfig(configPath, next)
+        return { approved: true }
+      }
+      // Rejection/cancellation keeps plan mode and its original snapshot so
+      // a later, live approval still restores the user's previous mode.
+      return { approved: false, reason: choice.reason }
+    },
+  }), [configRef, setConfig, request])
+
+  const pendingPlan = pending ? { plan: pending.value, resolve: pending.resolve } : null
 
   return { planCallbacks, pendingPlan }
 }

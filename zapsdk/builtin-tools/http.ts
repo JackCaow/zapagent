@@ -162,8 +162,9 @@ async function fetchWithValidatedRedirects(
   options: HttpRuntimeOptions,
 ): Promise<{ response: Response; finalUrl: URL }> {
   let current = await assertSafePublicHttpUrl(rawUrl, options.resolveHostname);
+  let request = { ...init };
   for (let redirect = 0; redirect <= options.maxRedirects; redirect++) {
-    const response = await fetch(current, { ...init, redirect: "manual" });
+    const response = await fetch(current, { ...request, redirect: "manual" });
     if (![301, 302, 303, 307, 308].includes(response.status)) {
       return { response, finalUrl: current };
     }
@@ -171,6 +172,17 @@ async function fetchWithValidatedRedirects(
     if (!location) return { response, finalUrl: current };
     if (redirect === options.maxRedirects) {
       throw new Error(`Too many redirects (>${options.maxRedirects})`);
+    }
+    const method = (request.method ?? "GET").toUpperCase();
+    if (((response.status === 301 || response.status === 302) && method === "POST") ||
+      (response.status === 303 && method !== "GET" && method !== "HEAD")) {
+      // Fetch redirect semantics: a retrieval must not replay the original body.
+      // Also drop an explicitly supplied body length now that the body is empty.
+      const headers = new Headers(request.headers);
+      for (const name of ["Content-Encoding", "Content-Language", "Content-Location", "Content-Type", "Content-Length"]) {
+        headers.delete(name);
+      }
+      request = { ...request, method: "GET", body: null, headers };
     }
     current = await assertSafePublicHttpUrl(new URL(location, current).toString(), options.resolveHostname);
   }

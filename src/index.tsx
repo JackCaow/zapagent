@@ -6,7 +6,7 @@ import { spawn } from "node:child_process"
 import { parseWatchArgs } from "./watch/args.js";
 import { VERSION } from "./version.js"
 import { loadDotEnvFile } from "./dotenv.js"
-import { devtoolsPortFromArgs, headlessCwdFromArgs, isHeadlessInvocation } from "./cli-routing.js"
+import { devtoolsPortFromArgs, isHeadlessInvocation } from "./cli-routing.js"
 
 // --help / --version before anything else (no TUI needed)
 let args = process.argv.slice(2)
@@ -168,22 +168,6 @@ if (devPort) {
 // Ink graph below — no TTY ops, no stdin patch, no devtools (unless user
 // explicitly set ZAPCODE_DEVTOOLS_PORT before invocation).
 if (isHeadless) {
-  // --cwd must be applied BEFORE singletons.ts is imported. singletons
-  // constructs autoMemory + mdStore against process.cwd() at module load,
-  // so a later process.chdir() leaves memory pointed at the original dir
-  // (silent split between tools-see-new-cwd / memory-sees-old-cwd).
-  const cwdArg = headlessCwdFromArgs(args)
-  if (!cwdArg.ok) {
-    process.stderr.write(`${cwdArg.message}\n`)
-    process.exit(2)
-  }
-  if (cwdArg.cwd) {
-    try { process.chdir(cwdArg.cwd) }
-    catch (err) {
-      process.stderr.write(`bad --cwd: ${err instanceof Error ? err.message : String(err)}\n`)
-      process.exit(2)
-    }
-  }
   const { runHeadlessFromArgv } = await import("./headless/run.js")
   const code = await runHeadlessFromArgv(args, watchOptions)
   process.exit(code)

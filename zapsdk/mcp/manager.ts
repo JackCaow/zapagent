@@ -330,7 +330,7 @@ export class MCPManager {
       clearTimeout(s.reconnectTimer);
       s.reconnectTimer = undefined;
     }
-    await this.disposeClient(s);
+    // connect() owns invalidation and disposal, including overlapping reconnects.
     // Clear terminal-error so scheduleReconnect's attempt counter starts
     // fresh — the user explicitly asked to retry.
     s.reconnectAttempts = 0;
@@ -380,10 +380,9 @@ export class MCPManager {
     if (!s) return;
     if (s.reconnectTimer) clearTimeout(s.reconnectTimer);
     this.servers.delete(name);
-    if (s.client) {
-      try { await s.client.close(); } catch { /* ignore */ }
-    }
+    const disposed = this.disposeClient(s); // invalidate pending startup before yielding
     this.setStatus(s, "disconnected");
+    await disposed;
   }
 
   /** Tear down everything. Best-effort, parallel; safe to call at unmount. */
@@ -436,26 +435,27 @@ export class MCPManager {
   }
 
   private async connect(s: ManagedServer): Promise<void> {
-    // If a previous transport/client is still attached (e.g. reached here
-    // from the auto-reconnect path after a transport drop, where the close
-    // notification fired but close() was never explicitly called on the
-    // client), tear it down before standing up a fresh pair. disposeClient
-    // also bumps s.generation so any stale callbacks bound to the old pair
-    // identify themselves and bail.
-    if (s.client || s.transport) {
-      await this.disposeClient(s);
-    }
-
-    const generation = ++s.generation;
+    if (this.servers.get(s.config.name) !== s) return;
+    // Invalidate first, even when transport creation has not yet returned.
+    // Each continuation owns only this generation, never a newer reconnect.
+    const disposed = this.disposeClient(s);
+    const generation = s.generation;
+    const current = () => this.isCurrent(s, generation);
+    await disposed;
+    if (!current()) return;
     this.setStatus(s, "connecting");
 
     let transport: Transport;
     try {
       const built = await createTransport(s.config);
       transport = built.transport;
+      if (!current()) {
+        try { await transport.close(); } catch { /* never attached to a client */ }
+        return;
+      }
       s.authProvider = built.authProvider;
     } catch (err) {
-      this.markError(s, err);
+      if (current()) this.markError(s, err);
       return;
     }
 
@@ -465,15 +465,15 @@ export class MCPManager {
       advertiseSampling,
       advertiseRoots,
       onToolsChanged: () => {
-        if (generation !== s.generation) return;
+        if (!current()) return;
         void this.refreshTools(s).catch(() => { /* ignore */ });
       },
       onResourcesChanged: () => {
-        if (generation !== s.generation) return;
+        if (!current()) return;
         void this.refreshResources(s).catch(() => { /* ignore */ });
       },
       onPromptsChanged: () => {
-        if (generation !== s.generation) return;
+        if (!current()) return;
         void this.refreshPrompts(s).catch(() => { /* ignore */ });
       },
     });
@@ -501,7 +501,7 @@ export class MCPManager {
     }
     // notifications/message → log event
     client.setNotificationHandler(LoggingMessageNotificationSchema, async (notif) => {
-      if (generation !== s.generation) return;
+      if (!current()) return;
       const p = notif.params;
       this.emit({
         type: "log",
@@ -515,7 +515,7 @@ export class MCPManager {
     // useMCPSubsystem hook). UI integration can be deepened later but the
     // shape is stable enough for status-line widgets to consume.
     client.setNotificationHandler(ProgressNotificationSchema, async (notif) => {
-      if (generation !== s.generation) return;
+      if (!current()) return;
       const p = notif.params;
       this.emit({
         type: "log",
@@ -530,15 +530,23 @@ export class MCPManager {
     // from previous generations so a stale onclose can't trigger a reconnect
     // while a fresh connect is already in progress.
     transport.onclose = () => {
-      if (generation !== s.generation) return;
+      if (!current()) return;
       if (s.status === "disconnected") return; // intentional stop
       s.lastError = "transport closed";
       this.setStatus(s, "degraded");
       this.scheduleReconnect(s);
     };
     transport.onerror = (err) => {
-      if (generation !== s.generation) return;
+      if (!current()) return;
       s.lastError = err instanceof Error ? err.message : String(err);
+    };
+
+    const retire = async () => {
+      if (!current()) return undefined;
+      const disposal = this.disposeClient(s);
+      const retiredGeneration = s.generation;
+      await disposal;
+      return retiredGeneration;
     };
 
     const connectTimeout = s.config.connectTimeoutMs ?? DEFAULTS.connectTimeoutMs;
@@ -553,16 +561,20 @@ export class MCPManager {
       // We do NOT auto-trigger the browser flow on every connect — that
       // would race on app startup and pop a window without user intent.
       if (err instanceof UnauthorizedError) {
-        await this.disposeClient(s); // close the half-initialized client
+        const retiredGeneration = await retire();
+        if (retiredGeneration === undefined || !this.isCurrent(s, retiredGeneration)) return;
         s.lastError = "authorization required";
         this.setStatus(s, "needs_auth");
         return;
       }
-      await this.disposeClient(s); // prevent stdio child / socket from lingering across retries
+      const retiredGeneration = await retire();
+      if (retiredGeneration === undefined || !this.isCurrent(s, retiredGeneration)) return;
       this.markError(s, err);
       this.scheduleReconnect(s);
       return;
     }
+
+    if (!current()) return;
 
     // Capture server capabilities for UI display + feature gating.
     const caps = (client.getServerCapabilities?.() ?? {}) as MCPServerCapabilities;
@@ -576,15 +588,19 @@ export class MCPManager {
     try {
       if (caps.tools) await this.refreshTools(s);
     } catch (err) {
-      await this.disposeClient(s); // close before retry — see disposeClient docs
+      const retiredGeneration = await retire();
+      if (retiredGeneration === undefined || !this.isCurrent(s, retiredGeneration)) return;
       this.markError(s, err);
       this.scheduleReconnect(s);
       return;
     }
+    if (!current()) return;
     await Promise.allSettled([
       caps.resources ? this.refreshResources(s) : Promise.resolve(),
       caps.prompts ? this.refreshPrompts(s) : Promise.resolve(),
     ]);
+
+    if (!current()) return;
 
     // Re-subscribe to anything that was subscribed before the reconnect,
     // and route resources/updated notifications back to event-bus consumers.
@@ -592,12 +608,13 @@ export class MCPManager {
       client.setNotificationHandler(
         ResourceUpdatedNotificationSchema,
         async (notif) => {
-          if (generation !== s.generation) return;
+          if (!current()) return;
           this.emit({ type: "resource_updated", server: s.config.name, uri: notif.params.uri });
         },
       );
       for (const uri of s.subscriptions) {
         try { await client.subscribeResource({ uri }); } catch { /* ignore */ }
+        if (!current()) return;
       }
     }
 
@@ -607,13 +624,16 @@ export class MCPManager {
       try { await client.setLoggingLevel(s.config.loggingLevel); } catch { /* ignore */ }
     }
 
+    if (!current()) return;
     s.reconnectAttempts = 0;
     s.connectedAt = new Date().toISOString();
     this.setStatus(s, "ready");
   }
 
   private async refreshTools(s: ManagedServer): Promise<void> {
-    if (!s.client) return;
+    const client = s.client;
+    const generation = s.generation;
+    if (!client || !this.isCurrent(s, generation)) return;
     const collected: MCPListedTool[] = [];
     let cursor: string | undefined;
     // Pagination loop. Most servers return everything in one shot; we still
@@ -624,10 +644,11 @@ export class MCPManager {
     // behaviour of fetchResources / fetchPrompts so the connect path stays
     // symmetric across primitives.
     for (let i = 0; i < 32; i++) {
-      let res: Awaited<ReturnType<typeof s.client.listTools>>;
+      let res: Awaited<ReturnType<typeof client.listTools>>;
       try {
-        res = await s.client.listTools(cursor ? { cursor } : undefined);
+        res = await client.listTools(cursor ? { cursor } : undefined);
       } catch (err) {
+        if (!this.isCurrent(s, generation)) return;
         const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
         if (msg.includes("-32601") || msg.includes("not found") || msg.includes("not supported")) {
           s.tools = [];
@@ -636,6 +657,7 @@ export class MCPManager {
         }
         throw err;
       }
+      if (!this.isCurrent(s, generation)) return;
       for (const t of res.tools ?? []) collected.push(t as MCPListedTool);
       cursor = res.nextCursor;
       if (!cursor) break;
@@ -645,7 +667,7 @@ export class MCPManager {
     for (const t of collected) {
       try {
         bridged.push(bridgeMCPTool(
-          s.client!,
+          client,
           s.config,
           t,
           { projectCwd: this.projectCwd },
@@ -673,23 +695,34 @@ export class MCPManager {
   }
 
   private async refreshResources(s: ManagedServer): Promise<void> {
-    if (!s.client) return;
-    const { resources, templates } = await fetchResources(s.client, s.config);
+    const client = s.client;
+    const generation = s.generation;
+    if (!client || !this.isCurrent(s, generation)) return;
+    const { resources, templates } = await fetchResources(client, s.config);
+    if (!this.isCurrent(s, generation)) return;
     s.resources = resources;
     s.resourceTemplates = templates;
     this.emit({ type: "resources_changed", server: s.config.name });
   }
 
   private async refreshPrompts(s: ManagedServer): Promise<void> {
-    if (!s.client) return;
-    s.prompts = await fetchPrompts(s.client, s.config);
+    const client = s.client;
+    const generation = s.generation;
+    if (!client || !this.isCurrent(s, generation)) return;
+    const prompts = await fetchPrompts(client, s.config);
+    if (!this.isCurrent(s, generation)) return;
+    s.prompts = prompts;
     this.emit({ type: "prompts_changed", server: s.config.name });
   }
 
   // ── Reconnect / error helpers ──────────────────────────────────────────
 
+  private isCurrent(s: ManagedServer, generation: number): boolean {
+    return this.servers.get(s.config.name) === s && s.generation === generation;
+  }
+
   private scheduleReconnect(s: ManagedServer): void {
-    if (s.status === "disconnected") return;
+    if (this.servers.get(s.config.name) !== s || s.status === "disconnected") return;
     if (s.reconnectAttempts >= DEFAULTS.maxReconnectAttempts) {
       this.setStatus(s, "error");
       return;
@@ -698,8 +731,9 @@ export class MCPManager {
     const delay = delays[Math.min(s.reconnectAttempts, delays.length - 1)]!;
     s.reconnectAttempts++;
     if (s.reconnectTimer) clearTimeout(s.reconnectTimer);
+    const generation = s.generation;
     s.reconnectTimer = setTimeout(() => {
-      if (!this.servers.has(s.config.name)) return; // stopped while waiting
+      if (!this.isCurrent(s, generation)) return; // stopped or replaced while waiting
       void this.connect(s);
     }, delay);
   }
@@ -729,14 +763,12 @@ export class MCPManager {
     const transport = s.transport;
     s.client = null;
     s.transport = null;
-    if (transport) {
-      // Detach handlers FIRST so the close fired by client.close() doesn't
-      // trip the reconnect loop.
-      transport.onclose = undefined;
-      transport.onerror = undefined;
-    }
+    // Keep the SDK's transport callbacks intact so close rejects pending
+    // requests. Our callbacks already ignore this invalidated generation.
     if (client) {
       try { await client.close(); } catch { /* swallow — server may already be gone */ }
+    } else if (transport) {
+      try { await transport.close(); } catch { /* half-initialized transport */ }
     }
   }
 

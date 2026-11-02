@@ -14,7 +14,7 @@ export interface PlanModeCallbacks {
    *  `approved: true` (mode switched back to default + the caller can
    *  continue with implementation) or `approved: false` (mode stays `plan`;
    *  the caller should revise and re-present). */
-  requestExit(plan: string): Promise<{ approved: boolean; reason?: string }>;
+  requestExit(plan: string, signal?: AbortSignal): Promise<{ approved: boolean; reason?: string }>;
   /** True iff currently in plan mode. Used by the tools to reject
    *  `exit_plan_mode` when already outside plan mode, and to no-op
    *  `enter_plan_mode` when already inside. */
@@ -99,7 +99,7 @@ export function exitPlanModeTool(options: PlanModeToolsOptions): Tool {
         confidence: "declared",
       }),
     },
-    handler: async (args) => {
+    handler: async (args, signal) => {
       if (!options.callbacks.isActive()) {
         return {
           success: false,
@@ -109,7 +109,7 @@ export function exitPlanModeTool(options: PlanModeToolsOptions): Tool {
         };
       }
       const plan = args.plan as string;
-      const { approved, reason } = await options.callbacks.requestExit(plan);
+      const { approved, reason } = await options.callbacks.requestExit(plan, signal);
       if (approved) {
         return {
           success: true,

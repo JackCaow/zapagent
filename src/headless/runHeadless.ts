@@ -331,7 +331,7 @@ export async function runHeadless(args: HeadlessArgs, host: HeadlessHost = {}): 
   }
 
   // ── Determine working directory ──────────────────────────────────────
-  // NOTE: actual `process.chdir(args.cwd)` happens earlier in index.tsx,
+  // NOTE: actual `process.chdir(args.cwd)` happens earlier in headless/run.ts,
   // *before* singletons.ts loads, so autoMemory / mdStore / permissionManager
   // all get constructed with the user-requested cwd. By the time we get
   // here, process.cwd() already reflects --cwd. We just use it.

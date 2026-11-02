@@ -156,3 +156,87 @@ function hasUnpairedSurrogate(text: string): boolean {
   }
   return false;
 }
+
+describe("HTTP redirect request semantics", () => {
+  for (const [status, method, expectedMethod] of [
+    [303, "POST", "GET"], [303, "PUT", "GET"], [303, "PATCH", "GET"], [303, "DELETE", "GET"],
+    [301, "POST", "GET"], [302, "POST", "GET"],
+    [301, "PUT", "PUT"], [302, "PATCH", "PATCH"],
+    [307, "POST", "POST"], [308, "POST", "POST"],
+    [303, "GET", "GET"], [303, "HEAD", "HEAD"],
+  ] as const) {
+    it(`${status} follows ${method} with ${expectedMethod}`, async () => {
+      const calls: Array<{ url: string; init: RequestInit }> = [];
+      globalThis.fetch = async (input, init = {}) => {
+        calls.push({ url: String(input), init });
+        return calls.length === 1
+          ? new Response(null, { status, headers: { location: "/receipt" } })
+          : new Response(method === "HEAD" ? null : "receipt");
+      };
+      const readOnly = method === "GET" || method === "HEAD";
+      const headers = {
+        "cOnTeNt-TyPe": "application/json", "Content-Encoding": "identity",
+        "Content-Language": "en", "Content-Location": "/source", "Content-Length": "2", "X-Fixture": "keep",
+      };
+      const tool = readOnly ? httpFetchTool({ resolveHostname: publicResolver })
+        : httpRequestTool({ resolveHostname: publicResolver });
+      const result = await tool.handler({ url: "https://example.test/submit", method,
+        ...(readOnly ? {} : { body: "{}", headers }) });
+      expect(result.success).toBe(true);
+      expect(calls).toHaveLength(2);
+      expect(calls[1].url).toBe("https://example.test/receipt");
+      expect(calls[1].init.method).toBe(expectedMethod);
+      expect(calls[1].init.redirect).toBe("manual");
+      expect(calls[1].init.signal).toBe(calls[0].init.signal);
+      const rewritten = !readOnly && expectedMethod === "GET";
+      expect(calls[1].init.body ?? null).toBe(readOnly || rewritten ? null : "{}");
+      if (!readOnly) {
+        const redirectedHeaders = new Headers(calls[1].init.headers);
+        for (const name of ["Content-Type", "Content-Encoding", "Content-Language", "Content-Location", "Content-Length"]) {
+          expect(redirectedHeaders.has(name)).toBe(!rewritten);
+        }
+        expect(redirectedHeaders.get("X-Fixture")).toBe("keep");
+        expect(new Headers(calls[0].init.headers).get("Content-Type")).toBe("application/json");
+        expect(headers["cOnTeNt-TyPe"]).toBe("application/json");
+      }
+    });
+  }
+
+  it("retains the rewritten request across a successful 303/307 chain", async () => {
+    const calls: RequestInit[] = [];
+    globalThis.fetch = async (_input, init = {}) => {
+      calls.push(init);
+      return calls.length < 3
+        ? new Response(null, { status: calls.length === 1 ? 303 : 307, headers: { location: `/hop${calls.length}` } })
+        : new Response("receipt");
+    };
+    const result = await httpRequestTool({ resolveHostname: publicResolver }).handler({
+      url: "https://example.test/submit", method: "POST", body: "{}",
+      headers: { "Content-Type": "application/json", "Content-Length": "2" },
+    });
+    expect(result).toEqual({ success: true, output: "receipt" });
+    expect(calls.map(call => call.method)).toEqual(["POST", "GET", "GET"]);
+    expect(calls[2].body).toBeNull();
+    expect(new Headers(calls[2].headers).has("Content-Length")).toBe(false);
+    expect(new Headers(calls[2].headers).has("Content-Type")).toBe(false);
+  });
+
+  it("keeps GET after a 303 followed by a 307 and validates every destination", async () => {
+    const methods: unknown[] = [];
+    const hosts: string[] = [];
+    globalThis.fetch = async (_input, init) => {
+      methods.push(init?.method);
+      return methods.length === 1
+        ? new Response(null, { status: 303, headers: { location: "https://receipt.test/receipt" } })
+        : new Response(null, { status: 307, headers: { location: "http://127.0.0.1/private" } });
+    };
+    const tool = httpRequestTool({ resolveHostname: async (host) => {
+      hosts.push(host); return publicResolver();
+    } });
+    const result = await tool.handler({ url: "https://example.test/submit", method: "POST", body: "{}" });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("not allowed");
+    expect(methods).toEqual(["POST", "GET"]);
+    expect(hosts).toEqual(["example.test", "receipt.test"]);
+  });
+});

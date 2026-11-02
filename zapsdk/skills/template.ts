@@ -22,13 +22,15 @@ export function applySkillTemplate(
   let body = skill.systemPrompt;
   const provided = new Set(Object.keys(params));
 
+  // Callback replacements keep literal dollar tokens out of replacement-string syntax.
   for (const [k, v] of Object.entries(params)) {
-    body = body.replaceAll(`{{${k}}}`, v);
+    body = body.replaceAll(`{{${k}}}`, () => v);
   }
 
   for (const p of skill.parameters ?? []) {
-    if (!provided.has(p.name) && p.default !== undefined) {
-      body = body.replaceAll(`{{${p.name}}}`, p.default);
+    const defaultValue = p.default;
+    if (!provided.has(p.name) && defaultValue !== undefined) {
+      body = body.replaceAll(`{{${p.name}}}`, () => defaultValue);
     }
   }
 

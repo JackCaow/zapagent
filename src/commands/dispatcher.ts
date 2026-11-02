@@ -833,7 +833,7 @@ export function dispatchSlashCommand(
       const params = skill.parameters ?? []
       let prompt = skill.systemPrompt
       if (params.length === 1 && params[0])
-        prompt = prompt.replaceAll(`{{${params[0].name}}}`, tail)
+        prompt = prompt.replaceAll(`{{${params[0].name}}}`, () => tail)
       const displayTail = displayCommand?.type === "run_skill" && displayCommand.skill === skillName
         ? runSkillTailFromRawCommand(meta.displayText ?? "", skillName) ?? (displayCommand.skillInput ?? "").trim()
         : undefined

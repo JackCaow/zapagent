@@ -164,7 +164,7 @@ export class AgentLogger {
 
 type UsageLogInput = Pick<
   TokenUsage,
-  "inputTokens" | "providerUsageReported" | "cacheReadInputTokens" | "cacheCreationInputTokens"
+  "inputTokens" | "providerUsageReported" | "usageIncomplete" | "cacheReadInputTokens" | "cacheCreationInputTokens"
 >;
 
 export function formatUsageLogFields(usage: UsageLogInput): Record<string, unknown> {
@@ -173,6 +173,9 @@ export function formatUsageLogFields(usage: UsageLogInput): Record<string, unkno
   const cacheCreationReported = typeof usage.cacheCreationInputTokens === "number";
   return {
     inputTokens: usage.inputTokens,
+    ...(typeof usage.usageIncomplete === "boolean"
+      ? { usageIncomplete: usage.usageIncomplete }
+      : {}),
     ...(typeof usage.providerUsageReported === "boolean"
       ? { providerUsageReported: usage.providerUsageReported }
       : {}),

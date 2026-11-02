@@ -5,7 +5,7 @@
  *                             Filenames are timestamps (`paste-<ts>.png`).
  *                             ONE source of truth — once deleted, the
  *                             image is unrecoverable. Strict policy:
- *                             keep only what history.jsonl references.
+ *                             keep history and pending-queue references.
  *
  *   ~/.zapcode/image-cache/   SVG raster outputs + URL downloads.
  *                             Filenames are content-hash. If a hash gets
@@ -28,6 +28,7 @@ import {
   closeSync,
   existsSync,
   openSync,
+  lstatSync,
   readdirSync,
   readFileSync,
   readSync,
@@ -36,7 +37,7 @@ import {
 } from "node:fs"
 import type { Dirent } from "node:fs"
 import { createHash } from "node:crypto"
-import { basename, join } from "node:path"
+import { basename, join, resolve } from "node:path"
 import { StringDecoder } from "node:string_decoder"
 import { getAppDataDir } from "../zapsdk/utils/platform.js"
 
@@ -62,9 +63,9 @@ export type PruneResult = { deleted: number; bytesFreed: number }
 
 /**
  * Walk ~/.zapcode/image-paste/ and remove every file that is NOT
- * referenced by any entry in history.jsonl. The history file is
- * already capped at 200 entries (see prompt.tsx MAX_HISTORY), so the
- * referenced set is bounded — typically a few dozen files at most.
+ * referenced by history.jsonl or a durable pending-message journal. History
+ * is capped at 200 entries (see prompt.tsx MAX_HISTORY); queue ownership lasts
+ * until an entry is accepted or removed, independent of history rollover.
  *
  * Reads history.jsonl directly off disk rather than going through
  * prompt.tsx's in-memory `history` array, both to avoid cross-module
@@ -79,11 +80,12 @@ export function pruneOrphanedPasteImages(): PruneResult {
     if (!existsSync(pasteDir)) return result
 
     const referenced = collectReferencedPaths(join(dataDir, "history.jsonl"), "imageRefs")
+    for (const path of collectPendingQueueImagePaths(dataDir)) referenced.add(path)
 
     for (const entry of readdirSync(pasteDir, { withFileTypes: true })) {
       if (!entry.isFile()) continue
       const fp = join(pasteDir, entry.name)
-      if (referenced.has(fp)) continue
+      if (referenced.has(fp) || referenced.has(resolve(fp))) continue
       try {
         const sz = statSync(fp).size
         unlinkSync(fp)
@@ -93,6 +95,44 @@ export function pruneOrphanedPasteImages(): PruneResult {
     }
   } catch { /* defensive — never block boot */ }
   return result
+}
+
+/** Pending queues keep file references, not image bytes. Scan only the known
+ * projects/<project>/follow-ups/*.json layout, without following symlinks or
+ * opening referenced image paths. Accepted/removed entries no longer own files.
+ * Let unreadable or malformed journals abort this prune pass: an incomplete
+ * live set must not authorize deletion of potentially recoverable attachments. */
+function collectPendingQueueImagePaths(dataDir: string): Set<string> {
+  const referenced = new Set<string>()
+  const projects = join(dataDir, "projects")
+  if (!existsSync(projects) || !lstatSync(projects).isDirectory()) return referenced
+  for (const project of readdirSync(projects, { withFileTypes: true })) {
+    if (!project.isDirectory()) continue
+    const projectDir = join(projects, project.name)
+    const queueDir = readdirSync(projectDir, { withFileTypes: true })
+      .find(entry => entry.name === "follow-ups" && entry.isDirectory())
+    if (!queueDir) continue
+    const directory = join(projectDir, queueDir.name)
+    for (const file of readdirSync(directory, { withFileTypes: true })) {
+      if (!file.isFile() || !file.name.endsWith(".json")) continue
+      const saved = JSON.parse(readFileSync(join(directory, file.name), "utf8"))
+      if (saved?.version !== 1 || !Array.isArray(saved.entries)) {
+        throw new Error("Invalid pending-message store")
+      }
+      for (const entry of saved.entries) {
+        if (entry?.state === "accepted") continue
+        if (!entry || typeof entry !== "object" ||
+          (entry.images !== undefined && !Array.isArray(entry.images))) {
+          throw new Error("Invalid pending-message entry")
+        }
+        for (const image of entry.images ?? []) {
+          const path = image?.content?.filePath
+          if (typeof path === "string" && path) referenced.add(resolve(path))
+        }
+      }
+    }
+  }
+  return referenced
 }
 
 export function pruneOrphanedPasteHistoryText(): PruneResult {
@@ -269,7 +309,8 @@ function readHistoryTail(historyPath: string): string {
  * Walk ~/.zapcode/image-cache/ and remove any file whose mtime is
  * older than CACHE_TTL_MS. Safe because filenames are content-hashes:
  * the SVG/URL producer (zapsdk/utils/image.ts) regenerates on miss.
- * No history-set check needed — re-creation is automatic.
+ * Pending queues still need their cached files for recovery without fetching
+ * or rasterizing their original sources, so retain those references.
  */
 export function pruneStaleImageCache(): PruneResult {
   const result: PruneResult = { deleted: 0, bytesFreed: 0 }
@@ -277,13 +318,14 @@ export function pruneStaleImageCache(): PruneResult {
     const cacheDir = join(getAppDataDir(), "image-cache")
     if (!existsSync(cacheDir)) return result
 
+    const referenced = collectPendingQueueImagePaths(getAppDataDir())
     const cutoff = Date.now() - CACHE_TTL_MS
     for (const entry of readdirSync(cacheDir, { withFileTypes: true })) {
       if (!entry.isFile()) continue
       const fp = join(cacheDir, entry.name)
       try {
         const st = statSync(fp)
-        if (st.mtimeMs >= cutoff) continue
+        if (st.mtimeMs >= cutoff || referenced.has(resolve(fp))) continue
         unlinkSync(fp)
         result.deleted += 1
         result.bytesFreed += st.size
