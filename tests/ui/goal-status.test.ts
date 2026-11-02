@@ -95,5 +95,18 @@ it("keeps truthful stop hints for ordinary work beside a retained Goal on narrow
 })
 
 it("marks failed Goals explicitly instead of displaying them like ordinary idle progress", () => {
-  expect(render({ goal: { ...goal, status: "failed" }, attached: false })).toContain("! 目标执行失败")
+  const output = render({ goal: { ...goal, status: "failed" }, attached: false })
+  expect(output).toContain("! /goal status")
+  expect(output).toContain("目标执行失败")
+})
+
+it("keeps the selected Goal diagnostic command intact at ordinary terminal widths", () => {
+  const id = "goal_12345678-1234-1234-1234-123456789012"
+  for (const status of ["blocked", "failed"] as const) {
+    for (const columns of [64, 70, 80, 90]) {
+      const output = render({ goal: { ...goal, id, status }, attached: false }, columns)
+      expect(output).toContain(`/goal status ${id}`)
+      for (const line of output.split("\n")) expect(displayWidth(line)).toBeLessThanOrEqual(columns)
+    }
+  }
 })
