@@ -45,9 +45,9 @@ export function goalObjectiveText(objective: string): string {
 export function goalActionText(goal: GoalView, attached: boolean, todos: readonly Todo[] = [], activeTool = ""): string {
   if (goal.status === "completed") return goal.accepted ? "目标已完成，验收通过" : "目标已完成"
   if (goal.status === "cancelled") return "目标已取消"
-  if (goal.status === "failed") return "目标执行失败，用 /goal status 查看原因"
+  if (goal.status === "failed") return `/goal status ${goal.id} · 目标执行失败`
   if (goal.status === "paused") return goal.stopReason === "DEADLINE_EXCEEDED" ? "已达到你设置的时间限制" : "已暂停，进度已保留"
-  if (goal.status === "blocked") return "目标暂时无法继续，用 /goal status 查看原因"
+  if (goal.status === "blocked") return `/goal status ${goal.id} · 目标暂时无法继续`
   if (goal.status === "awaiting_acceptance") return "等待补充信息或确认"
   if (goal.status === "budget_limited") return "已达到你设置的用量限制"
   if (goal.status === "ready_for_delivery") return goal.accepted ? "验收通过，等待交付授权" : "等待交付授权"
