@@ -43,6 +43,11 @@ export function editFileTool(options: EditFileOptions = {}): Tool {
       const replaceAll = (args.replace_all as boolean) ?? false;
       const skipSyntaxCheck = (args.skip_syntax_check as boolean) ?? false;
 
+      // Direct SDK handlers can bypass parameter-schema validation.
+      if (oldString.length === 0) {
+        return { success: false, output: "", error: "old_string must not be empty." };
+      }
+
       if (!(await isToolPathWriteAllowed(filePath, options, context))) {
         return {
           success: false,
@@ -54,11 +59,6 @@ export function editFileTool(options: EditFileOptions = {}): Tool {
       try {
         const statBefore = await stat(filePath);
         const content = await readFile(filePath, "utf-8");
-
-        // Direct SDK handlers can bypass parameter-schema validation.
-        if (oldString.length === 0) {
-          return { success: false, output: "", error: "old_string must not be empty." };
-        }
 
         let count = 0;
         let searchPos = 0;

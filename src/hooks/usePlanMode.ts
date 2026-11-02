@@ -72,7 +72,11 @@ export function usePlanMode(opts: UsePlanModeOptions): UsePlanModeResult {
     },
   }), [configRef, setConfig, request])
 
-  const pendingPlan = pending ? { plan: pending.value, resolve: pending.resolve } : null
+  // Keep identity stable across renders; App effects depend on this value.
+  const pendingPlan = useMemo(
+    () => pending ? { plan: pending.value, resolve: pending.resolve } : null,
+    [pending],
+  )
 
   return { planCallbacks, pendingPlan }
 }

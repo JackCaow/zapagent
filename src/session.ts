@@ -644,12 +644,13 @@ class SessionWriter {
     if (!this.materialized && this.buffer.length === 0) return
     // Write last-prompt metadata (CCB compatible tail entry)
     if (this.firstUserMsg) {
-      const entry = {
+      const entry = JSON.stringify({
         type: "last-prompt",
         lastPrompt: this.firstUserMsg.slice(0, 200),
         sessionId: this.sessionId,
-      }
-      this.buffer.push(JSON.stringify(entry))
+      })
+      // A failed finalize leaves this row buffered; retrying must not stack copies.
+      if (this.buffer[this.buffer.length - 1] !== entry) this.buffer.push(entry)
     }
     this.flushSync()
   }

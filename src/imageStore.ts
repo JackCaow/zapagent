@@ -56,8 +56,9 @@ const SESSION_REF_SCAN_CARRY_CHARS = 64 * 1024
 const PLACEHOLDER_ID_RE = /^[1-9]\d*$/
 const CONTENT_ADDRESSED_SIDECAR_RE = /^[a-f0-9]{64}\.txt$/
 
-/** Internal struct returned for caller-side logging. */
-export type PruneResult = { deleted: number; bytesFreed: number }
+/** Internal struct returned for caller-side logging. `skipped` explains a
+ *  pass that stopped early and may have kept garbage. */
+export type PruneResult = { deleted: number; bytesFreed: number; skipped?: string }
 
 // ─── image-paste/ — strict, history-driven prune ────────────────────
 
@@ -72,7 +73,7 @@ export type PruneResult = { deleted: number; bytesFreed: number }
  * state coupling and so this works even if prompt.tsx hasn't been
  * imported yet (it has, but the decoupling is cleaner).
  */
-export function pruneOrphanedPasteImages(): PruneResult {
+export function pruneOrphanedPasteImages(pendingQueueRefs?: ReadonlySet<string>): PruneResult {
   const result: PruneResult = { deleted: 0, bytesFreed: 0 }
   try {
     const dataDir = getAppDataDir()
@@ -80,7 +81,7 @@ export function pruneOrphanedPasteImages(): PruneResult {
     if (!existsSync(pasteDir)) return result
 
     const referenced = collectReferencedPaths(join(dataDir, "history.jsonl"), "imageRefs")
-    for (const path of collectPendingQueueImagePaths(dataDir)) referenced.add(path)
+    for (const path of pendingQueueRefs ?? collectPendingQueueImagePaths(dataDir)) referenced.add(path)
 
     for (const entry of readdirSync(pasteDir, { withFileTypes: true })) {
       if (!entry.isFile()) continue
@@ -93,7 +94,7 @@ export function pruneOrphanedPasteImages(): PruneResult {
         result.bytesFreed += sz
       } catch { /* file already gone or no perm — skip */ }
     }
-  } catch { /* defensive — never block boot */ }
+  } catch (err) { result.skipped = describePruneError(err) } // never block boot
   return result
 }
 
@@ -312,13 +313,13 @@ function readHistoryTail(historyPath: string): string {
  * Pending queues still need their cached files for recovery without fetching
  * or rasterizing their original sources, so retain those references.
  */
-export function pruneStaleImageCache(): PruneResult {
+export function pruneStaleImageCache(pendingQueueRefs?: ReadonlySet<string>): PruneResult {
   const result: PruneResult = { deleted: 0, bytesFreed: 0 }
   try {
     const cacheDir = join(getAppDataDir(), "image-cache")
     if (!existsSync(cacheDir)) return result
 
-    const referenced = collectPendingQueueImagePaths(getAppDataDir())
+    const referenced = pendingQueueRefs ?? collectPendingQueueImagePaths(getAppDataDir())
     const cutoff = Date.now() - CACHE_TTL_MS
     for (const entry of readdirSync(cacheDir, { withFileTypes: true })) {
       if (!entry.isFile()) continue
@@ -331,7 +332,7 @@ export function pruneStaleImageCache(): PruneResult {
         result.bytesFreed += st.size
       } catch { /* skip */ }
     }
-  } catch { /* defensive */ }
+  } catch (err) { result.skipped = describePruneError(err) }
   return result
 }
 
@@ -342,11 +343,24 @@ export function pruneStaleImageCache(): PruneResult {
  * Returns combined stats for optional debug logging.
  */
 export function pruneImageStorage(): PruneResult {
-  const a = pruneOrphanedPasteImages()
-  const b = pruneStaleImageCache()
+  // Both image stores honor the same queue ownership; scan the journals once.
+  // An unreadable journal skips both passes rather than risk deleting its files.
+  let queued: Set<string> | undefined
+  let queueError: string | undefined
+  try { queued = collectPendingQueueImagePaths(getAppDataDir()) }
+  catch (err) { queueError = `pending-message journals unreadable: ${describePruneError(err)}` }
+  const none: PruneResult = { deleted: 0, bytesFreed: 0 }
+  const a = queued ? pruneOrphanedPasteImages(queued) : none
+  const b = queued ? pruneStaleImageCache(queued) : none
   const c = pruneOrphanedPasteHistoryText()
+  const skipped = [queueError, a.skipped, b.skipped].filter((reason): reason is string => !!reason)
   return {
     deleted: a.deleted + b.deleted + c.deleted,
     bytesFreed: a.bytesFreed + b.bytesFreed + c.bytesFreed,
+    ...(skipped.length ? { skipped: skipped.join("; ") } : {}),
   }
+}
+
+function describePruneError(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
 }

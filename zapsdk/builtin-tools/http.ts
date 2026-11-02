@@ -184,7 +184,17 @@ async function fetchWithValidatedRedirects(
       }
       request = { ...request, method: "GET", body: null, headers };
     }
-    current = await assertSafePublicHttpUrl(new URL(location, current).toString(), options.resolveHostname);
+    const next = await assertSafePublicHttpUrl(new URL(location, current).toString(), options.resolveHostname);
+    if (next.origin !== current.origin) {
+      // Fetch drops Authorization on cross-origin redirects; never hand caller
+      // credentials to a host the caller did not name. Not restored on return.
+      const headers = new Headers(request.headers);
+      for (const name of ["Authorization", "Proxy-Authorization", "Cookie"]) {
+        headers.delete(name);
+      }
+      request = { ...request, headers };
+    }
+    current = next;
   }
   throw new Error("Redirect validation failed");
 }
