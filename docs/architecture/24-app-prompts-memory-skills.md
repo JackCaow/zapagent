@@ -276,17 +276,23 @@ included/skipped 和 queryHash，所以 cache churn 可以定位到具体 scope�
 
 | 目录 | 用途 | 清理策略 |
 |---|---|---|
-| `~/.zapcode/image-paste/` | OS 剪贴板粘贴出来的 PNG | **严格**：保留所有 history.jsonl 引用过的，其他全删（唯一副本，一旦删除不可恢复） |
+| `~/.zapcode/image-paste/` | OS 剪贴板粘贴出来的 PNG | **严格**：保留 history.jsonl 引用的和待发送队列仍持有的，其他全删（唯一副本，一旦删除不可恢复） |
 | `~/.zapcode/paste-history/` | 超大文本粘贴的 history/session restore sidecar | **严格**：保留 prompt history 或任一项目 session JSONL 引用且内容哈希有效的文件；缺失或损坏时恢复为显式 unavailable 标记 |
-| `~/.zapcode/image-cache/` | SVG 光栅化 + URL 下载的内容寻址缓存 | **宽松**：30 天 TTL 过期（producer 会从源重新生成，删了无害） |
+| `~/.zapcode/image-cache/` | SVG 光栅化 + URL 下载的内容寻址缓存 | **宽松**：30 天 TTL 过期（producer 会从源重新生成）；待发送队列仍引用的文件例外，恢复队列时不必重新抓取或光栅化 |
 
-`pruneImageStorage()` 在 App mount 一次性 `useEffect([], () => void)`
-调用——失败 try/catch 吞掉，宁可不释放磁盘也不能阻塞启动。
+`pruneImageStorage()` 在 App mount 时通过 `useEffect([])` 调用一次——
+失败不抛出，宁可不释放磁盘也不能阻塞启动；但返回值的 `skipped` 会说明
+哪一步提前停止，App 据此记 `image_prune_skipped` warn 日志，避免清理被
+静默关闭。
 
 实现：
+- 待发送队列：只扫描 `projects/<project>/follow-ups/*.json`（不跟随
+  symlink，不读取图片本身），收集未 `accepted` 条目的 `filePath`。两个
+  目录共用这一次扫描结果。任一 journal 读不了或格式不对，就跳过
+  `image-paste/` 和 `image-cache/` 两步清理——live set 不完整时不能删文件
 - `image-paste/`：读 `~/.zapcode/history.jsonl`（capped 200 条），
-  收集所有 `[Image #N]` 引用的文件名，diff 出"未引用的"，unlink
-- `image-cache/`：`atime` 比 `now - 30d` 老的统统 unlink
+  收集所有 `[Image #N]` 引用的文件名，并入队列引用，diff 出"未引用的"，unlink
+- `image-cache/`：`mtime` 比 `now - 30d` 老、且不被队列引用的 unlink
 
 ---
 
@@ -326,7 +332,7 @@ included/skipped 和 queryHash，所以 cache churn 可以定位到具体 scope�
   saveLastOutput(text) → ~/.zapcode/last-output.md（/copy 用）
 
 启动一次性:
-  pruneImageStorage() — 清孤儿图片
+  pruneImageStorage() — 清孤儿图片（保留 history 与待发送队列引用）
 ```
 
 prompt 子系统是无副作用纯函数；memory 子系统是真磁盘存储；skills 子系

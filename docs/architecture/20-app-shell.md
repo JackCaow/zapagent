@@ -93,9 +93,11 @@ Overlay 关掉时 batch flush 缓冲的段落。
 
 ### 一次性 hygiene
 
-`useEffect(() => { void pruneImageStorage() }, [])` —— 启动后清掉
-`~/.zapcode/image-paste/` 里没被任何 log 引用的孤儿、`image-cache/`
-里过期的 SVG/URL 缓存。
+mount 时调用一次 `pruneImageStorage()` —— 启动后清掉
+`~/.zapcode/image-paste/` 里既没被 history 引用、也不属于待发送队列的孤儿，
+以及 `image-cache/` 里过期且不被待发送队列引用的 SVG/URL 缓存。结果带
+`skipped` 时（如队列 journal 损坏导致跳过清理）记一条 `image_prune_skipped`
+warn 日志。详见 [24-app-prompts-memory-skills.md](24-app-prompts-memory-skills.md)。
 
 ---
 
