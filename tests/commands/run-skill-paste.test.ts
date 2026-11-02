@@ -5,6 +5,22 @@ import type { AppConfig } from "../../src/config.js"
 import type { SkillDefinition } from "../../zapsdk/skills/types.js"
 
 describe("dispatchSlashCommand /run_skill paste handling", () => {
+  for (const tail of ["shell PID $$", "replacement $&", "prefix $`", "suffix $'", "ordinary text"]) {
+    it(`preserves literal skill argument: ${tail}`, async () => {
+      const calls: Array<{ text: string; systemPrompt?: string }> = []
+      const skill: SkillDefinition = {
+        name: "fix", description: "Fix bugs", systemPrompt: "Debug {{issue}}; repeat {{issue}}.", tools: [],
+        parameters: [{ name: "issue", description: "Bug report", required: true }],
+      }
+      const handled = await dispatchSlashCommand(`/fix ${tail}`, makeDeps({
+        skillsRef: { current: new Map([[skill.name, skill]]) },
+        dispatchUserTurn: async (text, systemPrompt) => { calls.push({ text, systemPrompt }) },
+      }))
+      expect(handled).toBe(true)
+      expect(calls).toEqual([{ text: tail, systemPrompt: `Debug ${tail}; repeat ${tail}.` }])
+    })
+  }
+
   it("preserves multiline slash command arguments after the command token", () => {
     expect(parseCommand("/fix first line\n  indented line\nlast line")).toEqual({
       type: "run_skill",
