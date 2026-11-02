@@ -356,6 +356,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
               type: "tool_call_start",
               toolCallId,
               toolName: tc.function.name,
+              toolCallIndex: tc.index,
             };
             emittedAnything = true;
           }
