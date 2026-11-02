@@ -132,6 +132,42 @@ describe("project session directory resolution", () => {
 })
 
 describe("durable session fork", () => {
+  it("retains the writer and journal position when /new cannot flush, then retries after recovery", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "zap-session-rollover-failure-"))
+    try {
+      const script = `
+        import assert from "node:assert/strict";
+        import { renameSync, readFileSync } from "node:fs";
+        import { join } from "node:path";
+        import { appendLog, getCurrentSessionId, getSessionPersistenceStatus,
+          peekJournalLogIndex, readCurrentSessionLogs, startNewSession, __test } from "./src/session.ts";
+        const dir = __test.resolveProjectSessionDirs(process.env.ZAPCODE_DATA_DIR, process.cwd())[0];
+        appendLog("user", "persisted prompt");
+        readCurrentSessionLogs();
+        const oldId = getCurrentSessionId();
+        renameSync(dir, dir + ".offline");
+        appendLog("agent", "buffered answer");
+        const position = peekJournalLogIndex();
+        assert.throws(() => startNewSession(), /writes are pending/);
+        assert.equal(getCurrentSessionId(), oldId);
+        assert.equal(peekJournalLogIndex(), position);
+        assert.ok(getSessionPersistenceStatus().pendingWrites > 0);
+        renameSync(dir + ".offline", dir);
+        startNewSession();
+        assert.notEqual(getCurrentSessionId(), oldId);
+        assert.equal(peekJournalLogIndex(), 0);
+        assert.equal(getSessionPersistenceStatus().pendingWrites, 0);
+        const raw = readFileSync(join(dir, oldId + ".jsonl"), "utf8");
+        assert.equal(raw.split("buffered answer").length - 1, 1);
+        console.log("recovered");
+      `
+      const raw = execFileSync(process.execPath, ["--eval", script], {
+        cwd: process.cwd(), env: { ...process.env, ZAPCODE_DATA_DIR: dataDir }, encoding: "utf-8",
+      })
+      expect(raw.trim()).toBe("recovered")
+    } finally { rmSync(dataDir, { recursive: true, force: true }) }
+  })
+
   it("flushes the active writer before loading that session", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "zap-session-active-load-"))
     try {
