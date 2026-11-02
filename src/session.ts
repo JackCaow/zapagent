@@ -751,6 +751,10 @@ export function replaceLog(logIndex: number, type: string, text: string, tool?: 
 
 export function startNewSession(): void {
   currentWriter.finalize()
+  // Keep the old writer and its exit handler available to retry failed writes.
+  if (currentWriter.getPendingWriteCount() > 0) {
+    throw new Error("cannot start a new session while current session writes are pending")
+  }
   currentWriter.dispose()
   currentWriter = new SessionWriter()
   journalLogIndex = 0
