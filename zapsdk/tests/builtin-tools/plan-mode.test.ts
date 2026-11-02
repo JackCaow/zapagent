@@ -88,7 +88,7 @@ describe("exit_plan_mode", () => {
   it("surfaces external force-cancel via resolver({approved:false, reason}) to the model", async () => {
     // Models the "user hit Ctrl+C mid-approval" path: the tool awaits
     // requestExit; the app layer resolves with approved:false + a reason
-    // (see closePendingPlanApproval in App.tsx). The tool must surface
+    // (see usePendingInteraction in the TUI hooks). The tool must surface
     // the reason in the error so the model knows what happened, not a
     // generic "rejected".
     let captured: ((d: { approved: boolean; reason?: string }) => void) | null = null
