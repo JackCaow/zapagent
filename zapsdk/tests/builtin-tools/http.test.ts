@@ -240,3 +240,41 @@ describe("HTTP redirect request semantics", () => {
     expect(hosts).toEqual(["example.test", "receipt.test"]);
   });
 });
+
+describe("HTTP redirect credential forwarding", () => {
+  const credentials = { Authorization: "Bearer fixture", "Proxy-Authorization": "Basic fixture", Cookie: "sid=fixture" };
+
+  it("drops credentials on a cross-origin hop and does not restore them on return", async () => {
+    const calls: Array<{ url: string; headers: Headers }> = [];
+    const locations = ["https://other.test/a", "https://example.test/back"];
+    globalThis.fetch = async (input, init = {}) => {
+      calls.push({ url: String(input), headers: new Headers(init.headers) });
+      const location = locations[calls.length - 1];
+      return location ? new Response(null, { status: 302, headers: { location } }) : new Response("done");
+    };
+    const result = await httpRequestTool({ resolveHostname: publicResolver }).handler({
+      url: "https://example.test/start", method: "PUT", body: "{}", headers: { ...credentials, "X-Fixture": "keep" },
+    });
+    expect(result.success).toBe(true);
+    expect(calls.map(call => call.url)).toEqual(["https://example.test/start", "https://other.test/a", "https://example.test/back"]);
+    for (const name of Object.keys(credentials)) {
+      expect(calls[0].headers.has(name)).toBe(true);
+      expect(calls[1].headers.has(name)).toBe(false);
+      expect(calls[2].headers.has(name)).toBe(false);
+    }
+    expect(calls[2].headers.get("X-Fixture")).toBe("keep");
+  });
+
+  it("keeps credentials across same-origin redirects", async () => {
+    const calls: Headers[] = [];
+    globalThis.fetch = async (_input, init = {}) => {
+      calls.push(new Headers(init.headers));
+      return calls.length === 1 ? new Response(null, { status: 307, headers: { location: "/next" } }) : new Response("done");
+    };
+    const result = await httpRequestTool({ resolveHostname: publicResolver }).handler({
+      url: "https://example.test/start", method: "POST", body: "{}", headers: credentials,
+    });
+    expect(result.success).toBe(true);
+    for (const name of Object.keys(credentials)) expect(calls[1].has(name)).toBe(true);
+  });
+});

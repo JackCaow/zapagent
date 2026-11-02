@@ -525,7 +525,10 @@ export function App() {
   // any history entry) and ~/.zapcode/image-cache/ (SVG/URL caches older
   // than CACHE_TTL). Runs once after first render so it doesn't block
   // startup.
-  useEffect(() => { void pruneImageStorage() }, [])
+  useEffect(() => {
+    const pruned = pruneImageStorage()
+    if (pruned.skipped) appLogger.warn("image_prune_skipped", { reason: pruned.skipped })
+  }, [])
 
   // ── Track journal index at the start of each turn (for checkpoint slicing) ──
   const turnStartLogIndexRef = useRef(0)

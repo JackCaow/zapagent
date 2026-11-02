@@ -149,6 +149,7 @@ describe("durable session fork", () => {
         appendLog("agent", "buffered answer");
         const position = peekJournalLogIndex();
         assert.throws(() => startNewSession(), /writes are pending/);
+        assert.throws(() => startNewSession(), /writes are pending/);
         assert.equal(getCurrentSessionId(), oldId);
         assert.equal(peekJournalLogIndex(), position);
         assert.ok(getSessionPersistenceStatus().pendingWrites > 0);
@@ -159,6 +160,7 @@ describe("durable session fork", () => {
         assert.equal(getSessionPersistenceStatus().pendingWrites, 0);
         const raw = readFileSync(join(dir, oldId + ".jsonl"), "utf8");
         assert.equal(raw.split("buffered answer").length - 1, 1);
+        assert.equal(raw.split('"type":"last-prompt"').length - 1, 1);
         console.log("recovered");
       `
       const raw = execFileSync(process.execPath, ["--eval", script], {

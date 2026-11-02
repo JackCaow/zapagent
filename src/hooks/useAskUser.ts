@@ -23,6 +23,10 @@ export function useAskUser(): UseAskUserResult {
   const askUserCallbacks = useMemo<AskUserCallbacks>(() => ({
     ask: (questions, signal) => request(questions, null, signal),
   }), [request])
-  const pendingQuestions = pending ? { questions: pending.value, resolve: pending.resolve } : null
+  // Keep identity stable across renders; App effects depend on this value.
+  const pendingQuestions = useMemo(
+    () => pending ? { questions: pending.value, resolve: pending.resolve } : null,
+    [pending],
+  )
   return { askUserCallbacks, pendingQuestions }
 }

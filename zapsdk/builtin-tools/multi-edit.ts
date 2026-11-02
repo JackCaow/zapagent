@@ -48,6 +48,12 @@ export function multiEditTool(options: MultiEditOptions = {}): Tool {
       const edits = args.edits as Array<{ old_string: string; new_string: string; replace_all?: boolean }>;
       const skipSyntaxCheck = (args.skip_syntax_check as boolean) ?? false;
 
+      // Direct SDK handlers can bypass parameter-schema validation.
+      const emptyEdit = edits.findIndex(edit => edit.old_string.length === 0);
+      if (emptyEdit >= 0) {
+        return { success: false, output: "", error: `Edit #${emptyEdit + 1} failed: old_string must not be empty.` };
+      }
+
       if (!(await isToolPathWriteAllowed(filePath, options, context))) {
         return {
           success: false,
@@ -68,11 +74,6 @@ export function multiEditTool(options: MultiEditOptions = {}): Tool {
         for (let i = 0; i < edits.length; i++) {
           const { old_string, new_string, replace_all } = edits[i];
           const replaceAll = replace_all ?? false;
-
-          // Direct SDK handlers can bypass parameter-schema validation.
-          if (old_string.length === 0) {
-            return { success: false, output: "", error: `Edit #${i + 1} failed: old_string must not be empty.` };
-          }
 
           let count = 0;
           let searchPos = 0;
