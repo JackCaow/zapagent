@@ -24,6 +24,38 @@ const limits: CompactOptions = { contextWindow: 40000, reservedOutputTokens: 200
 const provider = (): LLMProvider => ({ call: async () => ({ type: "text", usage: { inputTokens: 1, outputTokens: 1 }, text: summary() }) });
 
 describe("shared compact planning and execution", () => {
+  it("manually compacts substantial history below a 1M soft target instead of summarizing one tiny message", async () => {
+    const messages: Message[] = [{ role: "system", content: "stable system" }, { role: "user", content: "hello" },
+      ...Array.from({ length: 24 }, (_, i) => ({ role: "assistant" as const, content: `scan ${i}: ${"recorded inventory ".repeat(200)}` })),
+      { role: "user", content: "Current goal: inventory only; do not edit" },
+      { role: "assistant", content: "", toolCalls: [{ id: "last", name: "bash", arguments: { command: "ls" } }] },
+      { role: "tool_result", toolCallId: "last", content: "latest authoritative output", toolResultSuccess: true },
+      { role: "assistant", content: "Inventory delivered" }];
+    const options: CompactOptions = { contextWindow: 1048576, force: true, restoreFiles: true,
+      tools: [{ name: "read", description: "fixed schema ".repeat(1000), parameters: z.object({ path: z.string() }) }] };
+    const plan = planCompact(messages, options);
+    expect(plan.source.length).toBeGreaterThan(1);
+    expect(plan.source.some(message => message.content.startsWith("scan"))).toBe(true);
+    const result = await executeCompact(messages, provider(), options);
+    expect(result.status).toBe("compacted");
+    expect(result.outputTokens!).toBeLessThan(result.inputTokens! * 0.75);
+    expect(result.messages.some(message => message.content.includes("do not edit"))).toBe(true);
+    expect(result.messages.find(message => message.toolCallId === "last")?.content).toBe("latest authoritative output");
+    expect(result.messages.some(message => message.toolCalls?.[0]?.id === "last")).toBe(true);
+    // Automatic selection still uses the model-derived target, not half of
+    // an already small request.
+    expect(planCompact(messages, { ...options, force: false }).source).toEqual([]);
+  });
+
+  it("does not commit a larger summary when nearly all input is protected", async () => {
+    const messages: Message[] = [{ role: "user", content: "old" }, { role: "assistant", content: "ok" },
+      { role: "user", content: "protected request ".repeat(2000) }, { role: "assistant", content: "latest" }];
+    const result = await executeCompact(messages, provider(), { contextWindow: 1048576, force: true });
+    expect(result.status).toBe("failed");
+    expect(result.failureReason).toContain("did not reduce");
+    expect(result.messages).toBe(messages);
+  });
+
   it("keeps 1,048,576 and 1,000,000 windows distinct and uses strict threshold boundaries", () => {
     expect(compactBudget({ contextWindow: 1048576 })).toMatchObject({ effectiveInputLimit: 1039384, compactAt: 831507, keepFloorTokens: 415753 });
     expect(compactBudget({ contextWindow: 1000000 })?.compactAt).toBe(792646);

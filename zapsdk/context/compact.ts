@@ -125,16 +125,23 @@ export function planCompact(messages: Message[], options: CompactOptions = {}): 
   const measure = (candidate: Message[]) => compactRequestTokens(candidate, options, counter);
   const budget = compactBudget(options);
   const inputTokens = measure(messages);
-  const targetTokens = (options.targetTokens !== undefined && Number.isFinite(options.targetTokens)
+  let targetTokens = (options.targetTokens !== undefined && Number.isFinite(options.targetTokens)
     ? Math.max(0, Math.floor(options.targetTokens)) : undefined) ?? budget?.keepFloorTokens
     ?? Math.max(1, Math.floor((options.legacyCharThreshold ?? 320000) / 8));
   const ceiling = options.outputTokenCeiling !== undefined && Number.isFinite(options.outputTokenCeiling)
     ? Math.max(0, Math.floor(options.outputTokenCeiling)) : 8192;
-  const summaryOutputTokens = Math.max(0, Math.min(8192, ceiling,
-    budget ? Math.max(256, Math.floor(targetTokens * 0.2)) : 8192));
   let systemEnd = 0;
   while (messages[systemEnd]?.role === "system") systemEnd++;
   const system = messages.slice(0, systemEnd);
+  // A manual compact below the model's soft target still needs a meaningful
+  // source. Retaining almost everything and summarizing one tiny group can
+  // enlarge the request. Keep fixed system/schema overhead out of the ratio.
+  if (budget && options.force) {
+    const fixedTokens = measure(system);
+    targetTokens = Math.min(targetTokens, fixedTokens + Math.floor(Math.max(0, inputTokens - fixedTokens) / 2));
+  }
+  const summaryOutputTokens = Math.max(0, Math.min(8192, ceiling,
+    budget ? Math.max(256, Math.floor(targetTokens * 0.2)) : 8192));
   const groups = compactMessageGroups(messages.slice(systemEnd));
   const kept = new Set<number>();
   if (budget && groups.length) {
