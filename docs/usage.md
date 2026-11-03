@@ -196,7 +196,7 @@ also skip CI, headless output and ACP; explicit `zap update` still checks.
 | `/update` | Confirm download, installation and restart with session recovery |
 | `/help` | Show command reference |
 | `/connect` | Set up provider & API key |
-| `/model` | Show or switch model |
+| `/model` | Search and switch models across all configured connections |
 | `/effort` | Set reasoning effort (`off`, `cycle`, or a provider value) |
 | `/mode` | Set permission mode (`default`, `acceptEdits`, `plan`, `bypass`) |
 | `/permissions` | Manage active permission rules |
@@ -221,6 +221,17 @@ also skip CI, headless output and ACP; explicit `zap update` still checks.
 | `/exit` | Exit zapAgent (`/quit` and `/q` also work) |
 
 The footer shows output speed as `105.4 token/s` for the latest root model request. `~` marks a live estimate (streamed characters ÷ 4); provider-reported output usage calibrates the final rate. Timing starts at first output and excludes tool execution. Missing usage keeps the estimate; non-streaming or very short responses may have no rate.
+
+`/model` combines saved and discovered models from every configured connection.
+Each row identifies its connection and endpoint; identical model IDs on different
+connections remain separate. Enter switches both the connection and model.
+Discovery settles independently per connection, preserving saved models offline
+and keeping the cursor on the same connection/model as results arrive.
+Press `/` to search model IDs, connection names or endpoints, or `p` to filter by
+connection and return to **All configured connections**. Metadata (`m`) and
+context (`c`) apply to the highlighted row's connection; manual entry (`t`)
+asks which connection to use. Model choice immediately after adding a connection
+stays scoped to that new connection. [Terminal recording](recordings/model-aggregation.cast).
 
 ## Keyboard Shortcuts
 

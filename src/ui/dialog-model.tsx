@@ -2,7 +2,8 @@
 import { useEffect, useRef, useState } from "react"
 import { Box, Text, useInput } from "ink"
 import { inferLegacyContextWindowMode, resolveProviderContextWindow, upsertProvider, type AppConfig } from "../config.js"
-import { associateModelMetadata, discoverProviderModels, describeCatalogRow, selectCatalogModel, type CatalogRow } from "../provider-catalog.js"
+import { associateModelMetadata, describeCatalogRow, selectCatalogModel } from "../provider-catalog.js"
+import { configuredModelRows, discoverConfiguredModels, modelCatalogKey, savedConnectionCatalogs, type ConnectionCatalog, type ConnectionModelRow } from "../model-catalog.js"
 import { DialogFrame } from "./dialog-frame.js"
 import { PickerDialog } from "./dialog-picker.js"
 import { TextField } from "./text-field.js"
@@ -23,114 +24,125 @@ export function ModelDialog({ config, initialProviderId, setup = false, onSave, 
     process.stdout.on("resize", resize)
     return () => { process.stdout.off("resize", resize) }
   }, [])
-  const [providerId, setProviderId] = useState(initialProviderId ?? (config.active.providerId || config.providers[0]?.id || ""))
-  const provider = config.providers.find(item => item.id === providerId)
+  const [providerFilter, setProviderFilter] = useState<string | null>(initialProviderId ?? (setup ? config.active.providerId || config.providers[0]?.id || null : null))
   const [phase, setPhase] = useState<"models" | "providers" | "manual" | "search" | "metadata" | "context">("models")
-  const [metadataTarget, setMetadataTarget] = useState<CatalogRow | null>(null)
-  const [rows, setRows] = useState<CatalogRow[]>([])
-  const [index, setIndex] = useState(0)
+  const [providerAction, setProviderAction] = useState<"filter" | "manual">("filter")
+  const [target, setTarget] = useState<ConnectionModelRow | null>(null)
+  const [manualProviderId, setManualProviderId] = useState("")
+  const [catalogState, setCatalogState] = useState(() => ({ providers: config.providers, catalogs: savedConnectionCatalogs(config.providers) }))
+  const [selectedKey, setSelectedKey] = useState<string | null>(() => modelCatalogKey(config.active.providerId, config.active.model))
   const [query, setQuery] = useState("")
   const [manual, setManual] = useState("")
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState("")
   const [refresh, setRefresh] = useState(0)
-  const shown = rows.filter(row => row.id.toLowerCase().includes(query.toLowerCase()))
-  const selectedIndex = Math.min(index, Math.max(0, shown.length - 1))
-  const live = useRef({ phase, selectedIndex, shown, config, providerId, onCommit, onCancel })
-  live.current = { phase, selectedIndex, shown, config, providerId, onCommit, onCancel }
+  const setupProviderId = setup ? providerFilter : null
+  // Configuration changes cannot briefly expose a removed connection's rows.
+  const catalogs = catalogState.providers === config.providers ? catalogState.catalogs : savedConnectionCatalogs(config.providers)
+  const shown = configuredModelRows(config.providers, catalogs, providerFilter, query)
+  const selectedIndex = Math.max(0, shown.findIndex(row => modelCatalogKey(row.provider.id, row.id) === selectedKey))
+  const selected = shown[selectedIndex]
+  const provider = selected?.provider ?? config.providers.find(item => item.id === providerFilter)
+    ?? config.providers.find(item => item.id === config.active.providerId) ?? config.providers[0]
+  const targetProvider = config.providers.find(item => item.id === target?.provider.id)
+  const manualProvider = config.providers.find(item => item.id === manualProviderId)
+  const live = useRef({ phase, selectedIndex, shown, config, provider, providerFilter, onCommit, onCancel })
+  live.current = { phase, selectedIndex, shown, config, provider, providerFilter, onCommit, onCancel }
 
   useEffect(() => {
-    if (!provider) { setRows([]); return }
-    const controller = new AbortController()
-    let finished = false
-    setRows(provider.models.map(id => ({ id, source: "saved", metadata: provider.modelMetadata?.[id] })))
-    setLoading(true); setError(""); setIndex(Math.max(0, provider.models.indexOf(config.active.model)))
-    const timer = setTimeout(() => {
-      if (finished) return
-      finished = true; controller.abort(); setLoading(false)
-      setError("Discovery timed out. Saved models remain available; press t to enter an ID.")
-    }, 6500)
-    void discoverProviderModels(provider, controller.signal).then(result => {
-      if (finished) return
-      finished = true; clearTimeout(timer)
-      setRows(result.rows); setError(result.error ?? ""); setLoading(false)
-    }).catch(() => {
-      if (finished) return
-      finished = true; clearTimeout(timer); setLoading(false)
-      setError("Discovery unavailable. Press r to retry or t for a manual model ID.")
-    })
-    return () => { finished = true; controller.abort(); clearTimeout(timer) }
-  }, [provider, refresh])
+    const providers = config.providers
+    const requested = setupProviderId === null ? providers : providers.filter(item => item.id === setupProviderId)
+    setCatalogState({ providers, catalogs: savedConnectionCatalogs(requested) })
+    const update = (catalog: ConnectionCatalog) => setCatalogState(current => current.providers !== providers ? current
+      : { providers, catalogs: current.catalogs.map(item => item.providerId === catalog.providerId ? catalog : item) })
+    return discoverConfiguredModels(requested, update)
+  }, [config.providers, refresh, setupProviderId])
 
   useInput((input, key) => {
     const state = live.current
     if (state.phase !== "models") return
     const cmd = commandInput(input, key)
     if (key.escape) { state.onCancel(); return }
-    if (cmd === "p" && !setup) { setPhase("providers"); return }
-    if (cmd === "t") { setManual(""); setPhase("manual"); return }
-    if (cmd === "/") { setPhase("search"); return }
-    if (cmd === "r") { setRefresh(value => value + 1); return }
-    if (cmd === "c") { setPhase("context"); return }
-    if (cmd === "m") {
-      const row = state.shown[state.selectedIndex]
-      if (row) { setMetadataTarget(row); setPhase("metadata") }
+    if (cmd === "p" && !setup) { setProviderAction("filter"); setPhase("providers"); return }
+    if (cmd === "t") {
+      setManual("")
+      if (state.providerFilter !== null && state.provider) { setManualProviderId(state.provider.id); setPhase("manual") }
+      else { setProviderAction("manual"); setPhase("providers") }
       return
     }
-    if (key.upArrow) { setIndex(Math.max(0, state.selectedIndex - 1)); return }
-    if (key.downArrow) { setIndex(Math.min(Math.max(0, state.shown.length - 1), state.selectedIndex + 1)); return }
+    if (cmd === "/") { setPhase("search"); return }
+    if (cmd === "r") { setRefresh(value => value + 1); return }
+    if (cmd === "c" || cmd === "m") {
+      const row = state.shown[state.selectedIndex]
+      if (row) { setTarget(row); setPhase(cmd === "c" ? "context" : "metadata") }
+      return
+    }
+    if (key.upArrow || key.downArrow) {
+      const next = Math.max(0, Math.min(state.shown.length - 1, state.selectedIndex + (key.upArrow ? -1 : 1)))
+      const row = state.shown[next]
+      if (row) setSelectedKey(modelCatalogKey(row.provider.id, row.id))
+      return
+    }
     if (isReturnInput(input, key)) {
       const row = state.shown[state.selectedIndex]
-      if (row) state.onCommit(selectCatalogModel(state.config, state.providerId, row))
+      if (row) state.onCommit(selectCatalogModel(state.config, row.provider.id, row))
     }
   })
 
   if (!provider) return <DialogFrame title="Models · /model" hint="esc close">
     <Text>No connection configured. Use /connect to create one first.</Text>
   </DialogFrame>
-  if (phase === "metadata" && metadataTarget) return <ModelMetadataDialog modelId={metadataTarget.id}
+  if (phase === "metadata" && target && targetProvider) return <ModelMetadataDialog modelId={target.id}
     onCancel={() => setPhase("models")} onSelect={metadata => {
-      onSave(associateModelMetadata(config, providerId, metadataTarget.id, metadata))
+      onSave(associateModelMetadata(config, targetProvider.id, target.id, metadata))
       setPhase("models")
     }} />
-  if (phase === "context") return <ContextWindowDialog
-    mode={provider.contextWindowMode ?? inferLegacyContextWindowMode(provider)}
-    contextWindow={resolveProviderContextWindow(provider, config.active.model)}
+  if (phase === "context" && target && targetProvider) return <ContextWindowDialog
+    mode={targetProvider.contextWindowMode ?? inferLegacyContextWindowMode(targetProvider)}
+    contextWindow={resolveProviderContextWindow(targetProvider, target.id)}
     onCancel={() => setPhase("models")} onSave={(mode, tokens) => {
-      onSave({ ...upsertProvider(config, { ...provider, contextWindowMode: mode, contextWindow: tokens }), active: config.active })
+      onSave({ ...upsertProvider(config, { ...targetProvider, contextWindowMode: mode, contextWindow: tokens }), active: config.active })
       setPhase("models")
     }} />
-  if (phase === "providers") return <PickerDialog title="Models · choose connection"
-    options={config.providers.map(item => ({ id: item.id, label: item.name || item.baseURL, meta: item.baseURL }))}
-    initialIndex={Math.max(0, config.providers.findIndex(item => item.id === providerId))}
-    onCancel={() => setPhase("models")} onSelect={id => { setProviderId(id); setQuery(""); setIndex(0); setPhase("models") }} />
-  if (phase === "manual" || phase === "search") return <DialogFrame
-    title={phase === "manual" ? `Manual model ID · ${provider.name}` : "Filter model directory"} hint="enter confirm · esc back">
-    <Text color={c.text.faint}>{phase === "manual" ? "Manual IDs are unverified. The endpoint must support this exact ID." : "Filter by model ID. Discovery does not change your current selection."}</Text>
+  if (phase === "providers") return <PickerDialog key={providerAction} title={providerAction === "manual" ? "Manual model · choose connection" : "Models · filter connections"}
+    options={[...(providerAction === "filter" ? [{ id: "all", label: "All configured connections", meta: `${config.providers.length} connections` }] : []),
+      ...config.providers.map(item => ({ id: `provider:${item.id}`, label: item.name || item.baseURL, meta: item.baseURL }))]}
+    initialIndex={providerAction === "filter" ? providerFilter === null ? 0 : Math.max(0, config.providers.findIndex(item => item.id === providerFilter) + 1)
+      : Math.max(0, config.providers.findIndex(item => item.id === provider.id))}
+    onCancel={() => setPhase("models")} onSelect={id => {
+      if (providerAction === "manual") { setManualProviderId(id.slice("provider:".length)); setPhase("manual") }
+      else { setProviderFilter(id === "all" ? null : id.slice("provider:".length)); setQuery(""); setSelectedKey(null); setPhase("models") }
+    }} />
+  if (phase === "search" || phase === "manual" && manualProvider) return <DialogFrame
+    title={phase === "manual" ? `Manual model ID · ${manualProvider!.name}` : "Filter models and connections"} hint="enter confirm · esc back">
+    <Text color={c.text.faint}>{phase === "manual" ? "Manual IDs are unverified. The endpoint must support this exact ID." : "Search model IDs, connection names or endpoints. Selection changes only on Enter."}</Text>
     <TextField key={phase} isActive value={phase === "manual" ? manual : query}
       onChange={phase === "manual" ? setManual : setQuery} onCancel={() => setPhase("models")}
       onSubmit={value => {
         if (phase === "manual") {
-          if (value.trim()) onCommit(selectCatalogModel(config, providerId, { id: value.trim(), source: "manual" }))
-        } else { setQuery(value.trim()); setIndex(0); setPhase("models") }
+          if (value.trim() && manualProvider) onCommit(selectCatalogModel(config, manualProvider.id, { id: value.trim(), source: "manual" }))
+        } else { setQuery(value.trim()); setSelectedKey(null); setPhase("models") }
       }} />
   </DialogFrame>
+  const scopedCatalogs = catalogs.filter(item => providerFilter === null || item.providerId === providerFilter)
+  const loading = scopedCatalogs.filter(item => item.loading).length
+  const failed = scopedCatalogs.filter(item => item.error).length
+  const error = catalogs.find(item => item.providerId === provider.id)?.error
   const count = Math.max(1, Math.min(7, Math.floor((height - 14) / 3)))
   const start = Math.max(0, selectedIndex - Math.floor(count / 2))
-  return <DialogFrame title={`${setup ? "Choose a model" : "Models"} · ${provider.name || provider.baseURL}`}
-    hint={setup ? "↑↓ navigate · enter select and finish · m metadata · c context · / filter · t manual · esc choose later" : "↑↓ navigate · enter select · m metadata · c context · / filter · p connection · r refresh · t manual · esc close"}>
+  const activeProvider = config.providers.find(item => item.id === config.active.providerId)
+  return <DialogFrame title={`${setup ? "Choose a model" : "Models"} · ${providerFilter === null ? "All connections" : provider.name || provider.baseURL}`}
+    hint={setup ? "↑↓ navigate · enter select and finish · m metadata · c context · / filter · t manual · esc choose later" : "↑↓ navigate · enter select · / search · p filter connections · m metadata · c context · r refresh · t manual · esc close"}>
     {setup && <Text color={c.accent}>Connection saved. Choose a model to use it, or press esc to choose later with /model.</Text>}
-    <Text color={c.text.faint}>{truncateToWidth(provider.baseURL, width)}</Text>
-    <Text color={c.text.faint}>{truncateToWidth(`Current: ${config.active.providerId === providerId ? config.active.model || "none" : "none on this connection"} · ${shown.length} models${loading ? " · discovering…" : ""}${query ? ` · filter: ${query}` : ""}`, width)}</Text>
+    <Text color={c.text.faint}>{truncateToWidth(`Current: ${config.active.model || "none"} · ${activeProvider?.name || "none"}`, width)}</Text>
+    <Text color={c.text.faint}>{truncateToWidth(`${shown.length} models · ${scopedCatalogs.length} connections${loading ? ` · ${loading} discovering…` : ""}${failed ? ` · ${failed} discovery unavailable` : ""}${query ? ` · filter: ${query}` : ""}`, width)}</Text>
     <Text color={c.text.faint}>{truncateToWidth((provider.contextWindowMode ?? inferLegacyContextWindowMode(provider)) === "manual"
-      ? `Manual context: ${provider.contextWindow.toLocaleString("en-US")} tokens · c to change`
-      : `Automatic context · m to link metadata · unknown models use fallback ${provider.contextWindow.toLocaleString("en-US")} tokens (unverified)`, width)}</Text>
-    {error && <Text color={c.warning}>{truncateToWidth(error, width)}</Text>}
+      ? `${provider.name}: manual context ${provider.contextWindow.toLocaleString("en-US")} tokens · c to change`
+      : `${provider.name}: automatic context · m to link metadata · fallback ${provider.contextWindow.toLocaleString("en-US")} tokens`, width)}</Text>
+    {error && <Text color={c.warning}>{truncateToWidth(`${provider.name}: ${error}`, width)}</Text>}
     <Box flexDirection="column" marginTop={1}>
-      {shown.slice(start, start + count).map((row, i) => <Box key={row.id} flexDirection="column">
-        <Text color={start + i === selectedIndex ? c.accent : c.text.primary} bold={start + i === selectedIndex}>{truncateToWidth(`${start + i === selectedIndex ? "›" : " "} ${row.id}`, width)}</Text>
-        <Text color={c.text.faint}>{truncateToWidth(`  ${describeCatalogRow(row).split(" · ").slice(0, 3).join(" · ")}`, width)}</Text>
-        <Text color={c.text.faint}>{truncateToWidth(`  ${describeCatalogRow(row).split(" · ").slice(3).join(" · ")}`, width)}</Text>
+      {shown.slice(start, start + count).map((row, i) => <Box key={modelCatalogKey(row.provider.id, row.id)} flexDirection="column">
+        <Text color={start + i === selectedIndex ? c.accent : c.text.primary} bold={start + i === selectedIndex}>{truncateToWidth(`${start + i === selectedIndex ? "›" : " "} ${row.id}${row.provider.id === config.active.providerId && row.id === config.active.model ? " (current)" : ""}`, width)}</Text>
+        <Text color={c.text.faint}>{truncateToWidth(`  ${row.provider.name || row.provider.id} · ${row.provider.baseURL}`, width)}</Text>
+        <Text color={c.text.faint}>{truncateToWidth(`  ${describeCatalogRow(row)}`, width)}</Text>
       </Box>)}
       {!shown.length && <Text color={c.text.faint}>{loading ? "Discovering models… You can enter an ID with t." : "No matching models. Press t to enter an ID or / to change the filter."}</Text>}
       {start + count < shown.length && <Text color={c.text.faint}>{`… ${shown.length - start - count} more`}</Text>}
