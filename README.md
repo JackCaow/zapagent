@@ -71,7 +71,7 @@ Interact in the terminal and follow task progress in the live browser view.
 On first use, enter `/connect` and follow the setup prompts to connect your model service. Then describe what you want: “Read the materials in this folder, summarize the key points, and write a report.”
 
 Use your model service account and API key, or select **OpenAI Codex (ChatGPT)**
-to sign in with a ChatGPT account using OAuth. Usage and model access depend on
+to sign in with a ChatGPT account using OAuth. Codex connections also support image generation: ask Zap to create an image and save it to a new `.png` file. [Image generation](docs/usage.md#image-generation-with-codex). Usage and model access depend on
 your provider/account. [Connection guide](docs/usage.md#getting-started).
 
 Update from your terminal with `zap update` (or `zap update --yes` for unattended installation).

@@ -9,6 +9,7 @@
 // continuation rows leak back to col 0. <IndentedRow> bakes the right
 // pattern in once and every renderer reuses it.
 
+import { GeneratedImageResult } from "./generated-image.js"
 import { Fragment, memo, useMemo, useRef } from "react"
 import { Box, Static, Text } from "ink"
 import type { LogEntry } from "./types.js"
@@ -488,6 +489,7 @@ export const ToolResult = memo(function ToolResult({ log }: { log: LogEntry }) {
           <Text color={c.text.muted}>{lines.join("\n")}</Text>
         </IndentedRow>
       )}
+      {tool.name === "generate_image" && <IndentedRow width={NESTED_COLS}><GeneratedImageResult meta={tool.meta} /></IndentedRow>}
       {checkpointWarning && (
         <IndentedRow width={NESTED_COLS}>
           <Text color={c.warning}>{`⚠ ${checkpointWarning}`}</Text>

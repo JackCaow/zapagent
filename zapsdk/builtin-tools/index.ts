@@ -21,6 +21,7 @@ import { currentTimeTool } from "./time.js";
 import { readDocumentTool, readPdfTool, readDocxTool, type DocumentReadOptions } from "./document.js";
 import { todoWriteTool, type TodoWriteToolOptions, type TodoStore, type Todo, type TodoStatus } from "./todo.js";
 import { askUserQuestionTool, type AskUserToolOptions } from "./ask-user.js";
+import { generateImageTool, type GenerateImageOptions } from "./generate-image.js";
 import { browserScreenshotTool, type BrowserScreenshotOptions } from "./browser.js";
 import { enterPlanModeTool, exitPlanModeTool, type PlanModeToolsOptions, type PlanModeCallbacks } from "./plan-mode.js";
 import { skillTool, type SkillToolOptions } from "./skill.js";
@@ -59,6 +60,7 @@ export { readDocumentTool, readPdfTool, readDocxTool, type DocumentReadOptions }
 export { todoWriteTool, renderTodoList, type TodoWriteToolOptions, type TodoStore, type Todo, type TodoStatus } from "./todo.js";
 export { enterPlanModeTool, exitPlanModeTool, type PlanModeToolsOptions, type PlanModeCallbacks } from "./plan-mode.js";
 export { askUserQuestionTool, type AskUserToolOptions, type AskUserCallbacks, type AskUserQuestion, type AskUserAnswer } from "./ask-user.js";
+export { generateImageTool, type GenerateImageOptions } from "./generate-image.js";
 export { browserScreenshotTool, findBrowser, type BrowserScreenshotOptions } from "./browser.js";
 export { skillTool, type SkillToolOptions } from "./skill.js";
 export {
@@ -97,6 +99,8 @@ export interface BuiltinToolsOptions {
   listTree?: ListTreeOptions;
   documentRead?: DocumentReadOptions;
   browserScreenshot?: BrowserScreenshotOptions;
+  /** Only registered when the host supplies an authenticated image capability. */
+  generateImage?: GenerateImageOptions;
   webSearch?: WebSearchOptions;
   /** Required for the main agent to get `todo_write`. When omitted (e.g.
    *  subagent registries), `todo_write` is not registered — mirrors CCB's
@@ -148,6 +152,7 @@ export function createBuiltinRegistry(options: BuiltinToolsOptions = {}): ToolRe
   if (!exclude.has("delete_file")) registry.register(deleteFileTool({ defaultCwd, ...options.deleteFile }));
   if (!exclude.has("move_file")) registry.register(moveFileTool({ defaultCwd, ...options.moveFile }));
   if (!exclude.has("list_tree")) registry.register(listTreeTool({ defaultCwd, ...options.listTree }));
+  if (options.generateImage && !exclude.has("generate_image")) registry.register(generateImageTool({ defaultCwd, ...options.generateImage }));
   if (!exclude.has("bash")) registry.register(executeCommandTool(options.executeCommand));
   if (!exclude.has("http_fetch")) registry.register(httpFetchTool(options.httpFetch));
   if (!exclude.has("http_request")) registry.register(httpRequestTool(options.httpRequest));

@@ -100,6 +100,44 @@ Zap's credentials. Saved connections use `authMode: "codex-oauth"` and
 Codex OAuth flow, similar to OpenCode's legacy Codex login, and requires no
 local Codex CLI installation.
 
+### Image generation with Codex
+
+After connecting a Codex OAuth account, ask Zap to create an image, for example:
+
+```text
+Create a simple blue-and-white illustration for my landing page and save it to assets/hero.png.
+```
+
+The agent calls `generate_image` with a visual prompt and a new `.png`
+`output_path`. The tool supports `quality` (`auto`, `low`, `medium`, `high`),
+`size` (`auto`, `1024x1024`, `1536x1024`, `1024x1536`) and `background`
+(`auto`, `opaque`, `transparent`). The service may return different pixel
+sizes; Zap reports the actual dimensions. This tool creates new images; PNG
+is its output format.
+
+Generation uses the connected account's image usage limits. Ordinary tool
+approval, plan mode, workspace write grants and protected paths apply. Existing
+files are never replaced. The TUI displays a thumbnail and saved path; ACP clients
+receive image content, and headless JSON/stream-JSON returns a `generatedImage`
+artifact with paths, dimensions, byte count and digest.
+
+Completed images are also retained in `generated-images/<sha256>.png` under
+`ZAPCODE_DATA_DIR` (or the normal Zap data directory). If the workspace write
+fails, the result includes this recovery path; copy that image instead of
+regenerating it. These artifacts are not automatically pruned. Removing that
+directory manually frees its storage; workspace image files remain. Session
+restore verifies cached images by digest and restores up to four recent images
+within a 16 MiB total budget. Missing/corrupt artifacts retain their history text.
+
+The host-owned Codex image request uses a fixed authenticated endpoint, no
+transparent retries, a five-minute timeout, a 32 MiB response bound and an
+8 MiB PNG bound (up to 4096 pixels on each side). This provider request has a
+separate byte budget from ordinary HTTP tools; workspace writes still use the
+execution broker's file budget. Image capabilities depend on the selected Codex
+model and account. Other provider connections do not register this tool.
+
+[Terminal recording](recordings/image-generation.cast).
+
 ### OpenAI Responses API
 
 In `/connect`, create or edit a connection and select **OpenAI Responses** at

@@ -12,6 +12,9 @@ export { type LLMProvider, type LLMCallOptions, type ProviderRequestEvent } from
 export { ProviderRequestTimeoutError } from "./core/provider-request.js";
 export { AnthropicProvider, type AnthropicProviderOptions } from "./core/providers/anthropic.js";
 export { ContextOverflowError } from "./core/errors.js";
+export { generateCodexImage, type CodexImageOptions, type GeneratedImage, type ImageGenerationRequest } from "./core/providers/codex-image-generation.js";
+export { generateImageTool, type GenerateImageOptions } from "./builtin-tools/generate-image.js";
+export { type GeneratedImageArtifact, type GeneratedImageMeta } from "./utils/generated-image.js";
 export { OpenAIResponsesProvider, type OpenAIResponsesProviderOptions } from "./core/providers/openai-responses.js";
 export { OpenAICompatibleProvider, type OpenAICompatibleProviderOptions } from "./core/providers/openai-compatible.js";
 export { RetryProvider, type RetryOptions, type CallOptions } from "./core/retry.js";

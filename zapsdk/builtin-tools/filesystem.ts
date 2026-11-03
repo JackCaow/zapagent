@@ -1,4 +1,4 @@
-import { readFile, writeFile, readdir, mkdir, unlink, rename, link, stat, lstat, realpath } from "node:fs/promises";
+import { open, readFile, readdir, mkdir, unlink, rename, link, stat, lstat, realpath } from "node:fs/promises";
 import { lstatSync, realpathSync } from "node:fs";
 import { basename, dirname, resolve, join, relative, isAbsolute, sep } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -155,19 +155,29 @@ export function canonicalizeWithNearestExistingAncestorSync(path: string): strin
 export interface AtomicWriteOptions {
   /** Fail atomically if the destination appeared after the caller observed it missing. */
   replaceExisting?: boolean;
+  signal?: AbortSignal;
+  beforeCommit?: () => void | Promise<void>;
+  mode?: number;
 }
 
 /** Write via a same-directory temporary file, then atomically publish it. */
 export async function atomicWrite(
   filePath: string,
-  content: string,
+  content: string | Uint8Array,
   options: AtomicWriteOptions = {},
 ): Promise<void> {
   const abs = resolve(filePath);
+  options.signal?.throwIfAborted();
   await mkdir(dirname(abs), { recursive: true });
   const tmp = `${abs}.tmp.${randomBytes(4).toString("hex")}`;
+  let ownsTemporaryFile = false;
   try {
-    await writeFile(tmp, content, "utf-8");
+    const handle = await open(tmp, "wx", options.mode);
+    ownsTemporaryFile = true;
+    try { await handle.writeFile(content, { encoding: "utf-8", signal: options.signal }); }
+    finally { await handle.close(); }
+    await options.beforeCommit?.();
+    options.signal?.throwIfAborted();
     if (options.replaceExisting === false) {
       // A same-filesystem hard link is an atomic create-if-absent operation.
       // Unlike rename(), it cannot overwrite a destination created after the
@@ -178,7 +188,7 @@ export async function atomicWrite(
     }
     await rename(tmp, abs);
   } catch (err) {
-    try { await unlink(tmp); } catch {}
+    if (ownsTemporaryFile) try { await unlink(tmp); } catch {}
     throw err;
   }
 }

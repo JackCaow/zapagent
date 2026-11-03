@@ -12,6 +12,7 @@ import {
   stat as statAsync,
 } from "node:fs/promises"
 import { createHash, randomUUID } from "node:crypto"
+import { generatedImageArtifact, restoreGeneratedImage } from "../zapsdk/utils/generated-image.js"
 import { getAppDataDir } from "../zapsdk/utils/platform.js"
 import { legacyProjectDataSegment, resolveProjectDataSegment } from "../zapsdk/utils/project-paths.js"
 import type { ImageContent, Message } from "../zapsdk/index.js"
@@ -1984,7 +1985,22 @@ export function sessionLogsToTurns(logs: SessionLog[]): Turn[] {
   // toolCalls keyed by id — duplicates from replaceLog chaining are
   // de-duped in place. Order is preserved by tracking insertion order.
   const pendingToolCalls: { id: string; name: string; arguments: Record<string, unknown> }[] = []
-  const pendingToolResults = new Map<string, { content: string; success?: boolean; suppression?: "duplicate" }>()
+  const pendingToolResults = new Map<string, { content: string; success?: boolean; suppression?: "duplicate"; meta?: unknown }>()
+  // Restore recent generated pixels from authenticated runtime artifacts only.
+  // Older outputs retain their paths; avoid loading an unbounded image history.
+  const generatedBlocks = new Map<string, ImageContent>()
+  let generatedBytes = 0
+  for (const log of [...logs].reverse()) {
+    if (log.restore === false || log.type !== "result" || log.tool?.name !== "generate_image") continue
+    const artifact = generatedImageArtifact(log.tool.meta)
+    if (!artifact || generatedBlocks.has(artifact.id) || generatedBlocks.size >= 4 || generatedBytes + artifact.bytes > 16 * 1024 * 1024) continue
+    const bytes = restoreGeneratedImage(join(getAppDataDir(), "generated-images"), log.tool.meta)
+    if (!bytes) continue
+    generatedBytes += bytes.length
+    generatedBlocks.set(artifact.id, { type: "image", filePath: join(getAppDataDir(), "generated-images", `${artifact.id}.png`),
+      mediaType: "image/png", base64: bytes.toString("base64"), source: "generate_image" })
+  }
+
 
   const flushPending = () => {
     if (pendingToolCalls.length > 0) {
@@ -1993,6 +2009,8 @@ export function sessionLogsToTurns(logs: SessionLog[]): Turn[] {
       for (const tc of pendingToolCalls) {
         const got = pendingToolResults.get(tc.id)
         if (got) {
+          const artifact = tc.name === "generate_image" ? generatedImageArtifact(got.meta) : undefined
+          const generatedBlock = artifact ? generatedBlocks.get(artifact.id) : undefined
           completed.push({
             id: tc.id,
             name: tc.name,
@@ -2000,6 +2018,8 @@ export function sessionLogsToTurns(logs: SessionLog[]): Turn[] {
             result: {
               success: got.success ?? true,
               output: got.content,
+              ...(artifact ? { meta: { generatedImage: artifact } } : {}),
+              ...(generatedBlock ? { contentBlocks: [generatedBlock] } : {}),
               ...(got.suppression ? { runtime: { suppression: got.suppression } } : {}),
             },
             // Legacy logs lack status evidence. Preserve their output without
@@ -2078,6 +2098,7 @@ export function sessionLogsToTurns(logs: SessionLog[]): Turn[] {
           content: log.tool.output ?? "",
           success: log.tool.success,
           suppression: log.tool.suppression,
+          meta: log.tool.name === "generate_image" ? log.tool.meta : undefined,
         })
       }
     }

@@ -1,3 +1,4 @@
+import { generatedImageArtifact, type GeneratedImageArtifact } from "../../zapsdk/utils/generated-image.js"
 import type { AgentOutcomeV1 } from "../../zapsdk/runtime/outcome.js"
 import type { InlineAcceptanceRecord } from "../../zapsdk/runtime/inline-acceptance.js"
 // Output formatters for headless runs. Three modes, all sharing one observer
@@ -36,6 +37,7 @@ export type StopReason =
   | "capability_unavailable"
 
 export interface ToolCallRecord {
+  generatedImage?: Omit<GeneratedImageArtifact, "thumbnail">
   name: string
   args: Record<string, unknown>
   ok: boolean
@@ -156,7 +158,10 @@ export function createFormatter(format: OutputFormat, quiet: boolean, resultSche
         const errMsg = !ok
           ? (event.result.error ?? (typeof event.result.output === "string" ? event.result.output : ""))
           : undefined
+        const image = event.toolName === "generate_image" ? generatedImageArtifact(event.result.meta) : undefined
+        const artifact = image ? (({ thumbnail, ...metadata }) => metadata)(image) : undefined
         const audit = {
+          ...(artifact ? { generatedImage: artifact } : {}),
           ...(event.result.runtime?.service ? { service: event.result.runtime.service } : {}),
           ...(event.result.runtime?.serviceOperation ? { serviceOperation: event.result.runtime.serviceOperation } : {}),
           ...(event.result.runtime?.resultSourcePolicy ? { resultSourcePolicy: event.result.runtime.resultSourcePolicy } : {}),
