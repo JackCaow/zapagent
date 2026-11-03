@@ -69,6 +69,7 @@ function formatArgs(name: string, args: Record<string, unknown> | undefined): st
   if (args.source) return oneLine(`${normalizePath(String(args.source))} -> ${normalizePath(String(args.destination ?? ""))}`)
   if (args.command ?? args.cmd) return oneLine(String(args.command ?? args.cmd).replace(/\s*\n\s*/g, " "))
   if (name === "bash" && args.check_steps) return oneLine(shellCommandDisplay(args))
+  if (name === "generate_image" && args.output_path) return oneLine(normalizePath(String(args.output_path)))
   if (args.pattern) return oneLine(args.pattern)
   if (args.query) return oneLine(args.query)
   if (args.url) return oneLine(args.url)
@@ -89,7 +90,7 @@ const TOOL_ALIASES: Record<string, string> = {
   read_document: "ReadDocument", read_pdf: "ReadPdf", read_docx: "ReadDocx",
   current_time: "Time", memory_save: "Memory", memory_review: "MemoryReview", memory_merge: "MemoryMerge",
   cron_create: "CronCreate", cron_delete: "CronDelete", cron_list: "CronList",
-  monitor: "Monitor",
+  monitor: "Monitor", generate_image: "GenerateImage",
 }
 
 export function getToolAlias(name: string): string {
@@ -108,7 +109,7 @@ const TOOL_ICONS: Record<string, string> = {
   read_file: "→", write_file: "←", append_file: "+", edit_file: "←", multi_edit: "←",
   delete_file: "✕", move_file: "↔", execute_command: "$", bash: "$",
   glob_files: "✱", search_files: "✱", web_search: "◈", http_fetch: "%",
-  agent: "◇", list_directory: "→",
+  agent: "◇", list_directory: "→", generate_image: "▧",
 }
 
 export function getToolIcon(toolName: string): string {

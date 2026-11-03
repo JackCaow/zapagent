@@ -1,4 +1,4 @@
-import type { SessionUpdate, StopReason, ToolKind } from "@agentclientprotocol/sdk"
+import type { SessionUpdate, StopReason, ToolKind, ToolCallContent } from "@agentclientprotocol/sdk"
 import type { AgentEvent } from "../../zapsdk/agent/events.js"
 
 export function acpStopReason(reason: string): StopReason {
@@ -46,9 +46,11 @@ export class AcpEventMapper {
     }
     if (event.type === "content_final" && event.kind === "tool_result") {
       const text = typeof event.result.output === "string" ? event.result.output : JSON.stringify(event.result.output ?? "")
+      const images: ToolCallContent[] = event.toolName === "generate_image" ? (event.result.contentBlocks ?? []).flatMap(block =>
+        block.type === "image" && block.base64 ? [{ type: "content" as const, content: { type: "image" as const, data: block.base64, mimeType: block.mediaType } }] : []) : []
       return [{ sessionUpdate: "tool_call_update", toolCallId: id(event.id),
         status: event.result.success === false ? "failed" : "completed", rawOutput: event.result,
-        content: [{ type: "content", content: { type: "text", text: event.result.error ?? text } }] }]
+        content: [{ type: "content", content: { type: "text", text: event.result.error ?? text } }, ...images] }]
     }
     return []
   }

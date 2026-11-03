@@ -41,3 +41,14 @@ describe("ACP event translation", () => {
     expect(acpStopReason("end_turn")).toBe("end_turn")
   })
 })
+
+
+it("delivers generated PNGs to ACP clients as native image content", () => {
+  const [update] = new AcpEventMapper("image-turn").map({ type: "content_final", kind: "tool_result", id: "image-call", step: 1,
+    toolName: "generate_image", result: { success: true, output: "saved image.png",
+      contentBlocks: [{ type: "image", filePath: "/workspace/image.png", mediaType: "image/png", base64: "fixture-image", source: "generate_image" }] } })
+  expect(update).toMatchObject({ sessionUpdate: "tool_call_update", status: "completed", content: [
+    { type: "content", content: { type: "text", text: "saved image.png" } },
+    { type: "content", content: { type: "image", data: "fixture-image", mimeType: "image/png" } },
+  ] })
+})

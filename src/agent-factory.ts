@@ -1,3 +1,5 @@
+import { getAppDataDir } from "../zapsdk/utils/platform.js"
+import { generateCodexImage } from "../zapsdk/core/providers/codex-image-generation.js"
 import { modelCanonicalIds } from "./provider-metadata.js"
 import { getCodexCredentials } from "./codex-auth.js"
 import { serviceTools } from "../zapsdk/services/tools.js"
@@ -37,7 +39,7 @@ import { createExecutionEnvironment, resolveExecutionBackend, type ExecutionEnvi
 const CWD_SENSITIVE_TOOLS = new Set([
   "read_file", "write_file", "edit_file", "multi_edit",
   "delete_file", "move_file", "list_tree", "bash",
-  "search_files", "glob_files", "read_document", "browser_screenshot", "delegate_agent",
+  "search_files", "glob_files", "read_document", "browser_screenshot", "delegate_agent", "generate_image",
 ])
 
 function safeHost(url: string): string {
@@ -84,6 +86,11 @@ export function buildAgentObjects(
   const apiKey = rawApiKey || "unconfigured"
   const model = config.active.model
   const maxOutputTokens = getActiveMaxOutputTokens(config)
+  const imageCapability = active?.authMode === "codex-oauth" ? {
+    generate: (request: import("../zapsdk/core/providers/codex-image-generation.js").ImageGenerationRequest, signal?: AbortSignal) =>
+      generateCodexImage({ model: typeof active.extraRequestParams?.model === "string" ? active.extraRequestParams.model : model, getCredentials: getCodexCredentials }, request, signal),
+    artifactDirectory: join(getAppDataDir(), "generated-images"),
+  } : undefined
   // Protocol selection: explicit `protocol` field on the provider wins;
   // fall back to host substring detection so legacy configs (saved before
   // the field existed) still route the official Anthropic endpoint to
@@ -163,6 +170,7 @@ export function buildAgentObjects(
     globFiles: { allowedPaths, useExecutionGrants: true },
     documentRead: { allowedPaths, useExecutionGrants: true },
     browserScreenshot: { allowedPaths },
+    generateImage: imageCapability ? { ...imageCapability, allowedPaths, protectedPaths, useExecutionGrants: true, defaultCwd: effectiveCwd } : undefined,
     executeCommand: {
       timeoutMs: 60000,
       defaultCwd: effectiveCwd,
@@ -241,6 +249,7 @@ export function buildAgentObjects(
       globFiles: { allowedPaths, useExecutionGrants: true },
       documentRead: { allowedPaths, useExecutionGrants: true },
       browserScreenshot: { allowedPaths },
+      generateImage: imageCapability ? { ...imageCapability, allowedPaths, protectedPaths, useExecutionGrants: true, defaultCwd: workspaceCwd } : undefined,
       executeCommand: {
         timeoutMs: 60000,
         defaultCwd: workspaceCwd,
