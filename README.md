@@ -70,7 +70,9 @@ Interact in the terminal and follow task progress in the live browser view.
 
 On first use, enter `/connect` and follow the setup prompts to connect your model service. Then describe what you want: “Read the materials in this folder, summarize the key points, and write a report.”
 
-You need your own model service account and API key; usage is billed by your provider. [Connection guide](docs/usage.md#getting-started).
+Use your model service account and API key, or select **OpenAI Codex (ChatGPT)**
+to sign in with a ChatGPT account using OAuth. Usage and model access depend on
+your provider/account. [Connection guide](docs/usage.md#getting-started).
 
 Update from your terminal with `zap update` (or `zap update --yes` for unattended installation).
 

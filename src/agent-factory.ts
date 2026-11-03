@@ -1,4 +1,5 @@
 import { modelCanonicalIds } from "./provider-metadata.js"
+import { getCodexCredentials } from "./codex-auth.js"
 import { serviceTools } from "../zapsdk/services/tools.js"
 // Builds the per-turn agent objects (provider, registry, executor) from
 // the app config. Split out of App.tsx — pure factory, no React state.
@@ -118,7 +119,11 @@ export function buildAgentObjects(
         "x-stainless-runtime-version": null,
       } as unknown as Record<string, string>
     : undefined
-  const rawProvider = isAnthropic
+  const rawProvider = active?.authMode === "codex-oauth"
+      ? new OpenAIResponsesProvider({ model, codex: { getCredentials: getCodexCredentials },
+          canonicalModelIds: modelCanonicalIds(active), supportsVision: resolveVisionSupport(active, model),
+          extraRequestParams: active.extraRequestParams, maxRequestBytes: active.maxRequestBytes })
+      : isAnthropic
       ? new AnthropicProvider({
           maxRequestBytes: active?.maxRequestBytes,
           canonicalModelIds: modelCanonicalIds(active),

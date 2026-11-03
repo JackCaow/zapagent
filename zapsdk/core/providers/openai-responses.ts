@@ -1,14 +1,22 @@
 import OpenAI from "openai";
 import type { Response as APIResponse, ResponseInputItem, ResponseCreateParams } from "openai/resources/responses/responses";
 import type { LLMProvider, LLMCallOptions } from "../llm.js";
-import type { LLMChunk, LLMResponse, Message, ToolCallRequest } from "../types.js";
+import type { LLMChunk, LLMResponse, Message, ToolCallRequest, TokenUsage } from "../types.js";
 import type { ToolDefinition } from "../../tools/types.js";
 import { canonicalizeJsonSchema, zodToJsonSchema } from "../../tools/schema.js";
 import { ProviderRequest } from "../provider-request.js";
 import { getStreamIdleMs, withStreamIdleTimeout } from "../stream-idle.js";
 import { OpenAICompatibleProvider, type OpenAICompatibleProviderOptions } from "./openai-compatible.js";
+import { stripBoundary } from "../prompt-boundary.js";
 
-export type OpenAIResponsesProviderOptions = OpenAICompatibleProviderOptions;
+export const CODEX_RESPONSES_BASE_URL = "https://chatgpt.com/backend-api/codex";
+export interface OpenAIResponsesProviderOptions extends OpenAICompatibleProviderOptions {
+  /** Host-owned ChatGPT credentials, resolved on each call to allow rotation/logout. */
+  codex?: {
+    getCredentials: (signal?: AbortSignal) => Promise<{ accessToken: string; accountId?: string }>;
+    fetch?: typeof globalThis.fetch;
+  };
+}
 type LayoutItem =
   | { type: "reasoning"; [key: string]: unknown }
   | { type: "message"; length: number; phase?: "commentary" | "final_answer" | null }
@@ -21,13 +29,25 @@ export class OpenAIResponsesProvider implements LLMProvider {
   private formatter: OpenAICompatibleProvider;
 
   constructor(private options: OpenAIResponsesProviderOptions) {
-    this.client = options.client ?? new OpenAI({ apiKey: options.apiKey ?? process.env.OPENAI_API_KEY,
+    this.client = options.codex ? new OpenAI({ apiKey: "oauth-pending", baseURL: CODEX_RESPONSES_BASE_URL, maxRetries: 0 })
+      : options.client ?? new OpenAI({ apiKey: options.apiKey ?? process.env.OPENAI_API_KEY,
       baseURL: options.baseURL, defaultHeaders: options.defaultHeaders, maxRetries: 0 });
     this.formatter = new OpenAICompatibleProvider({ ...options, client: this.client });
   }
 
   setVisionSupported(supported: boolean): void { this.formatter.setVisionSupported(supported); }
   getImageTokenContext(options?: LLMCallOptions) { return this.formatter.getImageTokenContext(options); }
+
+  private async requestClient(request: ProviderRequest): Promise<OpenAI> {
+    const codex = this.options.codex;
+    if (!codex) return this.client;
+    const credentials = await request.wait(codex.getCredentials(request.signal));
+    request.signal.throwIfAborted();
+    // OAuth tokens are never sent to a user-configurable endpoint/client.
+    return new OpenAI({ baseURL: CODEX_RESPONSES_BASE_URL, apiKey: credentials.accessToken, maxRetries: 0,
+      fetch: codex.fetch, defaultHeaders: { originator: "zap",
+        ...(credentials.accountId ? { "ChatGPT-Account-ID": credentials.accountId } : {}) } });
+  }
 
   serializeMessages(messages: Message[]): ResponseInputItem[] {
     // Reuse image degradation, tool-image grouping, text sanitization and late
@@ -94,7 +114,7 @@ export class OpenAIResponsesProvider implements LLMProvider {
     delete extra.conversation;
     delete extra.background;
     const include = Array.isArray(extra.include) ? extra.include.filter(value => typeof value === "string") : [];
-    return {
+    const body = {
       model: opts?.model ?? this.options.model,
       max_output_tokens: opts?.maxOutputTokens ?? this.options.maxTokens ?? 4096,
       ...extra,
@@ -107,6 +127,18 @@ export class OpenAIResponsesProvider implements LLMProvider {
       store: false,
       stream,
     } as ResponseCreateParams;
+    if (this.options.codex) {
+      let leadingSystemEnd = 0;
+      while (messages[leadingSystemEnd]?.role === "system") leadingSystemEnd++;
+      body.instructions = messages.slice(0, leadingSystemEnd).map(message => stripBoundary(message.content)).join("\n\n");
+      body.input = this.serializeMessages(messages.slice(leadingSystemEnd));
+      // Codex requires SSE and rejects generation controls accepted by the API.
+      delete body.max_output_tokens;
+      delete body.temperature;
+      delete body.top_p;
+      body.stream = true;
+    }
+    return body;
   }
 
   private parse(response: APIResponse): LLMResponse {
@@ -150,6 +182,7 @@ export class OpenAIResponsesProvider implements LLMProvider {
   }
 
   async call(messages: Message[], tools?: ToolDefinition[], opts?: LLMCallOptions): Promise<LLMResponse> {
+    if (this.options.codex) return this.collectCodexStream(messages, tools, opts);
     const request = new ProviderRequest(opts);
     try {
       const body = this.body(messages, tools, opts, false);
@@ -161,6 +194,30 @@ export class OpenAIResponsesProvider implements LLMProvider {
     } finally { request.close(); }
   }
 
+  private async collectCodexStream(messages: Message[], tools?: ToolDefinition[], opts?: LLMCallOptions): Promise<LLMResponse> {
+    let text = "";
+    let usage: TokenUsage = { inputTokens: 0, outputTokens: 0, providerUsageReported: false };
+    let finishReason: string | undefined;
+    let raw: Record<string, unknown> | undefined;
+    const pending = new Map<string, { name: string; json: string }>();
+    for await (const chunk of this.stream(messages, tools, opts)) {
+      if (chunk.type === "text_delta") text += chunk.text;
+      if (chunk.type === "tool_call_start") pending.set(chunk.toolCallId, { name: chunk.toolName, json: "" });
+      if (chunk.type === "tool_call_delta") { const call = pending.get(chunk.toolCallId); if (call) call.json += chunk.partialJson; }
+      if (chunk.type === "done") { usage = chunk.usage; finishReason = chunk.finishReason; raw = chunk.raw; }
+    }
+    opts?.signal?.throwIfAborted();
+    const toolCalls: ToolCallRequest[] = [...pending].map(([id, call]) => {
+      try {
+        const args = JSON.parse(call.json);
+        if (!args || typeof args !== "object" || Array.isArray(args)) throw new Error();
+        return { id, name: call.name, arguments: args };
+      } catch { return { id, name: call.name, arguments: {}, argumentParseError: "Malformed tool arguments JSON from provider: expected an object." }; }
+    });
+    return { type: toolCalls.length ? "tool_call" : "text", text,
+      toolCalls: toolCalls.length ? toolCalls : undefined, usage, finishReason, raw };
+  }
+
   async *stream(messages: Message[], tools?: ToolDefinition[], opts?: LLMCallOptions): AsyncIterable<LLMChunk> {
     const request = new ProviderRequest(opts);
     yield* request.watch(this.streamResponse(messages, tools, opts, request));
@@ -168,8 +225,9 @@ export class OpenAIResponsesProvider implements LLMProvider {
 
   private async *streamResponse(messages: Message[], tools: ToolDefinition[] | undefined, opts: LLMCallOptions | undefined, request: ProviderRequest): AsyncIterable<LLMChunk> {
     const body = this.body(messages, tools, opts, true);
-    request.measureBody(body, this.options.maxRequestBytes, `responses:${this.options.baseURL ?? this.options.client?.baseURL ?? "default"}`);
-    const stream = await this.client.responses.create({ ...body, stream: true }, { signal: request.signal, maxRetries: 0 });
+    request.measureBody(body, this.options.maxRequestBytes, `responses:${this.options.codex ? CODEX_RESPONSES_BASE_URL : this.options.baseURL ?? this.options.client?.baseURL ?? "default"}`);
+    const client = await this.requestClient(request);
+    const stream = await request.wait(client.responses.create({ ...body, stream: true }, { signal: request.signal, maxRetries: 0 }));
     request.responseReceived();
     let emittedText = "";
     try {

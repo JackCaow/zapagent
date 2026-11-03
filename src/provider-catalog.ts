@@ -2,6 +2,7 @@ import { listModels } from "../zapsdk/core/list-models.js"
 import { getModelsDevProvider, suggestedModelsDevIds, type ModelsDevProvider } from "../zapsdk/core/models-dev.js"
 import { resolveCatalogProviderId, upsertProvider, setActive, type AppConfig, type Provider, type ProviderModelMetadata } from "./config.js"
 import { enrichProviderMetadata, mergeModelMetadata, modelsDevMetadata, pickModelMetadata } from "./provider-metadata.js"
+import { discoverCodexModels } from "./codex-provider.js"
 
 export type ModelSource = "saved" | "provider" | "models.dev" | "manual"
 export interface CatalogRow { id: string; source: ModelSource; metadata?: ProviderModelMetadata }
@@ -27,6 +28,16 @@ export function associateModelMetadata(config: AppConfig, providerId: string, mo
 
 /** Discovery is read-only: returning a model is not proof of inference access. */
 export async function discoverProviderModels(provider: Provider, signal: AbortSignal): Promise<DiscoveredCatalog> {
+  if (provider.authMode === "codex-oauth") {
+    const rows = new Map<string, CatalogRow>(provider.models.map(id => [id, { id, source: "saved", metadata: provider.modelMetadata?.[id] }]))
+    try {
+      for (const row of await discoverCodexModels(signal)) rows.set(row.id, { ...row, source: "provider" })
+      return { rows: [...rows.values()] }
+    } catch (error) {
+      signal.throwIfAborted()
+      return { rows: [...rows.values()], error: error instanceof Error ? error.message : "Codex model discovery failed. Sign in again with /connect." }
+    }
+  }
   const catalogId = resolveCatalogProviderId(provider)
   const [live, catalog] = await Promise.allSettled([
     listModels(provider.baseURL, provider.authMode === "none" ? "" : provider.apiKey, 6000, signal, provider.protocol),

@@ -26,6 +26,9 @@ Options:
   --watch-no-open   Print the Watch URL without opening a browser
   --watch-linger <s> Keep the headless viewer available after a run (0..300)
   --help-headless   Show non-interactive (headless) mode flags
+  auth login codex Sign in to Codex with ChatGPT (--device-code for SSH)
+  auth logout codex Remove Zap's Codex credentials
+  auth status codex Show Zap's Codex login status
   update [--yes]   Check, confirm and install the latest version
   acp              Serve Agent Client Protocol v1 over stdio (no TUI)
   workflow         Inspect, wait for or cancel a persisted workflow (--db required)
@@ -60,6 +63,11 @@ Keys:
 if (args.includes("--version") || args.includes("-v")) {
   console.log(`zapAgent v${VERSION}`)
   process.exit(0)
+}
+
+if (args[0] === "auth") {
+  const { runCodexAuthCommand } = await import("./codex-auth-command.js")
+  process.exit(await runCodexAuthCommand(args.slice(1)))
 }
 
 if (args[0] === "update") {

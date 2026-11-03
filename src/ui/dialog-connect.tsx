@@ -12,12 +12,14 @@ import { commandInput, isReturnInput } from "./controlled-input.js"
 import { c } from "./theme.js"
 import { ModelDialog } from "./dialog-model.js"
 import { ContextWindowDialog } from "./dialog-context-window.js"
+import { CodexLoginDialog } from "./dialog-codex-login.js"
+import { connectCodexProvider } from "../codex-provider.js"
 
 interface Props { config: AppConfig; onSave: (next: AppConfig) => void; onCommit: (next: AppConfig) => void; onCancel: () => void }
 type Draft = { name: string; baseURL: string; apiKey: string; protocol: ProviderProtocol;
   authMode: "none" | "api-key"; catalogProviderId?: string; existing?: Provider;
   contextWindow?: number; contextWindowMode?: ContextWindowMode }
-type Step = "connections" | "preset" | "name" | "endpoint" | "protocol" | "auth" | "key" | "context" | "review"
+type Step = "connections" | "preset" | "name" | "endpoint" | "protocol" | "auth" | "key" | "context" | "review" | "codex"
 
 export function saveConnection(config: AppConfig, draft: Draft): AppConfig {
   const existing = draft.existing
@@ -73,6 +75,7 @@ export function ConnectDialog({ config, onSave, onCommit, onCancel }: Props) {
     if (cmd === "d" && provider) { setDeleting(true); return }
     if (isReturnInput(input, key) || cmd === "e") {
       if (!provider) { setStep("preset"); return }
+      if (provider.authMode === "codex-oauth") { setStep("codex"); return }
       setDraft({ existing: provider, name: provider.name, baseURL: provider.baseURL,
         apiKey: provider.apiKey, protocol: provider.protocol ?? "openai",
         authMode: provider.authMode ?? (provider.apiKey ? "api-key" : "none"), catalogProviderId: provider.catalogProviderId })
@@ -90,7 +93,7 @@ export function ConnectDialog({ config, onSave, onCommit, onCancel }: Props) {
     <Box flexDirection="column" marginTop={1}>
       {config.providers.map((provider, i) => <Box key={provider.id} flexDirection="column">
         <Text color={i === index ? c.accent : c.text.primary}>{`${i === index ? "›" : " "} ${provider.name || "Unnamed connection"}`}</Text>
-        <Text color={c.text.faint}>{`  ${provider.protocol ?? "openai"} · ${provider.apiKey ? "API key stored" : "no key"} · ${provider.models.length} saved models`}</Text>
+        <Text color={c.text.faint}>{`  ${provider.authMode === "codex-oauth" ? "Codex Responses · ChatGPT OAuth" : `${provider.protocol ?? "openai"} · ${provider.apiKey ? "API key stored" : "no key"}`} · ${provider.models.length} saved models`}</Text>
         <Text color={c.text.faint}>{`  ${provider.baseURL}`}</Text>
       </Box>)}
       <Text color={index === config.providers.length ? c.accent : c.text.primary}>{`${index === config.providers.length ? "›" : " "} + New connection`}</Text>
@@ -98,7 +101,13 @@ export function ConnectDialog({ config, onSave, onCommit, onCancel }: Props) {
     {deleting && <Text color={c.warning}>Remove connection and its saved model preferences?</Text>}
   </DialogFrame>
 
-  if (step === "preset") return <ProviderDirectory
+  if (step === "codex") return <CodexLoginDialog onCancel={() => setStep("connections")} onSuccess={() => {
+    const result = connectCodexProvider(live.current.config)
+    onSave(result.config)
+    setModelTarget({ id: result.provider.id, setup: true })
+  }} />
+
+  if (step === "preset") return <ProviderDirectory onCodex={() => setStep("codex")}
     onCancel={() => setStep("connections")} onSelect={provider => {
       setDraft({ catalogProviderId: provider?.id, name: provider?.name ?? "", baseURL: provider?.api ?? "", apiKey: "",
         protocol: provider?.protocol ?? "openai", authMode: "api-key" })

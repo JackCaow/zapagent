@@ -10,11 +10,11 @@ import { useTermWidth } from "./term-width.js"
 import { truncateToWidth } from "./truncate.js"
 import { c } from "./theme.js"
 
-interface Props { onSelect: (provider: ModelsDevConnection | null) => void; onCancel: () => void; metadataOnly?: boolean }
+interface Props { onSelect: (provider: ModelsDevConnection | null) => void; onCancel: () => void; metadataOnly?: boolean; onCodex?: () => void }
 
 /** Public directory data supplies vendor names and endpoints; adapters only
  * constrain which wire protocols the installed runtime actually supports. */
-export function ProviderDirectory({ onSelect, onCancel, metadataOnly = false }: Props) {
+export function ProviderDirectory({ onSelect, onCancel, metadataOnly = false, onCodex }: Props) {
   const [providers, setProviders] = useState<ModelsDevConnection[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
@@ -60,11 +60,13 @@ export function ProviderDirectory({ onSelect, onCancel, metadataOnly = false }: 
       maxRows={Math.max(3, Math.min(10, (process.stdout.rows ?? 24) - 15))}
       hint="↑↓ select · enter configure · / search · r reload · esc back"
       options={[...(!metadataOnly ? [{ id: "__custom", label: "Custom endpoint", meta: "configure manually" }] : []),
+        ...(!metadataOnly && onCodex ? [{ id: "__codex", label: "OpenAI Codex (ChatGPT)", meta: "OAuth · sign in with ChatGPT" }] : []),
         ...visible.map(provider => ({ id: `catalog:${provider.id}`, label: truncateToWidth(provider.name, labelWidth),
           meta: truncateToWidth(provider.protocol ? `${provider.protocol}${provider.api ? " · endpoint provided" : " · enter endpoint"}` : "unsupported adapter", width - labelWidth - 2),
           disabled: !metadataOnly && !provider.protocol }))]}
       onCancel={onCancel} onSelect={id => {
         if (id === "__custom") onSelect(null)
+        else if (id === "__codex") onCodex?.()
         else {
           const provider = providers.find(item => item.id === id.slice("catalog:".length))
           if (provider && (metadataOnly || provider.protocol)) onSelect(provider)
