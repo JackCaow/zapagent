@@ -48,7 +48,8 @@ ptyTest("real App guides connection creation into model selection, skip and repa
   const key = async (...keys: string[]) => { tmux("send-keys", "-t", "setup", ...keys); await sleep(180) }
   const literal = async (value: string) => { tmux("send-keys", "-t", "setup", "-l", value); await sleep(180) }
   const command = async (value: string) => {
-    await literal(value)
+    // Finish a slash token before Enter so completion cannot consume submit.
+    await literal(value.startsWith("/") ? `${value} ` : value)
     if (value.startsWith("/")) await visible(value)
     await sleep(250)
     await key("Enter")
