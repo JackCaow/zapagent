@@ -11,11 +11,12 @@ ptyTest("aggregate model picker retains ownership and selection across discovery
   const root = mkdtempSync(join(tmpdir(), "zap-model-aggregate-")), previous = process.env.ZAPCODE_DATA_DIR
   process.env.ZAPCODE_DATA_DIR = root
   let alphaRequests = 0, betaRequests = 0
+  let slowAlpha = false
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     const path = new URL(request.url).pathname
     if (path === "/alpha/v1/models") {
       alphaRequests++
-      await sleep(2000)
+      await sleep(slowAlpha ? 4000 : 2000)
       return Response.json({ data: [{ id: "shared" }, { id: "alpha-live" }] })
     }
     if (path === "/beta/v1/models") { betaRequests++; return new Response("offline fixture", { status: 503 }) }
@@ -23,7 +24,7 @@ ptyTest("aggregate model picker retains ownership and selection across discovery
   } })
   const providers = ["Alpha", "Beta"].map((name, index) => ({ ...createCustomProvider({ name,
     baseURL: `http://127.0.0.1:${server.port}/${name.toLowerCase()}/v1`, apiKey: `fixture-${name}`,
-    models: index === 0 ? ["shared"] : ["shared", "beta-only"], contextWindow: index === 0 ? 128000 : 64000 }), id: name.toLowerCase(), contextWindowMode: "manual" as const }))
+    models: index === 0 ? ["shared"] : ["shared", "beta-live"], contextWindow: index === 0 ? 128000 : 64000 }), id: name.toLowerCase(), contextWindowMode: "manual" as const }))
   saveAppConfig(join(root, "config.json"), { ...getDefaultConfig(), providers, active: { providerId: "alpha", model: "shared" }, executionBackend: "local" })
   const config = () => JSON.parse(readFileSync(join(root, "config.json"), "utf8"))
   const socket = `zap-models-${process.pid}-${Date.now()}`, frames: string[] = []
@@ -62,6 +63,16 @@ ptyTest("aggregate model picker retains ownership and selection across discovery
     expect(config().active).toEqual({ providerId: "beta", model: "shared" })
     expect(config().providers.find((p: { id: string }) => p.id === "beta").apiKey).toBe("fixture-Beta")
     tmux("kill-session", "-t", "models"); launch(); await visible("Beta/shared")
+    slowAlpha = true
+    await command("/model"); await visible("All connections")
+    await key("/"); await visible("Filter models and connections"); text("live"); await key("Enter")
+    await visible("› beta-live")
+    captured = await visible("alpha-live")
+    expect(captured).toContain("› beta-live")
+    expect(captured).toContain("Beta: manual context 64,000")
+    frames.push(tmux("capture-pane", "-e", "-p", "-t", "models"))
+    await key("Enter"); await visible("Beta/beta-live")
+    expect(config().active).toEqual({ providerId: "beta", model: "beta-live" })
     await command("/model"); await visible("All connections")
     await key("p"); await visible("All configured connections"); await key("Down", "Down", "Enter")
     captured = await visible("Models · Beta")

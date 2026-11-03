@@ -46,12 +46,16 @@ const fixture = String.raw`
   render(); input("c", {}); render();
   props = { ...props, config: { ...config, providers: [providers[0]] } };
   render(); input("", { escape: true }); const cancelledAfterRemoval = cancelled;
+  slots = []; props = { ...props, config };
+  render(); input("p", {}); render();
+  props = { ...props, config: { ...config, providers: [] } };
+  render(); input("", { escape: true }); const cancelledInPicker = cancelled;
   slots = []; props = { ...props, config: { ...config, providers: [] } };
   render(); input("t", {}); render(); input("p", {}); render(); input("", { escape: true });
-  const emptyEscWorks = cancelled === cancelledAfterRemoval + 1;
+  const emptyEscWorks = cancelled === cancelledInPicker + 1;
   slots = []; props = { ...props, config, initialProviderId: "Beta", setup: true };
   const setup = render();
-  console.log(JSON.stringify({ selected, contextBefore, contextSaved, metadataSaved, manualOptions, manualSaved, cancelledAfterRemoval, emptyEscWorks, setupText: text(setup) }));
+  console.log(JSON.stringify({ selected, contextBefore, contextSaved, metadataSaved, manualOptions, manualSaved, cancelledAfterRemoval, cancelledInPicker, emptyEscWorks, setupText: text(setup) }));
 `
 
 it("model dialog binds selection and edits to the highlighted connection, preserves setup scope and stays dismissible", () => {
@@ -71,6 +75,7 @@ it("model dialog binds selection and edits to the highlighted connection, preser
     expect(result.manualOptions).toEqual(["provider:Alpha", "provider:Beta"])
     expect(result.manualSaved.active).toEqual({ providerId: "Beta", model: "alias" })
     expect(result.cancelledAfterRemoval).toBe(1)
+    expect(result.cancelledInPicker).toBe(2)
     expect(result.emptyEscWorks).toBe(true)
     expect(result.setupText).toContain("Beta ·")
     expect(result.setupText).not.toContain("Alpha ·")

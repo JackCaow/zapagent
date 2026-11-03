@@ -40,12 +40,18 @@ export function ModelDialog({ config, initialProviderId, setup = false, onSave, 
   const shown = configuredModelRows(config.providers, catalogs, providerFilter, query)
   const selectedIndex = Math.max(0, shown.findIndex(row => modelCatalogKey(row.provider.id, row.id) === selectedKey))
   const selected = shown[selectedIndex]
+  const displayedKey = selected ? modelCatalogKey(selected.provider.id, selected.id) : null
+  // Pin a fallback as soon as it is displayed. Later discovery may insert rows
+  // before it, including after a search/filter removed the previous selection.
+  useEffect(() => {
+    if (displayedKey !== null && displayedKey !== selectedKey) setSelectedKey(displayedKey)
+  }, [displayedKey, selectedKey])
   const provider = selected?.provider ?? config.providers.find(item => item.id === providerFilter)
     ?? config.providers.find(item => item.id === config.active.providerId) ?? config.providers[0]
   const targetProvider = config.providers.find(item => item.id === target?.provider.id)
   const manualProvider = config.providers.find(item => item.id === manualProviderId)
   const orphanedPhase = (phase === "metadata" || phase === "context") && !targetProvider || phase === "manual" && !manualProvider
-  const currentPhase = orphanedPhase ? "models" : phase
+  const currentPhase = !provider || orphanedPhase ? "models" : phase
   const live = useRef({ phase: currentPhase, selectedIndex, shown, config, provider, providerFilter, onCommit, onCancel })
   live.current = { phase: currentPhase, selectedIndex, shown, config, provider, providerFilter, onCommit, onCancel }
 
