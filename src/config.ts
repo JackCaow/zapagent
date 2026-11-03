@@ -1,3 +1,4 @@
+import { modelReasoningFor, normalizeReasoningMap, resolveModelEffort, effortName, type ModelReasoning } from "../zapsdk/core/reasoning-effort.js"
 import { deriveCompactionThresholds } from "../zapsdk/context/compact-budget.js"
 import { canonicalModelId } from "../zapsdk/core/model-identity.js"
 import { existsSync, readFileSync } from "node:fs"
@@ -117,6 +118,10 @@ export interface Provider {
    *  hints apply; unknown capability preserves images. The host can persist
    *  LoopAgent's bounded image-rejection fallback here for subsequent runs. */
   visionByModel?: Record<string, boolean>
+  /** Authenticated capabilities, independent of public catalog alias metadata. */
+  reasoningByModel?: Record<string, ModelReasoning>
+  /** Codex model preferences; null explicitly uses the server default. */
+  effortByModel?: Record<string, string | null>
 }
 
 export interface CompactionConfig {
@@ -461,6 +466,9 @@ function normalizeProvider(value: unknown, index: number): Provider | null {
       : [],
     protocol: value.protocol === "anthropic" || value.protocol === "openai" || value.protocol === "openai-responses" ? value.protocol : undefined,
     modelMetadata,
+    reasoningByModel: normalizeReasoningMap(value.reasoningByModel),
+    effortByModel: isRecord(value.effortByModel) ? Object.fromEntries(Object.entries(value.effortByModel)
+      .filter(([model, effort]) => !!model && model.length <= 256 && !/[\x00-\x1f\x7f]/.test(model) && (effort === null || effortName(effort)))) : undefined,
   } as Provider
   provider.contextWindowMode = value.contextWindowMode === "auto" || value.contextWindowMode === "manual"
     ? value.contextWindowMode
@@ -813,11 +821,16 @@ export function removeModelFromProvider(config: AppConfig, providerId: string, m
 // reasoning_effort`; "unset" = key absent, server uses its own default.
 // The Responses adapter maps this setting to `reasoning.effort`.
 
-/** Values the /model picker cycler offers for this provider. Falls back to
- *  the default set when the preset doesn't constrain the range. `[]` means
- *  the provider has no reasoning mode and the cycler should be hidden. */
+/** The request-body model override also controls the effort capability lookup. */
+export function effortModel(config: AppConfig, provider: Provider): string {
+  return typeof provider.extraRequestParams?.model === "string" ? provider.extraRequestParams.model
+    : config.active.providerId === provider.id ? config.active.model : provider.models[0] ?? ""
+}
+
+/** OAuth uses exact model capabilities; other providers keep preset/passthrough behavior. */
 export function getEffortValuesForProvider(config: AppConfig, providerId: string): readonly string[] {
   const p = config.providers.find(x => x.id === providerId)
+  if (p?.authMode === "codex-oauth") return modelReasoningFor(p.reasoningByModel, effortModel(config, p))?.levels.map(level => level.effort) ?? []
   const preset = p?.sourcePresetId ? presetMap.get(p.sourcePresetId) : undefined
   return preset?.effortValues ?? DEFAULT_EFFORT_VALUES
 }
@@ -830,6 +843,7 @@ export function getEffortValuesForProvider(config: AppConfig, providerId: string
  *  upstream server enforce its own rules. */
 export function hasDeclaredEffortValues(config: AppConfig, providerId: string): boolean {
   const p = config.providers.find(x => x.id === providerId)
+  if (p?.authMode === "codex-oauth") return !!modelReasoningFor(p.reasoningByModel, effortModel(config, p))
   const preset = p?.sourcePresetId ? presetMap.get(p.sourcePresetId) : undefined
   return preset?.effortValues !== undefined
 }
@@ -861,6 +875,13 @@ export function resolveEffortInput(
 /** Current effort, or undefined if unset (= use server default). */
 export function getEffort(config: AppConfig, providerId: string): string | undefined {
   const p = config.providers.find(x => x.id === providerId)
+  if (p?.authMode === "codex-oauth") {
+    const model = effortModel(config, p)
+    const nested = p.extraRequestParams?.reasoning as { effort?: unknown } | undefined
+    const value = Object.hasOwn(p.effortByModel ?? {}, model) ? p.effortByModel![model]
+      : typeof p.extraRequestParams?.reasoning_effort === "string" ? p.extraRequestParams.reasoning_effort : nested?.effort
+    return resolveModelEffort(modelReasoningFor(p.reasoningByModel, model), value)
+  }
   const v = p?.extraRequestParams?.reasoning_effort
   return typeof v === "string" ? v : undefined
 }
@@ -872,6 +893,7 @@ export function setEffort(config: AppConfig, providerId: string, value: string |
   const providers = config.providers.map(p => {
     if (p.id !== providerId) return p
     const extra = { ...(p.extraRequestParams ?? {}) }
+    if (p.authMode === "codex-oauth") return { ...p, effortByModel: { ...p.effortByModel, [effortModel(config, p)]: value } }
     if (value === null) delete extra.reasoning_effort
     else extra.reasoning_effort = value
     return { ...p, extraRequestParams: extra }

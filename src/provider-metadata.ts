@@ -1,3 +1,4 @@
+import { discoverCodexModels } from "./codex-provider.js"
 import type { ImageTokenContext } from "../zapsdk/context/image-tokens.js"
 import { canonicalModelId } from "../zapsdk/core/model-identity.js"
 import {
@@ -83,6 +84,14 @@ export function enrichProviderMetadata(provider: Provider, catalog: ModelsDevPro
 export async function refreshModelsDevMetadata(config: AppConfig): Promise<AppConfig> {
   const providers = await Promise.all(config.providers.map(async provider => {
     if (provider.models.length === 0) return provider
+    if (provider.authMode === "codex-oauth") {
+      try {
+        const rows = await discoverCodexModels(AbortSignal.timeout(6500))
+        const reasoningByModel = Object.fromEntries(rows.flatMap(row => row.reasoning ? [[row.id, row.reasoning]] : []))
+        return JSON.stringify(reasoningByModel) === JSON.stringify(provider.reasoningByModel ?? {})
+          ? provider : { ...provider, reasoningByModel }
+      } catch { return provider }
+    }
     const ids = new Set([resolveCatalogProviderId(provider), ...provider.models.map(id =>
       provider.modelMetadata?.[id]?.catalogRef?.providerId)].filter((id): id is string => !!id))
     const catalogs = await Promise.all([...ids].map(id => getModelsDevProvider(id).catch(() => null)))
@@ -124,7 +133,7 @@ export function applyMetadataRefresh(current: AppConfig, initial: AppConfig, ref
     const after = refreshed.providers.find(item => item.id === provider.id)
     if (!before || !after || before === after || provider !== before) return provider
     return { ...provider, contextWindow: after.contextWindow,
-      contextWindowMode: after.contextWindowMode, modelMetadata: after.modelMetadata }
+      contextWindowMode: after.contextWindowMode, modelMetadata: after.modelMetadata, reasoningByModel: after.reasoningByModel }
   })
   return providers.every((provider, index) => provider === current.providers[index])
     ? current : { ...current, providers }

@@ -7,6 +7,7 @@ import { canonicalizeJsonSchema, zodToJsonSchema } from "../../tools/schema.js";
 import { ProviderRequest } from "../provider-request.js";
 import { getStreamIdleMs, withStreamIdleTimeout } from "../stream-idle.js";
 import { OpenAICompatibleProvider, type OpenAICompatibleProviderOptions } from "./openai-compatible.js";
+import { modelReasoningFor, resolveModelEffort, type ModelReasoning } from "../reasoning-effort.js";
 import { stripBoundary } from "../prompt-boundary.js";
 
 export const CODEX_RESPONSES_BASE_URL = "https://chatgpt.com/backend-api/codex";
@@ -15,6 +16,8 @@ export interface OpenAIResponsesProviderOptions extends OpenAICompatibleProvider
   codex?: {
     getCredentials: (signal?: AbortSignal) => Promise<{ accessToken: string; accountId?: string }>;
     fetch?: typeof globalThis.fetch;
+    reasoningByModel?: Record<string, ModelReasoning>;
+    effortByModel?: Record<string, string | null>;
   };
 }
 type LayoutItem =
@@ -128,6 +131,15 @@ export class OpenAIResponsesProvider implements LLMProvider {
       stream,
     } as ResponseCreateParams;
     if (this.options.codex) {
+      const { reasoningByModel, effortByModel } = this.options.codex;
+      const model = body.model ?? "";
+      const reasoning = { ...body.reasoning };
+      const value = Object.hasOwn(effortByModel ?? {}, model) ? effortByModel![model] : reasoning.effort;
+      const effort = resolveModelEffort(modelReasoningFor(reasoningByModel, model), value);
+      if (effort === undefined) delete reasoning.effort;
+      else reasoning.effort = effort as typeof reasoning.effort;
+      if (Object.keys(reasoning).length) body.reasoning = reasoning;
+      else delete body.reasoning;
       let leadingSystemEnd = 0;
       while (messages[leadingSystemEnd]?.role === "system") leadingSystemEnd++;
       body.instructions = messages.slice(0, leadingSystemEnd).map(message => stripBoundary(message.content)).join("\n\n");

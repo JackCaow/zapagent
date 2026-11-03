@@ -97,7 +97,7 @@ Git workspaces also require [Git](https://git-scm.com).
 | Linux | [ARM64](https://github.com/JackCaow/zapagent/releases/latest/download/zap-linux-arm64) · [x64](https://github.com/JackCaow/zapagent/releases/latest/download/zap-linux-x64) |
 | Windows | [x64](https://github.com/JackCaow/zapagent/releases/latest/download/zap-windows-x64.exe) |
 
-**Model configuration** — use `/model` to choose a model and `/effort` to adjust supported reasoning settings. For custom services, enter the Base URL and API key in `/connect` and select the service's API protocol; choose **OpenAI Responses** for a Responses endpoint. [Responses configuration](docs/usage.md#openai-responses-api).
+**Model configuration** — use `/model` to choose a model and `/effort` to adjust supported reasoning settings. For custom services, enter the Base URL and API key in `/connect` and select the service's API protocol; choose **OpenAI Responses** for a Responses endpoint. [Responses configuration](docs/usage.md#openai-responses-api). Codex OAuth reads reasoning levels, descriptions and the default from the current model’s authenticated catalog. Choices are saved per model; **default** (or `/effort off`) lets the server choose. Saved capabilities remain available offline. [Terminal recording](docs/recordings/model-effort.cast).
 
 **From source** — the repository pins Bun 1.3.14:
 

@@ -95,3 +95,37 @@ test("Codex request timeout also bounds credential resolution", async () => {
   await expect(provider.call(messages, undefined, { requestTimeoutMs: 20 })).rejects.toThrow("REQUEST_TIMEOUT");
   expect(fetched).toBe(false);
 });
+
+
+test("Codex resolves effort per final wire model for call/stream and honors explicit default over flat/nested legacy settings", async () => {
+  const profiles = { full: { levels: ["low", "max", "ultra"].map(effort => ({ effort })) }, small: { levels: [{ effort: "low" }] }, empty: { levels: [] } };
+  const preferences: Record<string, string | null> = { full: "ULTRA", small: "max" };
+  const extra: Record<string, unknown> = { reasoning_effort: "max", reasoning: { summary: "auto", effort: "high" } };
+  const bodies: any[] = [];
+  const provider = new OpenAIResponsesProvider({ model: "full", extraRequestParams: extra, codex: {
+    getCredentials: async () => ({ accessToken: "fixture" }), reasoningByModel: profiles, effortByModel: preferences,
+    fetch: (async (_url, init) => { bodies.push(JSON.parse(String(init?.body))); return reply([terminal([text("ok")])]); }) as typeof fetch,
+  } });
+  await provider.call(messages);
+  expect(bodies.at(-1).reasoning).toEqual({ effort: "ultra", summary: "auto" });
+  for (const model of ["small", "empty"]) {
+    for await (const _chunk of provider.stream(messages, undefined, { model })) { /* consume */ }
+    expect(bodies.at(-1).reasoning).toEqual({ summary: "auto" });
+  }
+  preferences.full = null;
+  await provider.call(messages);
+  expect(bodies.at(-1).reasoning).toEqual({ summary: "auto" });
+  delete preferences.full;
+  delete extra.reasoning_effort;
+  await provider.call(messages);
+  expect(bodies.at(-1).reasoning).toEqual({ summary: "auto" }); // nested high unsupported
+  extra.model = "small";
+  extra.reasoning_effort = "ultra";
+  await provider.call(messages, undefined, { model: "full" });
+  expect(bodies.at(-1).model).toBe("small");
+  expect(bodies.at(-1).reasoning).toEqual({ summary: "auto" });
+  delete extra.model;
+  await provider.call(messages, undefined, { model: "unknown" });
+  expect(bodies.at(-1).reasoning.effort).toBe("ultra"); // unknown profile preserves legacy passthrough
+  expect(extra.reasoning).toEqual({ summary: "auto", effort: "high" });
+});

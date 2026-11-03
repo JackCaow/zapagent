@@ -3,7 +3,12 @@
 // dialogs: Model, Mode, Effort. Kept in one file because they share the
 // same 30-line shape — caller hands in `{config, onCommit, onCancel}`,
 // the dialog wires options + commit semantics around PickerDialog.
+import { modelReasoningFor } from "../../zapsdk/core/reasoning-effort.js"
+import { useEffect, useState } from "react"
+import { discoverCodexModels } from "../codex-provider.js"
 import {
+  effortModel,
+  upsertProvider,
   getActiveProvider,
   getEffort,
   setEffort,
@@ -48,37 +53,53 @@ export function ModeDialog({ config, onCommit, onCancel }: DialogProps) {
 // ── Effort picker ────────────────────────────────────────────────────────
 export function EffortDialog({ config, onCommit, onCancel }: DialogProps) {
   const provider = getActiveProvider(config)
-  const values = provider ? getEffortValuesForProvider(config, provider.id) : []
-  if (!provider || values.length === 0) {
-    return (
-      <PickerDialog
-        title="Reasoning effort"
-        options={[{ id: "__none", label: "Active provider does not expose reasoning_effort", disabled: true }]}
-        onCancel={onCancel}
-        onSelect={onCancel}
-      />
-    )
+  // A changed connection remounts the fetch and picker, including its cursor.
+  return <ModelEffortDialog key={provider ? `${provider.id}:${effortModel(config, provider)}` : "none"}
+    config={config} onCommit={onCommit} onCancel={onCancel} />
+}
+
+function ModelEffortDialog({ config, onCommit, onCancel }: DialogProps) {
+  const provider = getActiveProvider(config)
+  const [snapshot, setSnapshot] = useState<{ provider: typeof provider; rows: Awaited<ReturnType<typeof discoverCodexModels>> }>()
+  const [status, setStatus] = useState("Loading model capabilities…")
+  useEffect(() => {
+    if (provider?.authMode !== "codex-oauth") return
+    const controller = new AbortController()
+    setStatus("Loading model capabilities…")
+    discoverCodexModels(controller.signal).then(rows => {
+      if (controller.signal.aborted) return
+      setSnapshot({ provider, rows })
+      setStatus("Model has not advertised reasoning levels")
+    }, () => {
+      if (!controller.signal.aborted) setStatus("Discovery unavailable; using saved model capabilities")
+    })
+    return () => controller.abort()
+  }, [provider])
+  let latest = config
+  if (provider && snapshot?.provider === provider) {
+    const reasoningByModel = Object.fromEntries(snapshot.rows.flatMap(row => row.reasoning ? [[row.id, row.reasoning]] : []))
+    latest = upsertProvider(config, { ...provider, reasoningByModel })
   }
-  const current = getEffort(config, provider.id)
-  // Always allow "off" as a first-class option so the user can clear the
-  // override and let the provider use its default.
-  const allValues = ["off", ...values]
-  const options: PickerOption[] = allValues.map(v => ({
-    id: v,
-    label: v,
-    meta: (v === "off" ? !current : current === v) ? "(current)" : "",
-  }))
-  const initial = current ? Math.max(0, allValues.indexOf(current)) : 0
-  return (
-    <PickerDialog
-      title={`Reasoning effort — ${provider.name}`}
-      options={options}
-      initialIndex={initial}
-      onCancel={onCancel}
-      onSelect={(id) => {
-        const next = setEffort(config, provider.id, id === "off" ? null : id)
-        onCommit(next)
-      }}
-    />
-  )
+  const active = getActiveProvider(latest)
+  const codex = active?.authMode === "codex-oauth"
+  const values = active ? getEffortValuesForProvider(latest, active.id) : []
+  const model = active ? effortModel(latest, active) : ""
+  const profile = modelReasoningFor(active?.reasoningByModel, model)
+  if (!active || (!codex && values.length === 0)) {
+    return <PickerDialog title="Reasoning effort"
+      options={[{ id: "__none", label: "Active provider does not expose reasoning_effort", disabled: true }]}
+      onCancel={onCancel} onSelect={onCancel} />
+  }
+  const current = getEffort(latest, active.id)
+  const options: PickerOption[] = [{ id: "__default", label: codex ? "default" : "off",
+    meta: `${codex ? `server default${profile?.defaultEffort ? ` (${profile.defaultEffort})` : ""}` : "server default"}${!current ? " (current)" : ""}` },
+    ...values.map(value => ({ id: `level:${value}`, label: value,
+      meta: [profile?.levels.find(level => level.effort === value)?.description,
+        current === value ? "(current)" : undefined].filter(Boolean).join(" · ") }))]
+  if (codex && !profile) options.push({ id: "__status", label: status, disabled: true })
+  if (codex && profile?.levels.length === 0) options.push({ id: "__none", label: "No adjustable reasoning levels", disabled: true })
+  return <PickerDialog key={`${model}:${values.join(",")}:${current ?? "default"}`}
+    title={`Reasoning effort — ${codex ? model : active.name}`}
+    options={options} initialIndex={current ? Math.max(0, values.indexOf(current) + 1) : 0}
+    onCancel={onCancel} onSelect={id => onCommit(setEffort(latest, active.id, id === "__default" ? null : id.slice(6)))} />
 }

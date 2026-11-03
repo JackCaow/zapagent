@@ -1,3 +1,4 @@
+import type { ModelReasoning } from "../zapsdk/core/reasoning-effort.js"
 import { listModels } from "../zapsdk/core/list-models.js"
 import { getModelsDevProvider, suggestedModelsDevIds, type ModelsDevProvider } from "../zapsdk/core/models-dev.js"
 import { resolveCatalogProviderId, upsertProvider, setActive, type AppConfig, type Provider, type ProviderModelMetadata } from "./config.js"
@@ -5,7 +6,7 @@ import { enrichProviderMetadata, mergeModelMetadata, modelsDevMetadata, pickMode
 import { discoverCodexModels } from "./codex-provider.js"
 
 export type ModelSource = "saved" | "provider" | "models.dev" | "manual"
-export interface CatalogRow { id: string; source: ModelSource; metadata?: ProviderModelMetadata }
+export interface CatalogRow { id: string; source: ModelSource; metadata?: ProviderModelMetadata; reasoning?: ModelReasoning }
 export interface DiscoveredCatalog { rows: CatalogRow[]; error?: string }
 
 /** User-selected metadata for a gateway alias, independent of transport identity. */
@@ -73,7 +74,12 @@ export function selectCatalogModel(config: AppConfig, providerId: string, row: C
   const models = [...new Set([...provider.models, row.id])]
   const modelMetadata = pickModelMetadata(mergeModelMetadata(provider.modelMetadata ?? {},
     row.metadata ? { [row.id]: row.metadata } : {}), models)
-  return setActive(upsertProvider(config, { ...provider, models, modelMetadata }), providerId, row.id)
+  const reasoningByModel = { ...provider.reasoningByModel }
+  if (provider.authMode === "codex-oauth" && row.source === "provider") {
+    if (row.reasoning) reasoningByModel[row.id] = row.reasoning
+    else delete reasoningByModel[row.id]
+  }
+  return setActive(upsertProvider(config, { ...provider, models, modelMetadata, reasoningByModel }), providerId, row.id)
 }
 
 export function describeCatalogRow(row: CatalogRow): string {
