@@ -48,10 +48,16 @@ ptyTest("real App guides connection creation into model selection, skip and repa
   const key = async (...keys: string[]) => { tmux("send-keys", "-t", "setup", ...keys); await sleep(180) }
   const literal = async (value: string) => { tmux("send-keys", "-t", "setup", "-l", value); await sleep(180) }
   const command = async (value: string) => {
-    await literal(value)
+    // Finish a slash token before Enter so completion cannot consume submit.
+    await literal(value.startsWith("/") ? `${value} ` : value)
     if (value.startsWith("/")) await visible(value)
     await sleep(250)
     await key("Enter")
+    // A completion/focus transition may consume the first Enter. Retry only
+    // while the original slash command is still in the composer, not a dialog.
+    if (value.startsWith("/") && capture().split("\n").some(line => ["! ", "❯ "].some(prefix => line.trimStart().startsWith(prefix + value.trim())))) {
+      await key("Enter")
+    }
   }
   const openConnect = async () => { await command("/connect"); await visible("Connections · /connect") }
   const newConnection = async (name: string, path = "/v1", withKey = false, manualContext?: string) => {
@@ -117,7 +123,7 @@ ptyTest("real App guides connection creation into model selection, skip and repa
     await key("Escape"); await closed()
     expect(config().providers).toHaveLength(1)
     expect(config().active.model).toBe("")
-    await command("/model"); await visible("Models · First"); await visible("alpha-model")
+    await command("/model"); await visible("Models · All connections"); await visible("alpha-model")
     await key("Enter"); await closed()
     const first = config().active
     expect(first.model).toBe("alpha-model")
@@ -125,22 +131,22 @@ ptyTest("real App guides connection creation into model selection, skip and repa
     expect(frames.autoStatus).toContain("1.05M")
     expect(frames.autoStatus).toContain("Limit source:    models-dev")
     await key("Escape")
-    await command("/model"); await visible("Models · First"); await literal("c")
+    await command("/model"); await visible("Models · All connections"); await literal("c")
     await visible("Context window"); await key("Down"); await key("Enter")
     await visible("Manual context window")
     for (let i = 0; i < 7; i++) await key("BSpace")
     await command("0"); await visible("Enter a positive whole number")
     expect(config().providers[0]?.contextWindowMode).toBe("auto")
     await key("BSpace"); await command("262144")
-    frames.manual = await visible("Manual context: 262,144")
+    frames.manual = await visible("First: manual context 262,144")
     expect(config().providers[0]?.contextWindowMode).toBe("manual")
     await key("Escape"); await closed()
     await command("/status"); frames.manualStatus = await visible("Auto-compact at: 202.4K")
     expect(frames.manualStatus).toContain("Limit source:    manual")
     await key("Escape")
-    await command("/model"); await visible("Models · First"); await literal("c")
+    await command("/model"); await visible("Models · All connections"); await literal("c")
     await visible("Context window"); await key("Up"); await key("Enter")
-    await visible("Automatic context")
+    await visible("First: automatic context")
     expect(config().providers[0]?.contextWindowMode).toBe("auto")
     await key("Escape"); await closed()
 
