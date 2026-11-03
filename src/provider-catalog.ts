@@ -74,11 +74,10 @@ export function selectCatalogModel(config: AppConfig, providerId: string, row: C
   const models = [...new Set([...provider.models, row.id])]
   const modelMetadata = pickModelMetadata(mergeModelMetadata(provider.modelMetadata ?? {},
     row.metadata ? { [row.id]: row.metadata } : {}), models)
-  const reasoningByModel = { ...provider.reasoningByModel }
-  if (provider.authMode === "codex-oauth" && row.source === "provider") {
-    if (row.reasoning) reasoningByModel[row.id] = row.reasoning
-    else delete reasoningByModel[row.id]
-  }
+  const liveReasoning = provider.authMode === "codex-oauth" && row.source === "provider"
+  const reasoningByModel = { ...provider.reasoningByModel,
+    ...(liveReasoning && row.reasoning ? { [row.id]: row.reasoning } : {}) }
+  if (liveReasoning && !row.reasoning) delete reasoningByModel[row.id]
   return setActive(upsertProvider(config, { ...provider, models, modelMetadata, reasoningByModel }), providerId, row.id)
 }
 

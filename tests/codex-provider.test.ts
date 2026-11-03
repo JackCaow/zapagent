@@ -195,3 +195,21 @@ it("refreshes authenticated capabilities, retires missing levels, keeps offline 
   globalThis.fetch = (async () => { throw new Error("offline") }) as typeof fetch
   expect(await refreshModelsDevMetadata(initial)).toBe(initial)
 })
+
+
+it("persists exact model IDs even when they coincide with object prototype keys", () => {
+  const connected = connectCodexProvider(getDefaultConfig())
+  let config = connected.config
+  for (const model of ["__proto__", "constructor", "toString"]) {
+    config = selectCatalogModel(config, connected.provider.id, { id: model, source: "provider", reasoning: fullProfile })
+    expect(Object.hasOwn(config.providers[0].reasoningByModel!, model)).toBe(true)
+    expect(getEffortValuesForProvider(config, connected.provider.id)).toEqual(levels)
+    config = setEffort(config, connected.provider.id, "ultra")
+    expect(getEffort(config, connected.provider.id)).toBe("ultra")
+  }
+  const file = join(root, "prototype-models.json")
+  saveAppConfig(file, config)
+  const loaded = loadAppConfig(file)
+  expect(Object.hasOwn(loaded.providers[0].reasoningByModel!, "__proto__")).toBe(true)
+  expect(Object.hasOwn(loaded.providers[0].effortByModel!, "__proto__")).toBe(true)
+})
