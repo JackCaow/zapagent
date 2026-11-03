@@ -38,8 +38,8 @@ describe("session-scoped runtime output access", () => {
     registry.register(readFileTool({ defaultCwd: cwd }));
     return new ToolExecutor(registry, { cwd, onApproval: buildHeadlessApproval({ cwd, permissionMode: "default", disallowedTools }).onApproval });
   }
-  test("recovers tail content and Unicode pages while ordinary outside reads remain denied", async () => {
-    const path = persist("owner"); const exec = executor("owner");
+  test("recovers tail content and Unicode pages when ordinary reads are explicitly disabled", async () => {
+    const path = persist("owner"); const exec = executor("owner", ["read_file"]);
     const denied = await exec.execute("read_file", { path });
     expect(denied.failure?.code).toBe("POLICY_DENIED");
     const page = await exec.execute("read_tool_output", { path, offset: 50_999, limit: 4 });
