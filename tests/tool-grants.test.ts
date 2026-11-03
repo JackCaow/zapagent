@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test"
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { tmpdir } from "node:os"
 import { buildToolGrantRules, suggestToolGrantDirectory, type ToolGrantRequest } from "../src/tool-grants.js"
@@ -55,7 +55,7 @@ describe("tool grant expansion and resource contracts", () => {
   it("normalizes folder grants to the same project coordinates as runtime paths", () => {
     for (const value of ["src", join(cwd, "src")]) {
       const rules = buildToolGrantRules(request(["write_file"], { kind: "directory", value }), inventory, cwd)
-      expect(rules).toEqual([{ pattern: "write_file(src{,/**})", type: "allow" }])
+      expect(rules).toEqual([{ pattern: "write_file(src{,/**})", type: "allow", canonicalPath: true }])
       const mgr = new PermissionManager(cwd)
       mgr.addToolRules(rules, "session")
       expect(mgr.checkPermission("write_file", { path: join(cwd, "src", "a.ts") }).decision).toBe("allow")
@@ -73,6 +73,41 @@ describe("tool grant expansion and resource contracts", () => {
     expect(mgr.checkPermission("write_file", { path: join(alias, "second.jpg") }).decision).toBe("ask")
     savePermissionSettings(getProjectSettingsPath(cwd), { rules: [{ pattern: `Write(${join(folder, "private.jpg")})`, type: "deny" }] })
     expect(mgr.checkPermission("write_file", { path: join(folder, "private.jpg") }).decision).toBe("deny")
+  })
+  it("rejects a folder alias changed between review and save without installing any grant", () => {
+    const reviewed = join(root, "reviewed"), other = join(root, "other"), alias = join(cwd, "alias")
+    mkdirSync(reviewed); mkdirSync(other); symlinkSync(reviewed, alias, "junction")
+    const batch = request(["write_file"], { kind: "directory", value: alias })
+    const rules = buildToolGrantRules(batch, inventory, cwd)
+    unlinkSync(alias); symlinkSync(other, alias, "junction")
+    expect(() => buildToolGrantRules(batch, inventory, cwd, rules)).toThrow("scope changed after review")
+    expect(new PermissionManager(cwd).getSummary()).toEqual([])
+  })
+  it("persisted canonical folder grants do not follow a replaced ancestor", () => {
+    const parent = join(root, "parent"), folder = join(parent, "screenshots"), other = join(root, "other-parent")
+    mkdirSync(folder, { recursive: true }); mkdirSync(join(other, "screenshots"), { recursive: true })
+    const tools = ["write_file", "move_file"]
+    const rules = buildToolGrantRules(request(tools, { kind: "directory", value: folder }, "project"), inventory, cwd)
+    const mgr = new PermissionManager(cwd); mgr.addToolRules(rules, "project")
+    expect(loadPermissionSettings(getProjectAuthorizationSettingsPath(cwd)).rules.every(rule => rule.canonicalPath)).toBe(true)
+    renameSync(parent, `${parent}-original`); symlinkSync(other, parent, "junction")
+    const restored = new PermissionManager(cwd)
+    const args = { path: join(folder, "file.txt"), source: join(folder, "old.txt"), destination: join(folder, "new.txt") }
+    for (const tool of tools) {
+      expect(restored.checkPermission(tool, args).decision).toBe("ask")
+      expect(restored.grantCoversCall(rules, tool, args)).toBe(false)
+    }
+  })
+  it("keeps canonical and legacy rules distinct when saving, annotating and deleting", () => {
+    const fixed = buildToolGrantRules(request(["write_file"], { kind: "directory", value: join(root, "folder") }), inventory, cwd)[0]
+    const legacy = { pattern: fixed.pattern, type: "allow" as const }
+    const mgr = new PermissionManager(cwd)
+    mgr.addToolRules([fixed, legacy], "project")
+    const group = mgr.getSummaryAnnotated().find(group => group.label === "project grants")!
+    expect(group.rules).toHaveLength(2)
+    expect(group.rules[1].shadowedBy).toBeUndefined()
+    mgr.removeRule(fixed.pattern, "allow", "project-grants", true)
+    expect(loadPermissionSettings(getProjectAuthorizationSettingsPath(cwd)).rules).toEqual([legacy])
   })
   it("suggests the actual file parent or scan root for directory authorization", () => {
     expect(suggestToolGrantDirectory("write_file", { path: "src/a.ts" }, cwd)).toBe(join(cwd, "src"))

@@ -27,6 +27,7 @@ import { useHideNativeCursor } from "./dialog-frame.js"
 import { c } from "./theme.js"
 import { ToolGrantDialog } from "./dialog-tool-grant.js"
 import { suggestToolGrantDirectory, type ToolGrantRequest } from "../tool-grants.js"
+import type { PermissionRule } from "../permissions.js"
 import { formatToolCall, getToolAlias } from "./transcript-format.js"
 
 export type ApprovalChoice = "once" | "always" | "forever" | "deny"
@@ -49,7 +50,7 @@ interface Props {
   availableTools?: string[]
   cwd?: string
   workspaceRoot?: string
-  onGrant?: (request: ToolGrantRequest, availableTools: string[]) => string | void
+  onGrant?: (request: ToolGrantRequest, availableTools: string[], reviewedRules?: readonly PermissionRule[]) => string | void
 }
 
 interface Option {
@@ -103,7 +104,7 @@ export function ApprovalBar({ toolName, args, onChoose, rulePreview, unsandboxed
   if (customizing && canCustomize && onGrant) return <ToolGrantDialog availableTools={availableTools} initialTools={[toolName]}
     initialPattern={rulePreview?.match(/^[^(]+\(([^()]*)\)$/)?.[1] ?? ""}
     initialDirectory={directory} directoryShortcut={directoryShortcut} cwd={workspaceRoot}
-    onSave={request => onGrant(request, availableTools)} onCancel={() => setCustomizing(false)} />
+    onSave={(request, reviewedRules) => onGrant(request, availableTools, reviewedRules)} onCancel={() => setCustomizing(false)} />
 
   // Height is load-bearing: a tall dynamic frame above a long transcript
   // gets partially scrolled into scrollback by every re-render that

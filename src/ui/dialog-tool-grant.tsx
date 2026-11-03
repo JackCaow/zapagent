@@ -2,6 +2,7 @@
 import { useRef, useState } from "react"
 import { Box, Text, useInput } from "ink"
 import { buildToolGrantRules, EDIT_GRANT_TOOLS, READ_GRANT_TOOLS, type ToolGrantRequest } from "../tool-grants.js"
+import type { PermissionRule } from "../permissions.js"
 import { ControlledInput, commandInput, isReturnInput } from "./controlled-input.js"
 import { c } from "./theme.js"
 import { useHideNativeCursor } from "./dialog-frame.js"
@@ -13,7 +14,7 @@ interface Props {
   initialDirectory?: string
   directoryShortcut?: boolean
   cwd?: string
-  onSave: (request: ToolGrantRequest) => string | void
+  onSave: (request: ToolGrantRequest, reviewedRules: readonly PermissionRule[]) => string | void
   onCancel: () => void
 }
 
@@ -30,6 +31,7 @@ export function ToolGrantDialog({ availableTools, initialTools = [], initialPatt
   const [resource, setResource] = useState<ToolGrantRequest["resource"]>({ kind: "all" })
   const [lifetime, setLifetime] = useState<ToolGrantRequest["lifetime"]>("session")
   const [error, setError] = useState("")
+  const reviewedRules = useRef<PermissionRule[]>([])
   const request: ToolGrantRequest = { tools: selected, resource, lifetime }
   const live = useRef({ step, index, selected, pattern, request, onSave, onCancel })
   live.current = { step, index, selected, pattern, request, onSave, onCancel }
@@ -72,21 +74,23 @@ export function ToolGrantDialog({ availableTools, initialTools = [], initialPatt
       if (cmd === "2") { setFilterKind("pattern"); setPattern(initialPattern); setCursor(initialPattern.length); setStep(2) }
       if (cmd === "3") { setFilterKind("directory"); setPattern(initialDirectory); setCursor(initialDirectory.length); setStep(2) }
     } else if (current.step === 3) {
-      if (cmd === "1" || cmd === "2") { setLifetime(cmd === "1" ? "session" : "project"); setStep(4); setIndex(0) }
+      if (cmd === "1" || cmd === "2") {
+        try {
+          reviewedRules.current = buildToolGrantRules(current.request, tools, cwd)
+          setLifetime(cmd === "1" ? "session" : "project"); setStep(4); setIndex(0)
+        } catch (failure) { setError(String(failure)) }
+      }
     } else if (current.step === 4) {
       if (key.upArrow) { setIndex(value => Math.max(0, value - 1)); return }
       if (key.downArrow) { setIndex(value => Math.min(current.selected.length - 1, value + 1)); return }
       if (isReturnInput(input, key)) {
-        const failure = current.onSave(current.request)
+        const failure = current.onSave(current.request, reviewedRules.current)
         if (failure) setError(failure)
       }
     }
   })
   const start = Math.max(0, Math.min(index - 4, tools.length - 8))
-  let preview: string[] = []
-  if (step === 4) {
-    try { preview = buildToolGrantRules(request, tools, cwd).map(rule => rule.pattern) } catch (failure) { preview = [String(failure)] }
-  }
+  const preview = step === 4 ? reviewedRules.current.map(rule => rule.pattern) : []
   return <Box flexDirection="column" paddingX={1} marginTop={1}>
     <Text bold color={c.text.primary}>Tool authorization — {["select tools", "resource scope", "resource filter", "lifetime", "review authorization"][step]}</Text>
     {step === 0 && <>

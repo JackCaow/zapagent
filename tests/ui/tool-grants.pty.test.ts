@@ -1,19 +1,23 @@
 import { expect, it } from "bun:test"
 import { spawnSync } from "node:child_process"
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 import { writeFileAtomic } from "../../src/utils/secure-write.js"
 
 const ptyTest = process.env.RUN_TUI_PTY_TESTS === "1" ? it : it.skip
-for (const scenario of ["session", "project", "custom", "folder"]) {
+for (const scenario of ["session", "project", "custom", "folder", "folder-retarget", "folder-menu-retarget"]) {
   ptyTest(`real App ${scenario} tool grants preview, apply, and expire/revoke`, async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "zap-tool-grants-pty-")))
     const workspace = join(root, "workspace"); mkdirSync(join(workspace, "src"), { recursive: true })
-    const outputDirectory = scenario === "folder" ? join(root, "outside") : join(workspace, "src")
+    const folderScenario = scenario.startsWith("folder"), retarget = scenario.endsWith("retarget")
+    const fromMenu = scenario === "folder-menu-retarget"
+    const outputDirectory = folderScenario ? join(root, "outside") : join(workspace, "src")
     mkdirSync(outputDirectory, { recursive: true })
-    const ruleScope = scenario === "folder" ? `${outputDirectory}{,/**}` : "src/**"
+    const alias = join(root, "folder-alias"), other = join(root, "unreviewed")
+    if (retarget) { mkdirSync(other); symlinkSync(outputDirectory, alias, "junction") }
+    const ruleScope = folderScenario ? `${outputDirectory}{,/**}` : "src/**"
     const socket = `zap-tools-${process.pid}-${Date.now()}-${scenario}`
     const frames: string[] = []
     let phase = "start", calls = 0
@@ -23,7 +27,7 @@ for (const scenario of ["session", "project", "custom", "folder"]) {
       const user = body.messages.findLast(message => message.role === "user")?.content ?? ""
       const tool = body.messages.at(-1)?.role === "user" && /^WRITE_(TEST|AGAIN|REVOKED)$/.test(user.trim())
       const name = user.includes("AGAIN") ? "again.txt" : user.includes("REVOKED") ? "revoked.txt" : "result.txt"
-      const path = scenario === "folder" ? join(outputDirectory, name) : `src/${name}`
+      const path = folderScenario ? join(retarget ? alias : outputDirectory, name) : `src/${name}`
       const delta = tool ? { role: "assistant", tool_calls: [{ index: 0, id: `write-${calls}`, type: "function", function: {
         name: "write_file", arguments: JSON.stringify({ path, content: "fixture-only\n" }),
       } }] } : { role: "assistant", content: "BATCH_DONE" }
@@ -70,28 +74,40 @@ for (const scenario of ["session", "project", "custom", "folder"]) {
     }
     try {
       await start()
-      if (scenario === "custom" || scenario === "folder") {
+      if (scenario === "custom" || folderScenario && !fromMenu) {
         phase = "waiting approval"; await send("WRITE_TEST"); await settle(screen => screen.includes("Approve?"))
-        if (scenario === "folder") expect(capture()).toContain("d authorize folder / select tools")
-        text(scenario === "folder" ? "d" : "g")
+        if (folderScenario) expect(capture()).toContain("d authorize folder / select tools")
+        text(folderScenario ? "d" : "g")
       } else {
         phase = "open permissions"; await send("/permissions"); await settle(screen => screen.includes("No permission rules active")); text("a")
       }
       phase = "tool selection"; await settle(screen => screen.includes("Tool authorization") && screen.includes("select tools"))
       if (scenario !== "custom") { text("w"); await settle(screen => /[2-9] selected/.test(screen)) }
       key("Enter")
-      if (scenario !== "folder") {
-        phase = "resource scope"; await settle(screen => screen.includes("Entire selected tools")); text("2")
+      if (!folderScenario || fromMenu) {
+        phase = "resource scope"; await settle(screen => screen.includes("Entire selected tools")); text(fromMenu ? "3" : "2")
       }
       await settle(screen => screen.includes("resource filter"))
-      if (scenario !== "custom" && scenario !== "folder") text("src/**")
-      await settle(screen => screen.includes(scenario === "folder" ? outputDirectory : "src/**")); await sleep(150); key("Enter")
-      phase = "lifetime"; await settle(screen => screen.includes("This session — cleared")); text(scenario === "project" || scenario === "folder" ? "2" : "1")
+      if (fromMenu) text(alias)
+      else if (scenario !== "custom" && !folderScenario) text("src/**")
+      await settle(screen => screen.includes(retarget ? alias : folderScenario ? outputDirectory : "src/**")); await sleep(150); key("Enter")
+      phase = "lifetime"; await settle(screen => screen.includes("This session — cleared")); text(scenario === "project" || folderScenario ? "2" : "1")
       phase = "review"; const review = await settle(screen => screen.includes("review authorization"))
       expect(review).toContain(`write_file(${ruleScope})`)
       if (scenario !== "custom") expect(review).toContain(`edit_file(${ruleScope})`)
       expect(review).toContain("Sandbox escape is separate")
+      if (retarget) { unlinkSync(alias); symlinkSync(other, alias, "junction") }
       key("Enter")
+      if (retarget) {
+        const rejected = await settle(screen => screen.includes("scope changed after review"))
+        expect(rejected).toContain(`write_file(${ruleScope})`)
+        expect(existsSync(join(other, "result.txt"))).toBe(false)
+        expect(existsSync(join(outputDirectory, "result.txt"))).toBe(false)
+        // Use the fixture's data dir, not the test runner's global settings.
+        const settings = join(root, "permissions", "projects")
+        expect(existsSync(settings)).toBe(false)
+        return
+      }
       phase = "grant applied"
       if (scenario !== "custom" && scenario !== "folder") {
         await settle(screen => screen.includes("write_file(src/**)") && screen.includes("d delete")); await closePermissions(); await send("WRITE_TEST")

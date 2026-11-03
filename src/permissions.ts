@@ -23,6 +23,8 @@ export interface PermissionRule {
    *  deny wins over ask, and ask wins over allow, including bypass mode. */
   pattern: string
   type: RuleType
+  /** Folder grants store a reviewed canonical target, never a live symlink alias. */
+  canonicalPath?: true
 }
 
 export interface PermissionSettings {
@@ -384,9 +386,9 @@ function extractArgString(toolName: string, args: Record<string, unknown>): stri
   return typeof first === "string" ? first : ""
 }
 
-function matchFilePattern(path: string, pattern: string): boolean {
+function matchFilePattern(path: string, pattern: string, canonicalPath = false): boolean {
   if (!isAbsolute(pattern) && (isAbsolute(path) || path === ".." || path.startsWith("../") || path.startsWith("..\\"))) return false
-  return matchGlob(path, pattern) || (isAbsolute(pattern) && matchGlob(path, canonicalizeWithNearestExistingAncestorSync(pattern)))
+  return matchGlob(path, pattern) || (!canonicalPath && isAbsolute(pattern) && matchGlob(path, canonicalizeWithNearestExistingAncestorSync(pattern)))
 }
 
 /** Directory readers may touch every descendant. When a restriction could
@@ -424,12 +426,12 @@ export function ruleMatchesTool(
   if (argPattern === null) return true
   if (toolName === "move_file") {
     const paths = [args.source, args.destination].filter((value): value is string => typeof value === "string" && !!value)
-    return rule.type === "allow" ? paths.length === 2 && paths.every(path => matchFilePattern(path, argPattern)) : paths.some(path => matchFilePattern(path, argPattern))
+    return rule.type === "allow" ? paths.length === 2 && paths.every(path => matchFilePattern(path, argPattern, rule.canonicalPath)) : paths.some(path => matchFilePattern(path, argPattern))
   }
   const subject = extractArgString(toolName, args)
   if (toolName === "bash") return matchCommandGlob(subject, argPattern)
   if (toolName === "delegate_agent") return subject === argPattern
-  return FILE_TOOLS.has(toolName) ? matchFilePattern(subject, argPattern) : matchGlob(subject, argPattern)
+  return FILE_TOOLS.has(toolName) ? matchFilePattern(subject, argPattern, rule.type === "allow" && rule.canonicalPath) : matchGlob(subject, argPattern)
 }
 
 // ─── Shadow detection ─────────────────────────────────────────────────────────
@@ -695,8 +697,8 @@ export class PermissionManager {
     if (!rules.length || rules.some(rule => rule.type !== "allow" || rule.pattern === SANDBOX_ESCAPE_RULE)) throw new Error("Invalid tool grant")
     const path = getProjectAuthorizationSettingsPath(this.cwd)
     const existing = lifetime === "session" ? [...this.sessionRules] : loadPermissionSettings(path).rules
-    const added = rules.filter((rule, index) => !existing.some(value => value.type === rule.type && value.pattern === rule.pattern)
-      && rules.findIndex(value => value.type === rule.type && value.pattern === rule.pattern) === index)
+    const added = rules.filter((rule, index) => !existing.some(value => value.type === rule.type && value.pattern === rule.pattern && value.canonicalPath === rule.canonicalPath)
+      && rules.findIndex(value => value.type === rule.type && value.pattern === rule.pattern && value.canonicalPath === rule.canonicalPath) === index)
     const next = [...existing, ...added]
     if (lifetime === "session") this.sessionRules = next
     else savePermissionSettings(path, { rules: next })
@@ -965,7 +967,7 @@ export class PermissionManager {
   /** Attribute a rule object to the settings layer it lives in. */
   private locateRuleScope(rule: PermissionRule): RuleScope {
     const findsIt = (p: string) =>
-      loadPermissionSettings(p).rules.some(r => r.pattern === rule.pattern && r.type === rule.type)
+      loadPermissionSettings(p).rules.some(r => r.pattern === rule.pattern && r.type === rule.type && r.canonicalPath === rule.canonicalPath)
     if (findsIt(getProjectAuthorizationSettingsPath(this.cwd))) return "project"
     if (findsIt(getProjectLocalSettingsPath(this.cwd))) return "local"
     if (findsIt(getProjectSettingsPath(this.cwd))) return "project"
@@ -1011,14 +1013,15 @@ export class PermissionManager {
    * scope it was removed from, or null if no rule matched. An explicit removal
    * scope targets the displayed group, separating host grants from repo rules.
    */
-  removeRule(pattern: string, type: RuleType, scope?: RuleRemovalScope): RuleScope | null {
+  removeRule(pattern: string, type: RuleType, scope?: RuleRemovalScope, canonicalPath?: boolean): RuleScope | null {
     if ((!scope || scope === "session") && this.sessionSandboxEscape?.pattern === pattern && this.sessionSandboxEscape.type === type) {
       this.sessionSandboxEscape = undefined
       this.logger?.log("info", "permission_rule_removed", { pattern, type, scope: "session" })
       return "session"
     }
     // Session first (in-memory)
-    const sessionIdx = this.sessionRules.findIndex(r => r.pattern === pattern && r.type === type)
+    const matches = (r: PermissionRule) => r.pattern === pattern && r.type === type && (canonicalPath === undefined || (r.canonicalPath === true) === canonicalPath)
+    const sessionIdx = this.sessionRules.findIndex(matches)
     if (sessionIdx >= 0 && (!scope || scope === "session")) {
       this.sessionRules.splice(sessionIdx, 1)
       this.logger?.log("info", "permission_rule_removed", { pattern, type, scope: "session" })
@@ -1035,7 +1038,7 @@ export class PermissionManager {
       if (scope && layer.scope !== scope) continue
       const { scope: layerScope, path } = layer
       const settings = loadPermissionSettings(path)
-      const idx = settings.rules.findIndex(r => r.pattern === pattern && r.type === type)
+      const idx = settings.rules.findIndex(matches)
       if (idx >= 0) {
         settings.rules.splice(idx, 1)
         savePermissionSettings(path, settings)
@@ -1095,6 +1098,7 @@ export class PermissionManager {
       const cur = checkOrder[i]
       for (let j = 0; j < i; j++) {
         const earlier = checkOrder[j]
+        if (earlier.rule.canonicalPath && !cur.rule.canonicalPath) continue
         if (patternCovers(earlier.rule.pattern, cur.rule.pattern)) {
           shadowMap.set(cur.rule, earlier)
           break

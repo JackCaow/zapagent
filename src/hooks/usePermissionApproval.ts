@@ -8,6 +8,7 @@ import { getCurrentSessionId } from "../session.js"
 import { approvalFacts } from "../approval-facts.js"
 import { evaluateApprovalPolicy } from "../permission-policy.js"
 import { buildToolGrantRules, type ToolGrantRequest } from "../tool-grants.js"
+import type { PermissionRule } from "../permissions.js"
 import { buildEditPreview, isEditTool } from "../ui/edit-preview.js"
 import { getToolAlias } from "../ui/transcript-format.js"
 import type { ApprovalCallback, ApprovalContext, ApprovalResponse } from "../../zapsdk/tools/executor.js"
@@ -28,7 +29,7 @@ interface PendingApproval {
   args: Record<string, unknown>
   allowScope: boolean
   resolve: (choice: ApprovalChoice) => void
-  grant: (request: ToolGrantRequest, availableTools: string[]) => string | void
+  grant: (request: ToolGrantRequest, availableTools: string[], reviewedRules?: readonly PermissionRule[]) => string | void
 }
 
 export interface UsePermissionApprovalOptions {
@@ -150,12 +151,12 @@ export function usePermissionApproval(
           name,
           args: ar,
           allowScope,
-          grant: (request, availableTools) => {
+          grant: (request, availableTools, reviewedRules) => {
             const expired = validate()
             if (expired) return expired
             if (!scopeAllowed || (approvalFacts(name, ar, context).sandboxEscape)) return "This approval only supports its displayed choices"
             try {
-              const rules = buildToolGrantRules(request, availableTools, context?.workspaceRoot ?? process.cwd())
+              const rules = buildToolGrantRules(request, availableTools, context?.workspaceRoot ?? process.cwd(), reviewedRules)
               if (!permissionManager.grantCoversCall(rules, name, ar, context)) return "The selected authorization must cover this waiting call"
               permissionManager.addToolRules(rules, request.lifetime)
               addLog("system", `Permission: ${request.lifetime} allow saved: ${rules.map(rule => rule.pattern).join(", ")}; manage in /permissions`)

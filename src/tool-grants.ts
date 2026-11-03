@@ -37,7 +37,7 @@ export function suggestToolGrantDirectory(name: string, args: Record<string, unk
 }
 
 /** Expand a reviewed snapshot of exact registry names; never save a tool wildcard. */
-export function buildToolGrantRules(request: ToolGrantRequest, availableTools: readonly string[], cwd = process.cwd()): PermissionRule[] {
+function expandToolGrantRules(request: ToolGrantRequest, availableTools: readonly string[], cwd: string): PermissionRule[] {
   if (!["session", "project"].includes(request.lifetime)) throw new Error("Choose session or project lifetime")
   const tools = [...new Set(request.tools)]
   if (!tools.length) throw new Error("Select at least one tool")
@@ -50,7 +50,7 @@ export function buildToolGrantRules(request: ToolGrantRequest, availableTools: r
   if (request.resource.kind === "directory") {
     if (!filesOnly) throw new Error("Folder authorization requires file tools only")
     const pattern = directoryGrantPattern(request.resource.value, cwd)
-    return tools.map(tool => ({ pattern: `${tool}(${pattern})`, type: "allow" }))
+    return tools.map(tool => ({ pattern: `${tool}(${pattern})`, type: "allow", canonicalPath: true }))
   }
   if (request.resource.kind !== "pattern") throw new Error("Choose a resource scope")
   const value = request.resource.value.trim()
@@ -59,4 +59,13 @@ export function buildToolGrantRules(request: ToolGrantRequest, availableTools: r
   if (!filesOnly && !bashOnly) throw new Error("A resource filter needs only file tools, or Bash alone; use entire tools for a mixed set")
   if (filesOnly && (isAbsolute(value) || value.split(/[\\/]/).includes(".."))) throw new Error("Use a project-relative path glob without ..")
   return tools.map(tool => ({ pattern: `${tool}(${value})`, type: "allow" }))
+}
+
+/** A save must still describe exactly the scope shown when review began. */
+export function buildToolGrantRules(request: ToolGrantRequest, availableTools: readonly string[], cwd = process.cwd(), reviewedRules?: readonly PermissionRule[]): PermissionRule[] {
+  const rules = expandToolGrantRules(request, availableTools, cwd)
+  if (reviewedRules && JSON.stringify(rules) !== JSON.stringify(reviewedRules)) {
+    throw new Error("Authorization scope changed after review; go back and review it again")
+  }
+  return rules
 }
