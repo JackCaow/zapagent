@@ -24,7 +24,8 @@ export function CodexLoginDialog({ onSuccess, onCancel }: { onSuccess: () => voi
       openAuthBrowser(login.url)
       const credentials = await login.complete
       if (controller.signal.aborted) return
-      saveCodexCredentials(credentials)
+      await saveCodexCredentials(credentials, undefined, controller.signal)
+      if (controller.signal.aborted) return
       callbacks.current.onSuccess()
     })().catch(error => { if (!controller.signal.aborted) setError(error instanceof Error ? error.message : "Codex login failed.") })
     return () => controller.abort()

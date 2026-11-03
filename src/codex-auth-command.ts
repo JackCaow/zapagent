@@ -13,7 +13,7 @@ export async function runCodexAuthCommand(args: string[]): Promise<number> {
     return 2
   }
   try {
-    if (action === "logout") { deleteCodexCredentials(); console.log("Codex signed out from Zap."); return 0 }
+    if (action === "logout") { await deleteCodexCredentials(); console.log("Codex signed out from Zap."); return 0 }
     if (action === "status") {
       const credentials = readCodexCredentials()
       console.log(credentials ? `Codex signed in${credentials.expiresAt <= Date.now() ? " (token will refresh on next request)" : ""}.` : "Codex signed out.")
@@ -29,7 +29,8 @@ export async function runCodexAuthCommand(args: string[]): Promise<number> {
       openAuthBrowser(login.url)
       const credentials = await login.complete
       controller.signal.throwIfAborted()
-      saveCodexCredentials(credentials)
+      await saveCodexCredentials(credentials, undefined, controller.signal)
+      controller.signal.throwIfAborted()
       const path = join(getAppDataDir(), "config.json")
       // Read after login so an in-flight TUI edit is not overwritten by an old snapshot.
       saveAppConfig(path, connectCodexProvider(loadAppConfig(path)).config)

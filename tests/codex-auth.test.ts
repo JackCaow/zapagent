@@ -1,5 +1,7 @@
 import { afterEach, expect, it } from "bun:test"
-import { mkdtempSync, rmSync, statSync, existsSync, writeFileSync } from "node:fs"
+import { mkdtempSync, mkdirSync, rmSync, statSync, existsSync, writeFileSync } from "node:fs"
+import { spawn } from "node:child_process"
+import { setTimeout as delay } from "node:timers/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createHash } from "node:crypto"
@@ -64,7 +66,7 @@ it("bounds browser login and handles denied authorization without echoing untrus
 
 it("stores tokens privately, reuses fresh tokens, and rotates one refresh across concurrent requests", async () => {
   const file = path()
-  saveCodexCredentials({ accessToken: "old", refreshToken: "rotate-once", expiresAt: 0, accountId: "acct" }, file)
+  await saveCodexCredentials({ accessToken: "old", refreshToken: "rotate-once", expiresAt: 0, accountId: "acct" }, file)
   if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(0o600)
   let requests = 0
   const fetcher = (async (_url, init) => {
@@ -82,7 +84,7 @@ it("stores tokens privately, reuses fresh tokens, and rotates one refresh across
 
 it("keeps credentials on refresh failure and never echoes the token endpoint body", async () => {
   const file = path()
-  saveCodexCredentials({ accessToken: "old", refreshToken: "secret", expiresAt: 0 }, file)
+  await saveCodexCredentials({ accessToken: "old", refreshToken: "secret", expiresAt: 0 }, file)
   await expect(getCodexCredentials(undefined, { path: file,
     fetcher: (async () => new Response("secret", { status: 401 })) as typeof fetch })).rejects.toThrow("HTTP 401")
   expect(readCodexCredentials(file)?.refreshToken).toBe("secret")
@@ -91,12 +93,56 @@ it("keeps credentials on refresh failure and never echoes the token endpoint bod
 
 it("does not restore credentials after logout during a refresh", async () => {
   const file = path()
-  saveCodexCredentials({ accessToken: "old", refreshToken: "secret", expiresAt: 0 }, file)
+  await saveCodexCredentials({ accessToken: "old", refreshToken: "secret", expiresAt: 0 }, file)
   await expect(getCodexCredentials(undefined, { path: file, fetcher: (async () => {
     rmSync(file)
     return Response.json({ access_token: "new", refresh_token: "rotated" })
   }) as typeof fetch })).rejects.toThrow("login changed")
   expect(readCodexCredentials(file)).toBeNull()
+})
+
+it("serializes a separate process logout after an in-flight refresh commit", async () => {
+  const file = path()
+  await saveCodexCredentials({ accessToken: "old", refreshToken: "secret", expiresAt: 0 }, file)
+  let beginFetch!: () => void
+  const fetchStarted = new Promise<void>(resolve => { beginFetch = resolve })
+  let releaseFetch!: () => void
+  const released = new Promise<void>(resolve => { releaseFetch = resolve })
+  const refresh = getCodexCredentials(undefined, { path: file, fetcher: (async () => {
+    beginFetch(); await released
+    return Response.json({ access_token: "new", refresh_token: "rotated", expires_in: 3600 })
+  }) as typeof fetch })
+  await fetchStarted
+  const module = new URL("../src/codex-auth.ts", import.meta.url).href
+  const child = spawn(process.execPath, ["-e", `import { deleteCodexCredentials } from ${JSON.stringify(module)};
+    console.log("logout-started"); await deleteCodexCredentials(${JSON.stringify(file)}); console.log("logout-completed");`],
+    { stdio: ["ignore", "pipe", "pipe"] })
+  let output = ""
+  let announce!: () => void
+  const announced = new Promise<void>(resolve => { announce = resolve })
+  child.stdout!.on("data", chunk => { output += String(chunk); if (output.includes("logout-started")) announce() })
+  const exited = new Promise<number | null>((resolve, reject) => { child.once("error", reject); child.once("exit", resolve) })
+  try {
+    await Promise.race([announced, exited.then(() => { throw new Error("Logout process exited before attempting the lock") })])
+    await delay(150)
+    expect(output).not.toContain("logout-completed")
+    releaseFetch()
+    expect((await refresh).accessToken).toBe("new")
+    expect(await exited).toBe(0)
+    expect(readCodexCredentials(file)).toBeNull()
+    expect(existsSync(`${file}.lock`)).toBe(false)
+  } finally { releaseFetch(); await refresh.catch(() => {}); child.kill() }
+}, 10_000)
+
+it("does not save a cancelled login while another process owns the credential lock", async () => {
+  const file = path()
+  mkdirSync(`${file}.lock`)
+  const controller = new AbortController()
+  const saving = saveCodexCredentials({ accessToken: "cancelled", refreshToken: "secret", expiresAt: 0 }, file, controller.signal)
+  controller.abort()
+  await expect(saving).rejects.toThrow()
+  expect(readCodexCredentials(file)).toBeNull()
+  expect(existsSync(`${file}.lock`)).toBe(true)
 })
 
 it("reports corrupt credential files instead of treating them as API keys", async () => {

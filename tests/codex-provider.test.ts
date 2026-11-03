@@ -39,7 +39,7 @@ it("persists an OAuth connection without secrets and keeps it stable after reaut
 })
 
 it("discovers from the pinned Codex endpoint with OAuth, includes backend-only models, and preserves selection", async () => {
-  saveCodexCredentials({ accessToken: "secret-access", refreshToken: "secret-refresh", expiresAt: Date.now() + 3600_000, accountId: "account" })
+  await saveCodexCredentials({ accessToken: "secret-access", refreshToken: "secret-refresh", expiresAt: Date.now() + 3600_000, accountId: "account" })
   const { config, provider } = connectCodexProvider(getDefaultConfig())
   provider.baseURL = "https://untrusted.invalid/v1"
   let requests = 0
@@ -68,8 +68,8 @@ it("retains saved models and gives an actionable error when signed out", async (
   expect(result.error).toContain("signed out")
 })
 
-it("routes auth status/logout before headless prompt handling and never prints credentials", () => {
-  saveCodexCredentials({ accessToken: "secret-access", refreshToken: "secret-refresh", expiresAt: Date.now() + 3600_000 })
+it("routes auth status/logout before headless prompt handling and never prints credentials", async () => {
+  await saveCodexCredentials({ accessToken: "secret-access", refreshToken: "secret-refresh", expiresAt: Date.now() + 3600_000 })
   const cli = (...args: string[]) => spawnSync(process.execPath, [resolve("src/index.tsx"), "auth", ...args], {
     encoding: "utf8", env: { ...process.env, ZAPCODE_DATA_DIR: root },
   })
@@ -82,8 +82,8 @@ it("routes auth status/logout before headless prompt handling and never prints c
   expect(cli("status", "codex").status).toBe(1)
 })
 
-it("runs the real headless host through the Codex OAuth Responses adapter", () => {
-  saveCodexCredentials({ accessToken: "fixture-oauth", refreshToken: "fixture-refresh", expiresAt: Date.now() + 3600_000 })
+it("runs the real headless host through the Codex OAuth Responses adapter", async () => {
+  await saveCodexCredentials({ accessToken: "fixture-oauth", refreshToken: "fixture-refresh", expiresAt: Date.now() + 3600_000 })
   const connected = connectCodexProvider(getDefaultConfig())
   const config = selectCatalogModel(connected.config, connected.provider.id, { id: "account-model", source: "manual" })
   saveAppConfig(join(root, "config.json"), config)

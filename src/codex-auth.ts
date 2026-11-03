@@ -37,12 +37,19 @@ export function readCodexCredentials(path = codexCredentialPath()): CodexCredent
   return value
 }
 
-export function saveCodexCredentials(value: CodexCredentials, path = codexCredentialPath()): void {
+function writeCodexCredentials(value: CodexCredentials, path: string): void {
   writeFileAtomic(path, JSON.stringify(value) + "\n", { mode: 0o600 })
 }
 
-export function deleteCodexCredentials(path = codexCredentialPath()): void {
-  rmSync(path, { force: true })
+export async function saveCodexCredentials(value: CodexCredentials, path = codexCredentialPath(), signal?: AbortSignal): Promise<void> {
+  // An explicit login may replace a previous login; it still serializes with logout.
+  await withCredentialLock(path, signal, () => writeCodexCredentials(value, path))
+}
+
+export async function deleteCodexCredentials(path = codexCredentialPath()): Promise<void> {
+  // Wait for in-flight refresh to commit before deleting. Once logout returns,
+  // that refresh can no longer recreate the file behind the user's back.
+  await withCredentialLock(path, undefined, () => rmSync(path, { force: true }))
 }
 
 function accountId(token: unknown): string | undefined {
@@ -77,12 +84,8 @@ async function tokenRequest(params: Record<string, string>, signal?: AbortSignal
     accountId: accountId(data.id_token) ?? accountId(data.access_token) ?? previous?.accountId }
 }
 
-/** Serialize refreshes across Zap processes because refresh tokens rotate. */
-export async function getCodexCredentials(signal?: AbortSignal, options: { path?: string; fetcher?: Fetch } = {}): Promise<CodexCredentials> {
-  const path = options.path ?? codexCredentialPath()
-  const current = readCodexCredentials(path)
-  if (!current) throw new Error("Codex is signed out. Sign in with /connect or zap auth login codex.")
-  if (current.expiresAt > Date.now() + 60_000) return current
+/** Every credential mutation uses this lock, including explicit login/logout. */
+async function withCredentialLock<T>(path: string, signal: AbortSignal | undefined, action: () => T | Promise<T>): Promise<T> {
   const lock = `${path}.lock`
   mkdirSync(dirname(path), { recursive: true })
   const started = Date.now()
@@ -94,21 +97,33 @@ export async function getCodexCredentials(signal?: AbortSignal, options: { path?
       // Network refreshes are bounded to 15s; recover a lock left by a crash.
       try { if (Date.now() - statSync(lock).mtimeMs > 60_000) rmSync(lock, { recursive: true, force: true }) }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error }
-      if (Date.now() - started > 30_000) throw new Error("Codex credential refresh is busy. Try again shortly.")
+      if (Date.now() - started > 30_000) throw new Error("Codex credential store is busy. Try again shortly.")
       await delay(100, undefined, { signal })
     }
   }
   try {
+    signal?.throwIfAborted()
+    return await action()
+  } finally { rmSync(lock, { recursive: true, force: true }) }
+}
+
+/** Serialize refreshes across Zap processes because refresh tokens rotate. */
+export async function getCodexCredentials(signal?: AbortSignal, options: { path?: string; fetcher?: Fetch } = {}): Promise<CodexCredentials> {
+  const path = options.path ?? codexCredentialPath()
+  const current = readCodexCredentials(path)
+  if (!current) throw new Error("Codex is signed out. Sign in with /connect or zap auth login codex.")
+  if (current.expiresAt > Date.now() + 60_000) return current
+  return withCredentialLock(path, signal, async () => {
     const latest = readCodexCredentials(path)
     if (!latest) throw new Error("Codex is signed out. Sign in again with /connect.")
     if (latest.expiresAt > Date.now() + 60_000) return latest
     const next = await tokenRequest({ grant_type: "refresh_token", refresh_token: latest.refreshToken }, signal, options.fetcher, latest)
     signal?.throwIfAborted()
-    // A concurrent logout/login owns the new state; never resurrect its tokens.
+    // Detect non-cooperating/manual edits too; public login/logout use our lock.
     if (readCodexCredentials(path)?.refreshToken !== latest.refreshToken) throw new Error("Codex login changed during refresh. Try again.")
-    saveCodexCredentials(next, path)
+    writeCodexCredentials(next, path)
     return next
-  } finally { rmSync(lock, { recursive: true, force: true }) }
+  })
 }
 
 export function openAuthBrowser(url: string): void {
