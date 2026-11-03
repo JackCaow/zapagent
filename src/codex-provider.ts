@@ -1,4 +1,5 @@
 import { CODEX_BASE_URL, getCodexCredentials } from "./codex-auth.js"
+import { normalizeModelReasoning, type ModelReasoning } from "../zapsdk/core/reasoning-effort.js"
 import { VERSION } from "./version.js"
 import { setActive, upsertProvider, type AppConfig, type Provider, type ProviderModelMetadata } from "./config.js"
 
@@ -14,7 +15,7 @@ export function connectCodexProvider(config: AppConfig): { config: AppConfig; pr
   return { config: next, provider }
 }
 
-export async function discoverCodexModels(signal: AbortSignal): Promise<Array<{ id: string; metadata: ProviderModelMetadata }>> {
+export async function discoverCodexModels(signal: AbortSignal): Promise<Array<{ id: string; metadata: ProviderModelMetadata; reasoning?: ModelReasoning }>> {
   const credentials = await getCodexCredentials(signal)
   const response = await fetch(`${CODEX_BASE_URL}/models?client_version=${encodeURIComponent(VERSION)}`, {
     headers: { Authorization: `Bearer ${credentials.accessToken}`, originator: "zap",
@@ -27,7 +28,7 @@ export async function discoverCodexModels(signal: AbortSignal): Promise<Array<{ 
   return data.models.flatMap(model => {
     // supported_in_api only gates API-key accounts; Codex OAuth can use backend-only models.
     if (typeof model.slug !== "string" || !model.slug || model.visibility === "hide" || model.visibility === "hidden") return []
-    return [{ id: model.slug, metadata: {
+    return [{ id: model.slug, reasoning: normalizeModelReasoning(model.supported_reasoning_levels, model.default_reasoning_level), metadata: {
       name: typeof model.display_name === "string" ? model.display_name : undefined,
       contextWindow: typeof model.context_window === "number" && model.context_window > 0 ? model.context_window : undefined,
       supportsVision: Array.isArray(model.input_modalities) ? model.input_modalities.includes("image") : undefined,

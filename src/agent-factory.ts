@@ -120,7 +120,7 @@ export function buildAgentObjects(
       } as unknown as Record<string, string>
     : undefined
   const rawProvider = active?.authMode === "codex-oauth"
-      ? new OpenAIResponsesProvider({ model, codex: { getCredentials: getCodexCredentials },
+      ? new OpenAIResponsesProvider({ model, codex: { getCredentials: getCodexCredentials, reasoningByModel: active.reasoningByModel, effortByModel: active.effortByModel },
           canonicalModelIds: modelCanonicalIds(active), supportsVision: resolveVisionSupport(active, model),
           extraRequestParams: active.extraRequestParams, maxRequestBytes: active.maxRequestBytes })
       : isAnthropic
