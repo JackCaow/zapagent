@@ -53,6 +53,11 @@ ptyTest("real App guides connection creation into model selection, skip and repa
     if (value.startsWith("/")) await visible(value)
     await sleep(250)
     await key("Enter")
+    // A completion/focus transition may consume the first Enter. Retry only
+    // while the original slash command is still in the composer, not a dialog.
+    if (value.startsWith("/") && capture().split("\n").some(line => ["! ", "❯ "].some(prefix => line.trimStart().startsWith(prefix + value.trim())))) {
+      await key("Enter")
+    }
   }
   const openConnect = async () => { await command("/connect"); await visible("Connections · /connect") }
   const newConnection = async (name: string, path = "/v1", withKey = false, manualContext?: string) => {
