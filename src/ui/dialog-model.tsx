@@ -44,8 +44,10 @@ export function ModelDialog({ config, initialProviderId, setup = false, onSave, 
     ?? config.providers.find(item => item.id === config.active.providerId) ?? config.providers[0]
   const targetProvider = config.providers.find(item => item.id === target?.provider.id)
   const manualProvider = config.providers.find(item => item.id === manualProviderId)
-  const live = useRef({ phase, selectedIndex, shown, config, provider, providerFilter, onCommit, onCancel })
-  live.current = { phase, selectedIndex, shown, config, provider, providerFilter, onCommit, onCancel }
+  const orphanedPhase = (phase === "metadata" || phase === "context") && !targetProvider || phase === "manual" && !manualProvider
+  const currentPhase = orphanedPhase ? "models" : phase
+  const live = useRef({ phase: currentPhase, selectedIndex, shown, config, provider, providerFilter, onCommit, onCancel })
+  live.current = { phase: currentPhase, selectedIndex, shown, config, provider, providerFilter, onCommit, onCancel }
 
   useEffect(() => {
     const providers = config.providers
@@ -61,6 +63,7 @@ export function ModelDialog({ config, initialProviderId, setup = false, onSave, 
     if (state.phase !== "models") return
     const cmd = commandInput(input, key)
     if (key.escape) { state.onCancel(); return }
+    if (!state.provider) return
     if (cmd === "p" && !setup) { setProviderAction("filter"); setPhase("providers"); return }
     if (cmd === "t") {
       setManual("")
