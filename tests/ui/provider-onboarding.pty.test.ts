@@ -91,6 +91,14 @@ ptyTest("real App guides connection creation into model selection, skip and repa
     await key("Escape"); await visible("Connections · /connect"); await key("Escape")
     expect(config().providers).toHaveLength(0)
 
+    await openConnect(); await key("Enter"); await visible("Provider directory · models.dev")
+    await visible("OpenAI Codex (ChatGPT)"); await key("Down"); await key("Enter")
+    frames.codex = await visible("OpenAI Codex · sign in with ChatGPT")
+    expect(frames.codex).toContain("Browser login")
+    expect(frames.codex).toContain("Device code")
+    await key("Escape"); await visible("Connections · /connect"); await key("Escape")
+    expect(config().providers).toHaveLength(0)
+
     await newConnection("First", "/v1", true)
     await visible("alpha-model")
     expect(config().providers[0]?.contextWindowMode).toBe("auto")

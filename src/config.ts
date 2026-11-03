@@ -93,7 +93,7 @@ export interface Provider {
   name: string                 // display alias (empty → falls back to baseURL)
   baseURL: string
   apiKey: string               // empty for keyless endpoints (Ollama)
-  authMode?: "api-key" | "none"
+  authMode?: "api-key" | "none" | "codex-oauth"
   /** Exact public catalog identity, independent of endpoint and user alias. */
   catalogProviderId?: string
   contextWindow: number
@@ -453,7 +453,7 @@ function normalizeProvider(value: unknown, index: number): Provider | null {
     name: typeof value.name === "string" ? value.name : "",
     baseURL: typeof value.baseURL === "string" ? value.baseURL : "",
     apiKey: typeof value.apiKey === "string" ? value.apiKey : "",
-    authMode: value.authMode === "none" ? "none" : value.authMode === "api-key" ? "api-key" : undefined,
+    authMode: value.authMode === "codex-oauth" ? "codex-oauth" : value.authMode === "none" ? "none" : value.authMode === "api-key" ? "api-key" : undefined,
     catalogProviderId: typeof value.catalogProviderId === "string" ? value.catalogProviderId : undefined,
     contextWindow: positiveIntegerOrDefault(value.contextWindow, 128000),
     models: Array.isArray(value.models)
@@ -750,6 +750,8 @@ export function hasApiKey(config: AppConfig): boolean {
   const p = getActiveProvider(config)
   if (!p) return false
   if (p.authMode === "none") return true
+  // The transport resolves OAuth credentials lazily, including logout/refresh.
+  if (p.authMode === "codex-oauth") return true
   // Keyless endpoints (Ollama) are detected via their source preset's
   // requiresApiKey flag; providers with no sourcePresetId must always have a key.
   const preset = p.sourcePresetId ? presetMap.get(p.sourcePresetId) : undefined
@@ -1087,7 +1089,7 @@ export function formatStatus(config: AppConfig, configPath: string): string {
   ]
   if (effort) lines.push(`Reasoning effort: ${effort}`)
   lines.push(
-    `API key: ${maskSecret(p?.apiKey ?? "")}`,
+    p?.authMode === "codex-oauth" ? "Authentication: Codex OAuth (ChatGPT)" : `API key: ${maskSecret(p?.apiKey ?? "")}`,
     `Serper key: ${maskSecret(config.serperKey)}`,
     `Max tokens: ${config.maxTokens}`,
     `Max steps: ${config.maxSteps}`,

@@ -75,6 +75,31 @@ Supported providers:
 - OpenAI Responses (`/responses`)
 - Compatible endpoints using either OpenAI protocol
 
+### Codex with a ChatGPT account
+
+In `/connect`, select **New connection → OpenAI Codex (ChatGPT)**, then choose
+browser login or device code. After authorization, select a model from the
+account catalog or enter an exact model ID in `/model`. A completed inference
+request verifies access to that model.
+
+The same login is available from the command line (use `zapdev` for this source checkout):
+
+```bash
+zapdev auth login codex
+zapdev auth login codex --device-code
+zapdev auth status codex
+zapdev auth logout codex
+```
+
+Browser login uses localhost port 1455. Use device code for SSH sessions or a
+busy callback port. Zap saves OAuth credentials separately in `codex-oauth.json`
+under its data directory (`ZAPCODE_DATA_DIR` can override it), with owner-only
+file permissions, and refreshes expiring tokens automatically. Logout removes
+Zap's credentials. Saved connections use `authMode: "codex-oauth"` and
+`protocol: "openai-responses"`; the API key stays empty. This is the native-client
+Codex OAuth flow, similar to OpenCode's legacy Codex login, and requires no
+local Codex CLI installation.
+
 ### OpenAI Responses API
 
 In `/connect`, create or edit a connection and select **OpenAI Responses** at
