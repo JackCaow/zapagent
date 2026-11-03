@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, watch, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Resvg } from "@resvg/resvg-js";
@@ -104,11 +104,16 @@ test("a workspace file budget failure preserves the completed artifact without p
 
 test("a changed directory after remote completion cannot redirect the image outside the workspace", async () => {
   mkdirSync(join(root, "workspace/mutable")); mkdirSync(join(root, "outside"));
+  const outsideEvents: string[] = [];
+  const watcher = watch(join(root, "outside"), (event) => outsideEvents.push(event));
   const result = await tool(async () => {
     rmSync(join(root, "workspace/mutable"), { recursive: true });
     symlinkSync(join(root, "outside"), join(root, "workspace/mutable"), process.platform === "win32" ? "junction" : "dir");
     return { bytes: png, width: 2, height: 3, requestBytes: 1, responseBytes: 1 };
   }).handler({ prompt: "draw", output_path: "mutable/image.png" });
+  await new Promise(resolve => setTimeout(resolve, 30));
+  watcher.close();
+  expect(outsideEvents).toHaveLength(0);
   expect(result.success).toBe(false); expect(calls).toBe(1);
   expect(existsSync(join(root, "outside/image.png"))).toBe(false);
   expect(restoreGeneratedImage(join(root, "artifacts"), result.meta)).toEqual(png);

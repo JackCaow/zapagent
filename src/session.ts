@@ -1985,19 +1985,22 @@ export function sessionLogsToTurns(logs: SessionLog[]): Turn[] {
   // toolCalls keyed by id — duplicates from replaceLog chaining are
   // de-duped in place. Order is preserved by tracking insertion order.
   const pendingToolCalls: { id: string; name: string; arguments: Record<string, unknown> }[] = []
-  const pendingToolResults = new Map<string, { content: string; success?: boolean; suppression?: "duplicate"; meta?: unknown }>()
+  const pendingToolResults = new Map<string, { content: string; success?: boolean; suppression?: "duplicate"; meta?: unknown; generatedBlock?: ImageContent }>()
   // Restore recent generated pixels from authenticated runtime artifacts only.
   // Older outputs retain their paths; avoid loading an unbounded image history.
-  const generatedBlocks = new Map<string, ImageContent>()
+  const generatedBlocks = new Map<SessionLog, ImageContent>()
+  const seenGeneratedCalls = new Set<string>()
   let generatedBytes = 0
   for (const log of [...logs].reverse()) {
     if (log.restore === false || log.type !== "result" || log.tool?.name !== "generate_image") continue
+    if (!log.tool.id || seenGeneratedCalls.has(log.tool.id)) continue
+    seenGeneratedCalls.add(log.tool.id)
     const artifact = generatedImageArtifact(log.tool.meta)
-    if (!artifact || generatedBlocks.has(artifact.id) || generatedBlocks.size >= 4 || generatedBytes + artifact.bytes > 16 * 1024 * 1024) continue
+    if (!artifact || generatedBlocks.size >= 4 || generatedBytes + artifact.bytes > 16 * 1024 * 1024) continue
     const bytes = restoreGeneratedImage(join(getAppDataDir(), "generated-images"), log.tool.meta)
     if (!bytes) continue
     generatedBytes += bytes.length
-    generatedBlocks.set(artifact.id, { type: "image", filePath: join(getAppDataDir(), "generated-images", `${artifact.id}.png`),
+    generatedBlocks.set(log, { type: "image", filePath: join(getAppDataDir(), "generated-images", `${artifact.id}.png`),
       mediaType: "image/png", base64: bytes.toString("base64"), source: "generate_image" })
   }
 
@@ -2010,7 +2013,7 @@ export function sessionLogsToTurns(logs: SessionLog[]): Turn[] {
         const got = pendingToolResults.get(tc.id)
         if (got) {
           const artifact = tc.name === "generate_image" ? generatedImageArtifact(got.meta) : undefined
-          const generatedBlock = artifact ? generatedBlocks.get(artifact.id) : undefined
+          const generatedBlock = got.generatedBlock
           completed.push({
             id: tc.id,
             name: tc.name,
@@ -2099,6 +2102,7 @@ export function sessionLogsToTurns(logs: SessionLog[]): Turn[] {
           success: log.tool.success,
           suppression: log.tool.suppression,
           meta: log.tool.name === "generate_image" ? log.tool.meta : undefined,
+          generatedBlock: generatedBlocks.get(log),
         })
       }
     }

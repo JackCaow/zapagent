@@ -123,3 +123,12 @@ it("bounds restored image history to the four most recent cached images", async 
   expect(images[0].contentBlocks).toBeUndefined()
   expect(images.slice(1).every(message => message.contentBlocks?.[0]?.type === "image")).toBe(true)
 })
+
+
+it("counts repeated references to the same image against the restore occurrence budget", async () => {
+  const artifact = await cacheGeneratedImage(join(root, "generated-images"), { bytes: png, width: 64, height: 64, requestBytes: 1, responseBytes: 1 })
+  const logs: SessionLog[] = [{ type: "user", text: "Several generations returned equal pixels" }]
+  for (let i = 0; i < 12; i++) logs.push({ type: "result", text: "saved", tool: { id: `repeat-${i}`, name: "generate_image", output: "saved", success: true, meta: { generatedImage: artifact } } })
+  const restored = sessionLogsToMessages(logs).filter(message => message.contentBlocks?.some(block => block.type === "image"))
+  expect(restored.map(message => message.toolCallId)).toEqual(["repeat-8", "repeat-9", "repeat-10", "repeat-11"])
+})

@@ -77,6 +77,8 @@ export function generateImageTool(options: GenerateImageOptions): Tool {
         signal?.throwIfAborted();
         context?.resources?.consumeFiles();
         context?.resources?.consumeFileBytes(image.bytes.length);
+        await check(target);
+        if (await realpath(dirname(path)) !== parent) throw new Error("Image output directory changed during generation.");
         await atomicWrite(target, image.bytes, { replaceExisting: false, signal, mode: 0o600, beforeCommit: async () => {
           await check(target);
           if (await realpath(dirname(path)) !== parent) throw new Error("Image output directory changed during generation.");
