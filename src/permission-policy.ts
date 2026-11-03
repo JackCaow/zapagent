@@ -1,5 +1,5 @@
 import type { PermissionMode } from "./config.js"
-import { PermissionManager, isPathReadTool, pathReadOutsideCwdReason } from "./permissions.js"
+import { PermissionManager, isPathReadTool } from "./permissions.js"
 import type { ApprovalContext } from "../zapsdk/tools/executor.js"
 import { approvalFacts } from "./approval-facts.js"
 import { matchDangerousToolCall } from "../zapsdk/utils/safety.js"
@@ -48,10 +48,10 @@ export function evaluateApprovalPolicy(manager: PermissionManager, name: string,
   if (rule.decision === "allow") return result("allow", rule.reason ?? `rule ${rule.rule?.pattern}`, "rule")
   if (options.allowedTools?.includes(name)) return result("allow", "allowed by --allowed-tools")
   if (name === "read_tool_output") return result("allow", "session-scoped runtime output read")
-  if (isPathReadTool(name)) {
-    const outside = pathReadOutsideCwdReason(name, args, options.context?.workspaceRoot ?? options.cwd)
-    return outside ? result("ask", outside, "fallback", true) : result("allow", "project path read")
-  }
+  // Reading screenshots, skill resources and reference files must not require
+  // a new grant for every path. Explicit restrictions were checked above;
+  // filesystem confinement remains the executor/backend's responsibility.
+  if (isPathReadTool(name) && facts.readOnly) return result("allow", "read-only filesystem access")
   if (options.mode === "bypassPermissions") return result("allow", "bypassPermissions mode")
   if (options.mode === "acceptEdits" && facts.editOnly) return result("allow", "acceptEdits mode")
   return result("ask", "no rule, prompting user", "fallback", true)

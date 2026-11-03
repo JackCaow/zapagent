@@ -97,7 +97,7 @@ export function PermissionsDialog({ onCancel, availableTools }: Props) {
           const rule = flat.group.rules[flat.ruleIdx]
           if (rule) {
             try {
-              permissionManager.removeRule(rule.rule.pattern, rule.rule.type, scopeOf(flat.group))
+              permissionManager.removeRule(rule.rule.pattern, rule.rule.type, scopeOf(flat.group), rule.rule.canonicalPath === true)
               try { appLogger.info(`permission_remove pattern=${rule.rule.pattern} type=${rule.rule.type}`) } catch {}
             } catch (failure) { setError(String(failure)) }
           }
@@ -119,7 +119,7 @@ export function PermissionsDialog({ onCancel, availableTools }: Props) {
         for (const g of groups) {
           if (g.label === "session") continue
           for (const r of g.rules) {
-            try { permissionManager.removeRule(r.rule.pattern, r.rule.type, scopeOf(g)) } catch (failure) { setError(String(failure)) }
+            try { permissionManager.removeRule(r.rule.pattern, r.rule.type, scopeOf(g), r.rule.canonicalPath === true) } catch (failure) { setError(String(failure)) }
           }
         }
         try { appLogger.info("permission_clear_all") } catch {}
@@ -134,9 +134,9 @@ export function PermissionsDialog({ onCancel, availableTools }: Props) {
     }
   }, { isActive: !grantOpen })
 
-  if (grantOpen) return <ToolGrantDialog availableTools={availableTools} onCancel={() => setGrantOpen(false)} onSave={request => {
+  if (grantOpen) return <ToolGrantDialog availableTools={availableTools} onCancel={() => setGrantOpen(false)} onSave={(request, reviewedRules) => {
     try {
-      permissionManager.addToolRules(buildToolGrantRules(request, availableTools), request.lifetime)
+      permissionManager.addToolRules(buildToolGrantRules(request, availableTools, process.cwd(), reviewedRules), request.lifetime)
       setGrantOpen(false); setTick(value => value + 1)
     } catch (failure) { return String(failure) }
   }} />
@@ -169,7 +169,7 @@ export function PermissionsDialog({ onCancel, availableTools }: Props) {
               const { rule, shadowedBy } = annotated
               return (
                 <Box
-                  key={`${group.label}::${rule.type}::${rule.pattern}`}
+                  key={`${group.label}::${rule.type}::${rule.pattern}::${rule.canonicalPath ? "canonical" : "legacy"}`}
                   flexDirection="column"
                 >
                   <Box flexDirection="row">
@@ -181,6 +181,7 @@ export function PermissionsDialog({ onCancel, availableTools }: Props) {
                     <Text color={isSelected ? c.text.primary : c.text.muted} wrap="truncate-end">
                       {truncateToWidth(rule.pattern, 60)}
                     </Text>
+                    {rule.canonicalPath && <Text color={c.text.ghost}> (fixed folder target)</Text>}
                     {shadowedBy && (
                       <Text color={c.text.ghost} wrap="truncate-end">
                         {truncateToWidth(`  ⤴ shadowed by ${shadowedBy.rule.type} ${shadowedBy.rule.pattern} (${shadowedBy.scope})`, 70)}

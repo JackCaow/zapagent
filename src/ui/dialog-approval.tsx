@@ -26,7 +26,8 @@ import { commandInput, isReturnInput } from "./controlled-input.js"
 import { useHideNativeCursor } from "./dialog-frame.js"
 import { c } from "./theme.js"
 import { ToolGrantDialog } from "./dialog-tool-grant.js"
-import type { ToolGrantRequest } from "../tool-grants.js"
+import { suggestToolGrantDirectory, type ToolGrantRequest } from "../tool-grants.js"
+import type { PermissionRule } from "../permissions.js"
 import { formatToolCall, getToolAlias } from "./transcript-format.js"
 
 export type ApprovalChoice = "once" | "always" | "forever" | "deny"
@@ -47,7 +48,9 @@ interface Props {
   unsandboxed?: boolean
   allowScope?: boolean
   availableTools?: string[]
-  onGrant?: (request: ToolGrantRequest, availableTools: string[]) => string | void
+  cwd?: string
+  workspaceRoot?: string
+  onGrant?: (request: ToolGrantRequest, availableTools: string[], reviewedRules?: readonly PermissionRule[]) => string | void
 }
 
 interface Option {
@@ -55,7 +58,7 @@ interface Option {
   label: string
 }
 
-export function ApprovalBar({ toolName, args, onChoose, rulePreview, unsandboxed: escape, allowScope = true, availableTools = [], onGrant }: Props) {
+export function ApprovalBar({ toolName, args, onChoose, rulePreview, unsandboxed: escape, allowScope = true, availableTools = [], cwd, workspaceRoot, onGrant }: Props) {
   useHideNativeCursor()
   // Three accept tiers ("once" / session-scoped "always" / persistent
   // "forever") + deny. Both persistent consent and ordinary tool grants
@@ -68,6 +71,7 @@ export function ApprovalBar({ toolName, args, onChoose, rulePreview, unsandboxed
     : `${getToolAlias(toolName)} commands`
   const unsandboxed = escape ?? isUnsandboxedBash(toolName, args)
   const canCustomize = allowScope && !unsandboxed && toolName !== "delegate_agent" && availableTools.includes(toolName) && !!onGrant
+  const directory = canCustomize ? suggestToolGrantDirectory(toolName, args, cwd) : undefined
   const options: Option[] = !allowScope
     ? [
         { value: "once", label: unsandboxed ? "Yes, run outside the sandbox this once" : "Yes, this once" },
@@ -86,9 +90,11 @@ export function ApprovalBar({ toolName, args, onChoose, rulePreview, unsandboxed
       ]
   const [idx, setIdx] = useState(0)
   const [customizing, setCustomizing] = useState(false)
+  const [directoryShortcut, setDirectoryShortcut] = useState(false)
 
   useInput((input, key) => {
-    if (input === "g" && canCustomize) { setCustomizing(true); return }
+    if (input === "g" && canCustomize) { setDirectoryShortcut(false); setCustomizing(true); return }
+    if (input === "d" && directory) { setDirectoryShortcut(true); setCustomizing(true); return }
     const directChoice = approvalChoiceForInput(input, key, idx, allowScope)
     if (directChoice) { onChoose(directChoice); return }
     if (key.upArrow)   { setIdx(i => (i - 1 + options.length) % options.length); return }
@@ -97,7 +103,8 @@ export function ApprovalBar({ toolName, args, onChoose, rulePreview, unsandboxed
 
   if (customizing && canCustomize && onGrant) return <ToolGrantDialog availableTools={availableTools} initialTools={[toolName]}
     initialPattern={rulePreview?.match(/^[^(]+\(([^()]*)\)$/)?.[1] ?? ""}
-    onSave={request => onGrant(request, availableTools)} onCancel={() => setCustomizing(false)} />
+    initialDirectory={directory} directoryShortcut={directoryShortcut} cwd={workspaceRoot}
+    onSave={(request, reviewedRules) => onGrant(request, availableTools, reviewedRules)} onCancel={() => setCustomizing(false)} />
 
   // Height is load-bearing: a tall dynamic frame above a long transcript
   // gets partially scrolled into scrollback by every re-render that
@@ -130,6 +137,7 @@ export function ApprovalBar({ toolName, args, onChoose, rulePreview, unsandboxed
         })}
       </Box>
       {canCustomize && <Text color={c.text.muted}>g customize scope / select tools</Text>}
+      {directory && <Text color={c.text.muted}>d authorize folder / select tools: {directory}</Text>}
     </Box>
   )
 }

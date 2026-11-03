@@ -2,6 +2,7 @@
 import { useRef, useState } from "react"
 import { Box, Text, useInput } from "ink"
 import { buildToolGrantRules, EDIT_GRANT_TOOLS, READ_GRANT_TOOLS, type ToolGrantRequest } from "../tool-grants.js"
+import type { PermissionRule } from "../permissions.js"
 import { ControlledInput, commandInput, isReturnInput } from "./controlled-input.js"
 import { c } from "./theme.js"
 import { useHideNativeCursor } from "./dialog-frame.js"
@@ -10,30 +11,35 @@ interface Props {
   availableTools: string[]
   initialTools?: string[]
   initialPattern?: string
-  onSave: (request: ToolGrantRequest) => string | void
+  initialDirectory?: string
+  directoryShortcut?: boolean
+  cwd?: string
+  onSave: (request: ToolGrantRequest, reviewedRules: readonly PermissionRule[]) => string | void
   onCancel: () => void
 }
 
-export function ToolGrantDialog({ availableTools, initialTools = [], initialPattern = "", onSave, onCancel }: Props) {
+export function ToolGrantDialog({ availableTools, initialTools = [], initialPattern = "", initialDirectory = "", directoryShortcut = false, cwd = process.cwd(), onSave, onCancel }: Props) {
   useHideNativeCursor()
   // Freeze the reviewed registry snapshot: later MCP registrations cannot join it.
   const [tools] = useState(() => [...new Set(availableTools)].filter(name => name !== "delegate_agent").sort())
   const [selected, setSelected] = useState(() => initialTools.filter(name => tools.includes(name)))
   const [step, setStep] = useState(0)
   const [index, setIndex] = useState(0)
-  const [pattern, setPattern] = useState(initialPattern)
-  const [cursor, setCursor] = useState(initialPattern.length)
+  const [pattern, setPattern] = useState(directoryShortcut ? initialDirectory : initialPattern)
+  const [cursor, setCursor] = useState((directoryShortcut ? initialDirectory : initialPattern).length)
+  const [filterKind, setFilterKind] = useState<"pattern" | "directory">(directoryShortcut ? "directory" : "pattern")
   const [resource, setResource] = useState<ToolGrantRequest["resource"]>({ kind: "all" })
   const [lifetime, setLifetime] = useState<ToolGrantRequest["lifetime"]>("session")
   const [error, setError] = useState("")
+  const reviewedRules = useRef<PermissionRule[]>([])
   const request: ToolGrantRequest = { tools: selected, resource, lifetime }
   const live = useRef({ step, index, selected, pattern, request, onSave, onCancel })
   live.current = { step, index, selected, pattern, request, onSave, onCancel }
   const checkPattern = () => {
     const value = live.current.pattern
     try {
-      buildToolGrantRules({ ...live.current.request, resource: { kind: "pattern", value } }, tools)
-      setResource({ kind: "pattern", value }); setStep(3); setError("")
+      buildToolGrantRules({ ...live.current.request, resource: { kind: filterKind, value } }, tools, cwd)
+      setResource({ kind: filterKind, value }); setStep(3); setError("")
     } catch (failure) { setError(String(failure)) }
   }
   useInput((input, key) => {
@@ -61,27 +67,30 @@ export function ToolGrantDialog({ availableTools, initialTools = [], initialPatt
       if (cmd === "n") { setSelected([]); return }
       if (isReturnInput(input, key)) {
         if (!current.selected.length) { setError("Select at least one tool"); return }
-        setStep(1); setIndex(0)
+        setStep(directoryShortcut ? 2 : 1); setIndex(0)
       }
     } else if (current.step === 1) {
       if (cmd === "1") { setResource({ kind: "all" }); setStep(3) }
-      if (cmd === "2") setStep(2)
+      if (cmd === "2") { setFilterKind("pattern"); setPattern(initialPattern); setCursor(initialPattern.length); setStep(2) }
+      if (cmd === "3") { setFilterKind("directory"); setPattern(initialDirectory); setCursor(initialDirectory.length); setStep(2) }
     } else if (current.step === 3) {
-      if (cmd === "1" || cmd === "2") { setLifetime(cmd === "1" ? "session" : "project"); setStep(4); setIndex(0) }
+      if (cmd === "1" || cmd === "2") {
+        try {
+          reviewedRules.current = buildToolGrantRules(current.request, tools, cwd)
+          setLifetime(cmd === "1" ? "session" : "project"); setStep(4); setIndex(0)
+        } catch (failure) { setError(String(failure)) }
+      }
     } else if (current.step === 4) {
       if (key.upArrow) { setIndex(value => Math.max(0, value - 1)); return }
       if (key.downArrow) { setIndex(value => Math.min(current.selected.length - 1, value + 1)); return }
       if (isReturnInput(input, key)) {
-        const failure = current.onSave(current.request)
+        const failure = current.onSave(current.request, reviewedRules.current)
         if (failure) setError(failure)
       }
     }
   })
   const start = Math.max(0, Math.min(index - 4, tools.length - 8))
-  let preview: string[] = []
-  if (step === 4) {
-    try { preview = buildToolGrantRules(request, tools).map(rule => rule.pattern) } catch (failure) { preview = [String(failure)] }
-  }
+  const preview = step === 4 ? reviewedRules.current.map(rule => rule.pattern) : []
   return <Box flexDirection="column" paddingX={1} marginTop={1}>
     <Text bold color={c.text.primary}>Tool authorization — {["select tools", "resource scope", "resource filter", "lifetime", "review authorization"][step]}</Text>
     {step === 0 && <>
@@ -92,10 +101,11 @@ export function ToolGrantDialog({ availableTools, initialTools = [], initialPatt
     {step === 1 && <>
       <Text>1. Entire selected tools (all arguments)</Text>
       <Text>2. Project path glob or Bash command pattern</Text>
+      <Text>3. Folder and all descendants (relative, absolute or ~/ path)</Text>
       <Text color={c.text.muted}>Tool grants do not authorize sandbox escape. Esc back</Text>
     </>}
     {step === 2 && <>
-      <Text color={c.text.muted}>Project-relative path glob, e.g. src/**; Bash alone, e.g. git log:* · Enter next · Esc back</Text>
+      <Text color={c.text.muted}>{filterKind === "directory" ? "Folder path, e.g. src or ~/.local/share/android-use/screenshots; includes future files" : "Project-relative path glob, e.g. src/**; Bash alone, e.g. git log:*"} · Enter next · Esc back</Text>
       <ControlledInput value={pattern} cursorOffset={cursor} onValueChange={value => { setPattern(value.value); setCursor(value.cursorOffset) }} onSubmit={checkPattern} />
     </>}
     {step === 3 && <>

@@ -1,24 +1,33 @@
 import { expect, it } from "bun:test"
 import { spawnSync } from "node:child_process"
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 import { writeFileAtomic } from "../../src/utils/secure-write.js"
 
 const ptyTest = process.env.RUN_TUI_PTY_TESTS === "1" ? it : it.skip
-for (const scenario of ["session", "project", "custom"]) {
+for (const scenario of ["session", "project", "custom", "folder", "folder-retarget", "folder-menu-retarget"]) {
   ptyTest(`real App ${scenario} tool grants preview, apply, and expire/revoke`, async () => {
-    const root = mkdtempSync(join(tmpdir(), "zap-tool-grants-pty-"))
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "zap-tool-grants-pty-")))
     const workspace = join(root, "workspace"); mkdirSync(join(workspace, "src"), { recursive: true })
+    const folderScenario = scenario.startsWith("folder"), retarget = scenario.endsWith("retarget")
+    const fromMenu = scenario === "folder-menu-retarget"
+    const outputDirectory = folderScenario ? join(root, "outside") : join(workspace, "src")
+    mkdirSync(outputDirectory, { recursive: true })
+    const alias = join(root, "folder-alias"), other = join(root, "unreviewed")
+    if (retarget) { mkdirSync(other); symlinkSync(outputDirectory, alias, "junction") }
+    const ruleScope = folderScenario ? `${outputDirectory}{,/**}` : "src/**"
     const socket = `zap-tools-${process.pid}-${Date.now()}-${scenario}`
+    const frames: string[] = []
     let phase = "start", calls = 0
     const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
       const body = await request.json() as { messages: Array<{ role: string; content?: string }> }
       calls++
       const user = body.messages.findLast(message => message.role === "user")?.content ?? ""
       const tool = body.messages.at(-1)?.role === "user" && /^WRITE_(TEST|AGAIN|REVOKED)$/.test(user.trim())
-      const path = user.includes("AGAIN") ? "src/again.txt" : user.includes("REVOKED") ? "src/revoked.txt" : "src/result.txt"
+      const name = user.includes("AGAIN") ? "again.txt" : user.includes("REVOKED") ? "revoked.txt" : "result.txt"
+      const path = folderScenario ? join(retarget ? alias : outputDirectory, name) : `src/${name}`
       const delta = tool ? { role: "assistant", tool_calls: [{ index: 0, id: `write-${calls}`, type: "function", function: {
         name: "write_file", arguments: JSON.stringify({ path, content: "fixture-only\n" }),
       } }] } : { role: "assistant", content: "BATCH_DONE" }
@@ -41,7 +50,10 @@ for (const scenario of ["session", "project", "custom"]) {
       let screen = ""
       for (let attempt = 0; attempt < 200; attempt++) {
         screen = capture()
-        if (condition(screen)) return screen
+        if (condition(screen)) {
+          if (scenario === "folder" && process.env.ZAP_TOOL_GRANT_RECORDING) frames.push(tmux("capture-pane", "-e", "-p", "-t", "tools"))
+          return screen
+        }
         await sleep(50)
       }
       throw new Error(`Tool grant did not settle (${phase}; calls=${calls}):\n${screen}`)
@@ -62,35 +74,50 @@ for (const scenario of ["session", "project", "custom"]) {
     }
     try {
       await start()
-      if (scenario === "custom") {
+      if (scenario === "custom" || folderScenario && !fromMenu) {
         phase = "waiting approval"; await send("WRITE_TEST"); await settle(screen => screen.includes("Approve?"))
-        text("g")
+        if (folderScenario) expect(capture()).toContain("d authorize folder / select tools")
+        text(folderScenario ? "d" : "g")
       } else {
         phase = "open permissions"; await send("/permissions"); await settle(screen => screen.includes("No permission rules active")); text("a")
       }
       phase = "tool selection"; await settle(screen => screen.includes("Tool authorization") && screen.includes("select tools"))
       if (scenario !== "custom") { text("w"); await settle(screen => /[2-9] selected/.test(screen)) }
       key("Enter")
-      phase = "resource scope"; await settle(screen => screen.includes("Entire selected tools")); text("2")
+      if (!folderScenario || fromMenu) {
+        phase = "resource scope"; await settle(screen => screen.includes("Entire selected tools")); text(fromMenu ? "3" : "2")
+      }
       await settle(screen => screen.includes("resource filter"))
-      if (scenario !== "custom") text("src/**")
-      await settle(screen => screen.includes("src/**")); await sleep(150); key("Enter")
-      phase = "lifetime"; await settle(screen => screen.includes("This session — cleared")); text(scenario === "project" ? "2" : "1")
+      if (fromMenu) text(alias)
+      else if (scenario !== "custom" && !folderScenario) text("src/**")
+      await settle(screen => screen.includes(retarget ? alias : folderScenario ? outputDirectory : "src/**")); await sleep(150); key("Enter")
+      phase = "lifetime"; await settle(screen => screen.includes("This session — cleared")); text(scenario === "project" || folderScenario ? "2" : "1")
       phase = "review"; const review = await settle(screen => screen.includes("review authorization"))
-      expect(review).toContain("write_file(src/**)")
-      if (scenario !== "custom") expect(review).toContain("edit_file(src/**)")
+      expect(review).toContain(`write_file(${ruleScope})`)
+      if (scenario !== "custom") expect(review).toContain(`edit_file(${ruleScope})`)
       expect(review).toContain("Sandbox escape is separate")
+      if (retarget) { unlinkSync(alias); symlinkSync(other, alias, "junction") }
       key("Enter")
+      if (retarget) {
+        const rejected = await settle(screen => screen.includes("scope changed after review"))
+        expect(rejected).toContain(`write_file(${ruleScope})`)
+        expect(existsSync(join(other, "result.txt"))).toBe(false)
+        expect(existsSync(join(outputDirectory, "result.txt"))).toBe(false)
+        // Use the fixture's data dir, not the test runner's global settings.
+        const settings = join(root, "permissions", "projects")
+        expect(existsSync(settings)).toBe(false)
+        return
+      }
       phase = "grant applied"
-      if (scenario !== "custom") {
+      if (scenario !== "custom" && scenario !== "folder") {
         await settle(screen => screen.includes("write_file(src/**)") && screen.includes("d delete")); await closePermissions(); await send("WRITE_TEST")
       }
-      await settle(screen => screen.includes("BATCH_DONE") && !screen.includes("Esc twice to stop") && existsSync(join(workspace, "src/result.txt")))
+      await settle(screen => screen.includes("BATCH_DONE") && !screen.includes("Esc twice to stop") && existsSync(join(outputDirectory, "result.txt")))
       await sleep(250)
       expect(capture()).not.toContain("Approve?")
-      if (scenario === "project") {
+      if (scenario === "project" || scenario === "folder") {
         phase = "restart"; tmux("kill-session", "-t", "tools"); await start(); await send("WRITE_AGAIN")
-        await settle(screen => screen.includes("BATCH_DONE") && !screen.includes("Esc twice to stop") && existsSync(join(workspace, "src/again.txt")))
+        await settle(screen => screen.includes("BATCH_DONE") && !screen.includes("Esc twice to stop") && existsSync(join(outputDirectory, "again.txt")))
         await sleep(250)
         phase = "revoke"; await send("/permissions"); await settle(screen => screen.includes("d delete")); text("c")
         await settle(screen => screen.includes("Press c again")); text("c")
@@ -100,7 +127,12 @@ for (const scenario of ["session", "project", "custom"]) {
       }
       phase = "approval after expiry/revoke"; expect(await settle(screen => screen.includes("Approve?"))).toContain("g customize scope")
       text("4"); await settle(screen => screen.includes("BATCH_DONE") && !screen.includes("Approve?"))
-      expect(existsSync(join(workspace, scenario === "project" ? "src/revoked.txt" : "src/again.txt"))).toBe(false)
+      expect(existsSync(join(outputDirectory, scenario === "project" || scenario === "folder" ? "revoked.txt" : "again.txt"))).toBe(false)
+      if (scenario === "folder" && process.env.ZAP_TOOL_GRANT_RECORDING) {
+        const header = { version: 2, width: 170, height: 40, title: "Folder authorization: multiple tools, restart reuse and revocation (fixture provider)" }
+        writeFileSync(process.env.ZAP_TOOL_GRANT_RECORDING, [JSON.stringify(header), ...frames.map((frame, index) =>
+          JSON.stringify([index * 1.5, "o", "\x1b[2J\x1b[H" + frame.replaceAll("\n", "\r\n")]))].join("\n") + "\n")
+      }
     } finally {
       try { tmux("kill-server") } catch {}
       server.stop(); rmSync(root, { recursive: true, force: true })

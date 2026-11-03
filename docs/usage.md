@@ -288,10 +288,16 @@ approval for dangerous commands, plan mode, and execution-backend restrictions
 continue to apply. Choosing a scope authorizes subsequent outside-sandbox commands
 in that scope, with full access to host files and network.
 
+Ordinary file, image, document, search and directory reads run without approval,
+including paths outside the project, unless an explicit deny/ask rule applies.
+Execution-backend filesystem restrictions still apply independently.
+
 For ordinary tools, open `/permissions` and press `a` to select multiple tools,
-choose entire tools or a project-relative file glob / Bash command pattern,
-then review and save for this session or project. Press `g` on an ordinary
-approval prompt to customize its scope. Read/edit groups expand into exact
+choose entire tools, a folder and its descendants, or a project-relative file
+glob / Bash command pattern, then review and save for this session or project.
+Folder scopes accept relative, absolute and `~/` paths and include future files.
+Press `d` on a file approval prompt to prefill its folder and select tools, or
+`g` to customize any supported scope. Read/edit groups expand into exact
 currently registered tool names; future MCP tools do not inherit the grant.
 All session tool grants expire on `/new` or session restore. New project grants
 use the same host-owned data directory as sandbox consent; existing repository,

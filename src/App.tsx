@@ -1134,6 +1134,8 @@ export function App() {
           availableTools={agentRef.current.registry.definitions().filter(tool => tool.permission === "confirm").map(tool => tool.name)}
           unsandboxed={approvalFacts(pendingApproval.name, pendingApproval.args, pendingApproval.context).sandboxEscape}
           rulePreview={inferInvocationRules(pendingApproval.name, pendingApproval.args, process.cwd(), pendingApproval.context).map(rule => rule.pattern).join(", ") || null}
+          cwd={pendingApproval.context?.cwd}
+          workspaceRoot={pendingApproval.context?.workspaceRoot}
         />
       )}
       {!inModal && pendingPlan && <PlanApprovalBar plan={pendingPlan.plan} onChoose={pendingPlan.resolve} />}

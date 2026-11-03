@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { tmpdir } from "node:os"
-import { buildToolGrantRules, type ToolGrantRequest } from "../src/tool-grants.js"
+import { buildToolGrantRules, suggestToolGrantDirectory, type ToolGrantRequest } from "../src/tool-grants.js"
 import { inferInvocationRules, getGlobalSettingsPath, getProjectAuthorizationSettingsPath, getProjectLocalSettingsPath, getProjectSettingsPath, loadPermissionSettings, PermissionManager, savePermissionSettings } from "../src/permissions.js"
 import { evaluateApprovalPolicy } from "../src/permission-policy.js"
 import { buildHeadlessApproval } from "../src/headless/approval.js"
@@ -18,7 +18,7 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true })
 })
 const request = (tools: string[], resource: ToolGrantRequest["resource"] = { kind: "all" }, lifetime: ToolGrantRequest["lifetime"] = "session"): ToolGrantRequest => ({ tools, resource, lifetime })
-const inventory = ["bash", "write_file", "edit_file", "multi_edit", "read_file", "move_file", "delegate_agent", "mcp__fixture__Read"]
+const inventory = ["bash", "write_file", "edit_file", "multi_edit", "read_file", "list_tree", "move_file", "delegate_agent", "mcp__fixture__Read"]
 
 describe("tool grant expansion and resource contracts", () => {
   it("saves exact tool snapshots, deduplicates names, and preserves MCP case", () => {
@@ -38,6 +38,85 @@ describe("tool grant expansion and resource contracts", () => {
       expect(mgr.checkPermission(name, { path: "lib/a.ts" }).decision).toBe("ask")
     }
   })
+  it("authorizes an outside folder for multiple tools and future files without covering sibling folders", () => {
+    const folder = join(root, "screenshots")
+    const tools = ["read_file", "list_tree", "write_file"]
+    const rules = buildToolGrantRules(request(tools, { kind: "directory", value: folder }), inventory, cwd)
+    const mgr = new PermissionManager(cwd)
+    mgr.addToolRules(rules, "session")
+    for (const name of tools) {
+      for (const path of [folder, join(folder, "first.jpg"), join(folder, "new", "second.jpg")]) {
+        expect(mgr.checkPermission(name, { path }).decision).toBe("allow")
+        expect(mgr.grantCoversCall(rules, name, { path })).toBe(true)
+      }
+      expect(mgr.checkPermission(name, { path: join(root, "screenshots-other", "third.jpg") }).decision).toBe("ask")
+    }
+  })
+  it("normalizes folder grants to the same project coordinates as runtime paths", () => {
+    for (const value of ["src", join(cwd, "src")]) {
+      const rules = buildToolGrantRules(request(["write_file"], { kind: "directory", value }), inventory, cwd)
+      expect(rules).toEqual([{ pattern: "write_file(src{,/**})", type: "allow", canonicalPath: true }])
+      const mgr = new PermissionManager(cwd)
+      mgr.addToolRules(rules, "session")
+      expect(mgr.checkPermission("write_file", { path: join(cwd, "src", "a.ts") }).decision).toBe("allow")
+      expect(mgr.checkPermission("write_file", { path: "src-other/a.ts" }).decision).toBe("ask")
+    }
+  })
+  it("does not follow a retargeted folder alias or bypass a descendant restriction", () => {
+    const folder = join(root, "screenshots"), other = join(root, "other"), alias = join(cwd, "alias")
+    mkdirSync(folder); mkdirSync(other); symlinkSync(folder, alias, "junction")
+    const rules = buildToolGrantRules(request(["write_file"], { kind: "directory", value: alias }), inventory, cwd)
+    const mgr = new PermissionManager(cwd)
+    mgr.addToolRules(rules, "session")
+    expect(mgr.checkPermission("write_file", { path: join(alias, "first.jpg") }).decision).toBe("allow")
+    unlinkSync(alias); symlinkSync(other, alias, "junction")
+    expect(mgr.checkPermission("write_file", { path: join(alias, "second.jpg") }).decision).toBe("ask")
+    savePermissionSettings(getProjectSettingsPath(cwd), { rules: [{ pattern: `Write(${join(folder, "private.jpg")})`, type: "deny" }] })
+    expect(mgr.checkPermission("write_file", { path: join(folder, "private.jpg") }).decision).toBe("deny")
+  })
+  it("rejects a folder alias changed between review and save without installing any grant", () => {
+    const reviewed = join(root, "reviewed"), other = join(root, "other"), alias = join(cwd, "alias")
+    mkdirSync(reviewed); mkdirSync(other); symlinkSync(reviewed, alias, "junction")
+    const batch = request(["write_file"], { kind: "directory", value: alias })
+    const rules = buildToolGrantRules(batch, inventory, cwd)
+    unlinkSync(alias); symlinkSync(other, alias, "junction")
+    expect(() => buildToolGrantRules(batch, inventory, cwd, rules)).toThrow("scope changed after review")
+    expect(new PermissionManager(cwd).getSummary()).toEqual([])
+  })
+  it("persisted canonical folder grants do not follow a replaced ancestor", () => {
+    const parent = join(root, "parent"), folder = join(parent, "screenshots"), other = join(root, "other-parent")
+    mkdirSync(folder, { recursive: true }); mkdirSync(join(other, "screenshots"), { recursive: true })
+    const tools = ["write_file", "move_file"]
+    const rules = buildToolGrantRules(request(tools, { kind: "directory", value: folder }, "project"), inventory, cwd)
+    const mgr = new PermissionManager(cwd); mgr.addToolRules(rules, "project")
+    expect(loadPermissionSettings(getProjectAuthorizationSettingsPath(cwd)).rules.every(rule => rule.canonicalPath)).toBe(true)
+    renameSync(parent, `${parent}-original`); symlinkSync(other, parent, "junction")
+    const restored = new PermissionManager(cwd)
+    const args = { path: join(folder, "file.txt"), source: join(folder, "old.txt"), destination: join(folder, "new.txt") }
+    for (const tool of tools) {
+      expect(restored.checkPermission(tool, args).decision).toBe("ask")
+      expect(restored.grantCoversCall(rules, tool, args)).toBe(false)
+    }
+  })
+  it("keeps canonical and legacy rules distinct when saving, annotating and deleting", () => {
+    const fixed = buildToolGrantRules(request(["write_file"], { kind: "directory", value: join(root, "folder") }), inventory, cwd)[0]
+    const legacy = { pattern: fixed.pattern, type: "allow" as const }
+    const mgr = new PermissionManager(cwd)
+    mgr.addToolRules([fixed, legacy], "project")
+    const group = mgr.getSummaryAnnotated().find(group => group.label === "project grants")!
+    expect(group.rules).toHaveLength(2)
+    expect(group.rules[1].shadowedBy).toBeUndefined()
+    mgr.removeRule(fixed.pattern, "allow", "project-grants", true)
+    expect(loadPermissionSettings(getProjectAuthorizationSettingsPath(cwd)).rules).toEqual([legacy])
+  })
+  it("suggests the actual file parent or scan root for directory authorization", () => {
+    expect(suggestToolGrantDirectory("write_file", { path: "src/a.ts" }, cwd)).toBe(join(cwd, "src"))
+    expect(suggestToolGrantDirectory("list_tree", { path: "src" }, cwd)).toBe(join(cwd, "src"))
+    expect(suggestToolGrantDirectory("bash", { command: "echo hi" }, cwd)).toBeUndefined()
+  })
+  for (const resource of [request(["bash"], { kind: "directory", value: "/tmp/folder" }), request(["edit_file"], { kind: "directory", value: "/tmp/*" }), request(["edit_file"], { kind: "directory", value: "" })]) {
+    it(`rejects an ambiguous folder grant ${JSON.stringify(resource)}`, () => expect(() => buildToolGrantRules(resource, inventory, cwd)).toThrow())
+  }
   it("previews every compound/structured rule using exactly the saved session/project expansion", () => {
     const args = { check_steps: ["git status", "npm test", "git status --short"] }
     const expected = [{ pattern: "Bash(git status:*)", type: "allow" }, { pattern: "Bash(npm test:*)", type: "allow" }]

@@ -31,16 +31,16 @@ describe("owned background output pages", () => {
     writeFileSync(task.outputFile, content)
     return task
   }
-  function executor() {
+  function executor(disallowedTools?: string[]) {
     const registry = new ToolRegistry()
     registry.register(taskStatusTool({ store }))
     registry.register(readFileTool({ defaultCwd: cwd }))
     return new ToolExecutor(registry, { cwd,
-      onApproval: buildHeadlessApproval({ cwd, permissionMode: "default" }).onApproval })
+      onApproval: buildHeadlessApproval({ cwd, permissionMode: "default", disallowedTools }).onApproval })
   }
-  test("recovers an early diagnostic through task ID while ordinary log-path reads stay denied", async () => {
+  test("recovers an early diagnostic through task ID when ordinary reads are explicitly disabled", async () => {
     const task = await fixture("EARLY FAILURE\n" + "later output\n".repeat(3000) + "END\n")
-    const exec = executor()
+    const exec = executor(["read_file"])
     expect((await exec.execute("read_file", { path: task.outputFile })).failure?.code).toBe("POLICY_DENIED")
     const tail = await exec.execute("task_status", { task_id: task.taskId, include_output: true, tail_bytes: 256 })
     expect(JSON.parse(tail.output).tasks[0].outputTail).not.toContain("EARLY FAILURE")
