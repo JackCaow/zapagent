@@ -23,7 +23,17 @@ const fixture = String.raw`
   const scenario = process.env.SCENARIO;
   const result = {};
   const request = (ar = args, signal) => hook.onApproval("bash", ar, signal);
-  if (scenario.startsWith("custom") || scenario === "late-deny" || scenario === "late-ask") {
+  if (scenario === "reads") {
+    for (const mode of ["default", "bypassPermissions"]) {
+      configRef.current.permissionMode = mode;
+      for (const path of ["/fixture/screenshots/first.jpg", "/fixture/screenshots/second.jpg"]) {
+        const approval = hook.onApproval("read_file", { path });
+        if (pending) { result.prompted = true; pending.resolve("deny"); }
+        (result.decisions ??= []).push(await approval);
+      }
+    }
+    result.prompted ??= false;
+  } else if (scenario.startsWith("custom") || scenario === "late-deny" || scenario === "late-ask") {
     const controller = new AbortController();
     const ordinary = { command: "printf hi" };
     const first = request(ordinary, controller.signal); const saved = pending;
@@ -96,6 +106,12 @@ function run(scenario: string) {
 }
 
 describe("sandbox approval through the real hook", () => {
+  it("keeps consecutive screenshot reads flowing without approval in default and bypass", () => {
+    const result = run("reads")
+    expect(result.prompted).toBe(false)
+    expect(result.decisions).toEqual([true, true, true, true])
+    expect(result.persisted).toBeUndefined()
+  })
   for (const scope of ["session", "project"]) {
     it(`${scope} consent covers subsequent commands with the right lifetime`, () => {
       const result = run(scope)

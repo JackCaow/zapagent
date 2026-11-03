@@ -155,7 +155,7 @@ export function usePermissionApproval(
             if (expired) return expired
             if (!scopeAllowed || (approvalFacts(name, ar, context).sandboxEscape)) return "This approval only supports its displayed choices"
             try {
-              const rules = buildToolGrantRules(request, availableTools)
+              const rules = buildToolGrantRules(request, availableTools, context?.workspaceRoot ?? process.cwd())
               if (!permissionManager.grantCoversCall(rules, name, ar, context)) return "The selected authorization must cover this waiting call"
               permissionManager.addToolRules(rules, request.lifetime)
               addLog("system", `Permission: ${request.lifetime} allow saved: ${rules.map(rule => rule.pattern).join(", ")}; manage in /permissions`)

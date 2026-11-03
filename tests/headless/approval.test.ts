@@ -50,7 +50,7 @@ describe("buildHeadlessApproval path reads", () => {
     await expect(approval.onApproval("read_file", { path: "src/index.ts" })).resolves.toBe(true)
     expect(approval.anyDenied()).toBe(false)
     expect(decisions).toEqual([
-      { tool: "read_file", decision: "allow", reason: "project path read" },
+      { tool: "read_file", decision: "allow", reason: "read-only filesystem access" },
     ])
   })
 
@@ -119,28 +119,48 @@ describe("buildHeadlessApproval path reads", () => {
     expect(asks).toBe(0)
   })
 
-  it("denies path reads outside cwd by default", async () => {
-    const denied: Array<{ tool: string; reason: string }> = []
-    const approval = buildHeadlessApproval({
-      cwd,
-      permissionMode: "default",
-      onDeny: (tool, reason) => denied.push({ tool, reason }),
+  for (const permissionMode of ["default", "acceptEdits", "plan", "bypassPermissions"] as const) {
+    it(`allows ordinary outside reads without prompting in ${permissionMode}`, async () => {
+      let asks = 0
+      const approval = buildHeadlessApproval({ cwd, permissionMode,
+        onAsk: async () => { asks++; return false } })
+      for (const name of ["read_file", "read_document", "list_tree", "search_files", "glob_files"]) {
+        await expect(approval.onApproval(name, { path: outside })).resolves.toBe(true)
+      }
+      // A screenshot sequence has a fresh filename after every action.
+      for (const path of ["first.jpg", "second.jpg"]) {
+        await expect(approval.onApproval("read_file", { path: join(outside, path) })).resolves.toBe(true)
+      }
+      expect(asks).toBe(0)
+      expect(approval.anyDenied()).toBe(false)
     })
+    for (const type of ["deny", "ask"] as const) {
+      it(`preserves explicit outside-read ${type} in ${permissionMode}`, async () => {
+        let asks = 0
+        for (const tool of ["read_file", "read_document", "list_tree", "search_files", "glob_files"]) {
+          const path = join(outside, "private")
+          savePermissionSettings(getProjectSettingsPath(cwd), { rules: [{ pattern: `${tool}(${path})`, type }] })
+          const approval = buildHeadlessApproval({ cwd, permissionMode, allowedTools: [tool],
+            onAsk: async () => { asks++; return false } })
+          // Directory readers must also respect restrictions below the scan root.
+          const scanPath = ["list_tree", "search_files", "glob_files"].includes(tool) ? outside : path
+          expect(await approval.onApproval(tool, { path: scanPath })).toMatchObject({ approved: false })
+        }
+        expect(asks).toBe(type === "ask" ? 5 : 0)
+      })
+    }
+  }
 
-    await expect(approval.onApproval("list_tree", { path: outside })).resolves.toMatchObject({ approved: false, source: "policy" })
-    expect(approval.anyDenied()).toBe(true)
-    expect(denied[0]?.tool).toBe("list_tree")
-    expect(denied[0]?.reason).toContain("path outside cwd:")
-  })
-
-  it("keeps outside path reads denied even in bypassPermissions mode", async () => {
-    const approval = buildHeadlessApproval({
-      cwd,
-      permissionMode: "bypassPermissions",
-    })
-
-    await expect(approval.onApproval("list_tree", { path: outside })).resolves.toMatchObject({ approved: false, source: "policy" })
-    expect(approval.anyDenied()).toBe(true)
+  it("does not turn file reads into write or external-tool authorization", async () => {
+    let asks = 0
+    const approval = buildHeadlessApproval({ cwd, permissionMode: "default",
+      onAsk: async () => { asks++; return false } })
+    for (const name of ["write_file", "delete_file", "mcp__fixture__read"]) {
+      expect(await approval.onApproval(name, { path: outside })).toMatchObject({ approved: false })
+    }
+    const blockedRead = buildHeadlessApproval({ cwd, permissionMode: "bypassPermissions", disallowedTools: ["read_file"] })
+    expect(await blockedRead.onApproval("read_file", { path: outside })).toMatchObject({ approved: false })
+    expect(asks).toBe(3)
   })
 
   it("--allowed-tools explicitly allows outside path reads", async () => {
