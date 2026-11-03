@@ -21,7 +21,7 @@ import { ToolRegistry } from "../zapsdk/tools/registry.js"
 import { PermissionManager } from "../src/permissions.js"
 import { evaluateApprovalPolicy } from "../src/permission-policy.js"
 import { imagePreload } from "./fixtures/codex-image.js"
-const png = new Resvg('<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="white"/><circle cx="32" cy="32" r="24" fill="blue"/></svg>').render().asPng()
+const png = new Resvg('<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="white"/><circle cx="32" cy="32" r="24" fill="blue"/></svg>', { font: { loadSystemFonts: false } }).render().asPng()
 let root: string, previous: string | undefined
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), "zap-image-integration-")); previous = process.env.ZAPCODE_DATA_DIR; process.env.ZAPCODE_DATA_DIR = root })
 afterEach(() => { if (previous === undefined) delete process.env.ZAPCODE_DATA_DIR; else process.env.ZAPCODE_DATA_DIR = previous; rmSync(root, { recursive: true, force: true }) })
@@ -114,7 +114,7 @@ it("keeps paid image generation subject to approval in acceptEdits and denies it
 it("bounds restored image history to the four most recent cached images", async () => {
   const logs: SessionLog[] = [{ type: "user", text: "Draw five images" }]
   for (let i = 0; i < 5; i++) {
-    const bytes = new Resvg(`<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><rect width="2" height="2" fill="rgb(${i * 40},0,0)"/></svg>`).render().asPng()
+    const bytes = new Resvg(`<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><rect width="2" height="2" fill="rgb(${i * 40},0,0)"/></svg>`, { font: { loadSystemFonts: false } }).render().asPng()
     const artifact = await cacheGeneratedImage(join(root, "generated-images"), { bytes, width: 2, height: 2, requestBytes: 1, responseBytes: 1 })
     logs.push({ type: "result", text: "saved", tool: { id: `image-${i}`, name: "generate_image", output: `saved ${i}.png`, success: true, meta: { generatedImage: artifact } } })
   }

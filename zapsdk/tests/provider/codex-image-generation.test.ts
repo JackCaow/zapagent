@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { Resvg } from "@resvg/resvg-js";
 import { generateCodexImage, type CodexImageOptions } from "../../core/providers/codex-image-generation.js";
-const png = new Resvg('<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><rect width="2" height="2" fill="blue"/></svg>').render().asPng();
+const png = new Resvg('<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><rect width="2" height="2" fill="blue"/></svg>', { font: { loadSystemFonts: false } }).render().asPng();
 const item = (result = png.toString("base64")) => ({ id: "image-1", type: "image_generation_call", status: "completed", result });
 const done = (output: any[] = []) => ({ type: "response.completed", response: { status: "completed", output } });
 function fixture(events: unknown[], changes: Partial<CodexImageOptions> = {}) {
@@ -41,7 +41,7 @@ test("accepts terminal-only images and deduplicates equal streamed/terminal copi
 });
 
 test("rejects partial, failed, conflicting or invalid payloads without retrying", async () => {
-  const other = new Resvg('<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><rect width="2" height="2" fill="red"/></svg>').render().asPng();
+  const other = new Resvg('<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><rect width="2" height="2" fill="red"/></svg>', { font: { loadSystemFonts: false } }).render().asPng();
   const cases = [[], [{ type: "response.output_item.done", item: item() }], [done()],
     [{ type: "response.output_item.done", item: item() }, { type: "response.failed", response: { status: "failed" } }],
     [{ type: "response.incomplete", response: { status: "incomplete", output: [item()] } }],

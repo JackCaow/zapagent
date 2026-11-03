@@ -8,7 +8,7 @@ import { restoreGeneratedImage } from "../../utils/generated-image.js";
 import { ToolRegistry } from "../../tools/registry.js";
 import { ToolExecutor } from "../../tools/executor.js";
 import { DefaultExecutionBroker } from "../../execution/broker.js";
-const png = new Resvg('<svg xmlns="http://www.w3.org/2000/svg" width="2" height="3"><rect width="2" height="3" fill="green"/></svg>').render().asPng();
+const png = new Resvg('<svg xmlns="http://www.w3.org/2000/svg" width="2" height="3"><rect width="2" height="3" fill="green"/></svg>', { font: { loadSystemFonts: false } }).render().asPng();
 let root: string, calls: number;
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), "zap-generate-image-test-")); calls = 0; mkdirSync(join(root, "workspace")); });
 afterEach(() => rmSync(root, { recursive: true, force: true }));

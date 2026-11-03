@@ -30,7 +30,7 @@ ptyTest("real TUI approves image generation, shows the PNG preview and restores 
   const key = async (...keys: string[]) => { tmux("send-keys", "-t", "image", ...keys); await sleep(200) }
   const quote = (text: string) => `'${text.replaceAll("'", "'\\''")}'`
   try {
-    const png = new Resvg('<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="white"/><circle cx="32" cy="32" r="24" fill="blue"/></svg>').render().asPng()
+    const png = new Resvg('<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="white"/><circle cx="32" cy="32" r="24" fill="blue"/></svg>', { font: { loadSystemFonts: false } }).render().asPng()
     await saveCodexCredentials({ accessToken: "fixture-image-access", refreshToken: "fixture-image-refresh", expiresAt: Date.now() + 3600000 })
     const connected = connectCodexProvider(getDefaultConfig())
     saveAppConfig(join(root, "config.json"), selectCatalogModel(connected.config, connected.provider.id, { id: "account-model", source: "manual" }))
