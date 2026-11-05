@@ -25,24 +25,19 @@ const decide = (manager: PermissionManager, name: string, args: Record<string, u
   evaluateApprovalPolicy(manager, name, args, { cwd, mode: "default", context: context() })
 
 describe("requests declined this turn", () => {
-  it("are refused without a prompt when they ask for nothing new", () => {
+  it("refuse only the identical call again", () => {
     const manager = new PermissionManager(cwd)
     manager.setSandboxConfined(false)
-    expect(decide(manager, "bash", { command: "git push origin feature" }).decision).toBe("ask")
-    manager.recordDenial("bash", { command: "git push origin feature" }, context())
-    const repeat = decide(manager, "bash", { command: "git push --tags" })
+    const push = { command: "git push origin feature" }
+    expect(decide(manager, "bash", push).decision).toBe("ask")
+    manager.recordDenial("bash", push, context())
+    const repeat = decide(manager, "bash", push)
     expect(repeat.decision).toBe("deny")
     expect(repeat.reason).toContain("declined this request earlier in this turn")
-    // A request needing something else still asks.
-    expect(decide(manager, "bash", { command: "git push origin feature && npm publish" }).decision).toBe("ask")
-    expect(decide(manager, "bash", { command: "npm test" }).decision).toBe("ask")
-  })
-
-  it("pin the exact arguments when consent would cover a whole tool", () => {
-    const manager = new PermissionManager(cwd)
-    manager.recordDenial("mcp__tracker__create", { title: "first" }, context())
-    expect(decide(manager, "mcp__tracker__create", { title: "first" }).decision).toBe("deny")
-    expect(decide(manager, "mcp__tracker__create", { title: "second" }).decision).toBe("ask")
+    // A different call, even one a saved rule would group with it, still asks.
+    expect(decide(manager, "bash", { command: "git push --tags" }).decision).toBe("ask")
+    manager.recordDenial("edit_file", { path: "src/a.ts", old_string: "a", new_string: "b" }, context())
+    expect(decide(manager, "edit_file", { path: "src/b.ts", old_string: "a", new_string: "b" }).decision).toBe("ask")
   })
 
   it("expire with the next user message or a new session", () => {
@@ -61,9 +56,12 @@ describe("requests declined this turn", () => {
   it("never turn an allowed call into a denial", () => {
     const manager = new PermissionManager(cwd)
     manager.recordDenial("read_file", { path: "README.md" }, context())
-    expect(decide(manager, "edit_file", { path: "src/a.ts" }).decision).toBe("ask")
+    expect(decide(manager, "read_file", { path: "README.md" }).decision).toBe("allow")
     manager.recordDenial("edit_file", { path: "src/a.ts" }, context())
-    // Reads were never part of the declined consent.
-    expect(decide(manager, "read_file", { path: "src/a.ts" }).decision).toBe("allow")
+    expect(decide(manager, "edit_file", { path: "src/a.ts" }).decision).toBe("deny")
+    // A later mode switch or rule from the user lets the call run.
+    expect(evaluateApprovalPolicy(manager, "edit_file", { path: "src/a.ts" }, { cwd, mode: "acceptEdits", context: context() }).decision).toBe("allow")
+    manager.addToolRules([{ pattern: "Capability(fs.write:**)", type: "allow" }], "session")
+    expect(decide(manager, "edit_file", { path: "src/a.ts" }).decision).toBe("allow")
   })
 })

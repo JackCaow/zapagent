@@ -91,7 +91,6 @@ import {
   persistCompactSummaryBestEffort,
   type PersistCompactSummary,
 } from "../agent/memoryDiagnostics.js"
-import { requestCapabilitiesTool } from "../request-capabilities-tool.js"
 import type { AutoMemory } from "../../zapsdk/memory/auto-memory.js"
 import type { HarnessPolicyOverrides } from "../../zapsdk/harness/policy.js"
 import type { ContextDiagnostics } from "../../zapsdk/agent/events.js"
@@ -527,9 +526,8 @@ export async function runHeadless(args: HeadlessArgs, host: HeadlessHost = {}): 
   const executor = host.admitToolExecution ? isolatedExecutor.withExecutionAdmission(host.admitToolExecution) : isolatedExecutor
   approval.setSandboxConfined(sandboxConfined, config.autoAllowSandboxedCommands !== false)
   approval.setSandboxNetworkPolicy(sandboxNetworkPolicy)
+  approval.setProjectMemoryLookup(name => !!mdStore.get(`${name}.md`))
   approval.setSandboxExcludedCommands(config.allowUnsandboxedCommands !== false ? config.sandboxExcludedCommands : undefined)
-  // Only hosts that can ask the user can grant a capability request.
-  if (host.onAsk) registry.register(requestCapabilitiesTool(approval.capabilitiesGranted))
   if (host.readOnlyWorkspace) {
     // No network tools: read-only Goal roles take worker output and workspace
     // files as untrusted input, and an injected URL could carry them off-host.

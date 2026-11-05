@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { buildHeadlessApproval } from "../src/headless/approval.js"
 import { evaluateApprovalPolicy } from "../src/permission-policy.js"
-import { getProjectSettingsPath, inferInvocationRules, PermissionManager, savePermissionSettings } from "../src/permissions.js"
+import { getProjectAuthorizationSettingsPath, getProjectSettingsPath, inferInvocationRules, PermissionManager, savePermissionSettings } from "../src/permissions.js"
 import { DEFAULT_ALLOWED_DOMAINS } from "../zapsdk/execution/network-proxy.js"
 
 let root: string, cwd: string, previousDataDir: string | undefined
@@ -42,7 +42,7 @@ describe("declared shell network destinations", () => {
     expect(decide(manager, curl("https://api.example.com/v1"))).toMatchObject({
       decision: "ask", allowScope: true, reason: "Shell network access requires authorization: api.example.com" })
     const rules = inferInvocationRules("bash", curl("https://api.example.com/v1"), cwd).map(rule => rule.pattern)
-    expect(rules).toContain("Capability(net.read:api.example.com)")
+    expect(rules).toContain("Capability(net.write:api.example.com)")
     manager.addSessionRule("bash", curl("https://api.example.com/v1"), { ...context, cwd, workspaceRoot: cwd })
     expect(decide(manager, { command: "wget -q https://api.example.com/x", network_destinations: ["api.example.com"] }).decision).toBe("allow")
     expect(decide(manager, curl("other.example.com")).decision).toBe("ask")
@@ -73,7 +73,7 @@ describe("declared shell network destinations", () => {
     const manager = sandboxed()
     const args = curl("api.example.com")
     expect(manager.grantCoversCall([{ pattern: "bash", type: "allow" }], "bash", args)).toBe(false)
-    expect(manager.grantCoversCall([{ pattern: "bash", type: "allow" }, { pattern: "Capability(net.read:*.example.com)", type: "allow" }], "bash", args)).toBe(true)
+    expect(manager.grantCoversCall([{ pattern: "bash", type: "allow" }, { pattern: "Capability(net.write:*.example.com)", type: "allow" }], "bash", args)).toBe(true)
   })
 
   it("decides the same way in headless runs", async () => {
@@ -82,7 +82,16 @@ describe("declared shell network destinations", () => {
     approval.setSandboxNetworkPolicy(policy)
     expect(await approval.onApproval("bash", curl("github.com"))).toBe(true)
     expect(await approval.onApproval("bash", curl("api.example.com"))).toMatchObject({ approved: false })
-    savePermissionSettings(getProjectSettingsPath(cwd), { rules: [{ pattern: "Capability(net.read:api.example.com)", type: "allow" }] })
+    // A repository settings file cannot widen egress; the user's own grants can.
+    savePermissionSettings(getProjectSettingsPath(cwd), { rules: [{ pattern: "Capability(net.write:api.example.com)", type: "allow" }] })
+    expect(await approval.onApproval("bash", curl("api.example.com"))).toMatchObject({ approved: false })
+    savePermissionSettings(getProjectAuthorizationSettingsPath(cwd), { rules: [{ pattern: "Capability(net.write:api.example.com)", type: "allow" }] })
     expect(await approval.onApproval("bash", curl("api.example.com"))).toBe(true)
+  })
+
+  it("never counts a read-only host grant as shell egress", () => {
+    const manager = sandboxed()
+    manager.addToolRules([{ pattern: "Capability(net.read:api.example.com)", type: "allow" }], "session")
+    expect(decide(manager, curl("api.example.com")).decision).toBe("ask")
   })
 })

@@ -24,11 +24,27 @@ export function isFileCapability(kind: CapabilityKind): boolean {
 
 /** Host and system scopes: `*` matches any run of characters, nothing else is special. */
 export function matchCapabilityScope(value: string, pattern: string): boolean {
-  const regex = pattern.split("*").map(part => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*")
-  return new RegExp(`^${regex}$`, "i").test(value)
+  // Greedy two-pointer glob: linear in practice, no regex backtracking.
+  const text = value.toLowerCase(), glob = pattern.toLowerCase()
+  let t = 0, g = 0, star = -1, mark = 0
+  while (t < text.length) {
+    if (g < glob.length && glob[g] !== "*" && glob[g] === text[t]) { t++; g++ }
+    else if (g < glob.length && glob[g] === "*") { star = g++; mark = t }
+    else if (star >= 0) { g = star + 1; t = ++mark }
+    else return false
+  }
+  while (glob[g] === "*") g++
+  return g === glob.length
 }
 
-const FILE_WRITE_TOOLS = new Set(["write_file", "create_file", "edit_file", "multi_edit"])
+/** The content-editing tools; one `fs.write` consent covers all of them. */
+export const WORKSPACE_EDIT_TOOLS: readonly string[] = ["write_file", "create_file", "edit_file", "multi_edit"]
+const FILE_WRITE_TOOLS = new Set(WORKSPACE_EDIT_TOOLS)
+
+/** File tools a capability can stand in for; their tool rules restrict it too. */
+export function capabilityFileTools(kind: CapabilityKind): readonly string[] {
+  return kind === "fs.write" ? [...WORKSPACE_EDIT_TOOLS, "move_file"] : kind === "fs.delete" ? ["delete_file", "move_file"] : []
+}
 
 /** Built-in file tools are judged from their arguments, like their tool rules,
  * so a shell's write_paths check never borrows the shell's own facts. */
@@ -56,7 +72,7 @@ function describeOne(capability: ToolCapability): string {
     case "fs.write": return `file edits ${where}`
     case "fs.delete": return `file deletes ${where}`
     case "net.read": return `network reads from ${scope}`
-    case "net.write": return `network writes to ${scope}`
+    case "net.write": return `network access to ${scope} (send and receive)`
     case "external.read": return scope.startsWith("mcp:") ? `read-only tools of MCP server ${scope.slice(4)}` : `reads from ${scope}`
     case "external.write": return scope.startsWith("mcp:") ? `changes through MCP server ${scope.slice(4)}` : `changes through ${scope}`
   }
@@ -96,6 +112,8 @@ export function parseCapabilityRequest(args: Record<string, unknown>): ToolCapab
       parsed.push({ kind, scope: host })
     } else {
       if (!/^[a-z][\w.-]*(?::[\w.-]+)?$/i.test(scope)) return `${kind} scope must name one system, such as mcp:<server> or http`
+      // MCP tools that change state have unknown effects and keep per-tool consent.
+      if (kind === "external.write" && scope.startsWith("mcp:")) return "MCP changes are approved per tool; request external.read for read-only MCP tools"
       parsed.push({ kind: kind as CapabilityKind, scope })
     }
   }

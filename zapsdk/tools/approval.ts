@@ -1,5 +1,6 @@
 import type { ToolDefinition } from "./types.js";
 import { isEffectivelyReadOnly, type ToolEffects } from "./effects.js";
+import { destinationHostPattern } from "../execution/network-proxy.js";
 
 /** A reusable unit of consent. File scopes are paths, network scopes are
  * hosts, external scopes are the adapter's system name. */
@@ -26,10 +27,9 @@ export interface ToolApprovalFacts {
   readonly capabilities?: readonly ToolCapability[];
 }
 
+/** Same host grammar as shell declarations, so one grant covers both. */
 function networkHost(destination: string): string | null {
-  if (!destination || destination.includes("*")) return null;
-  try { return new URL(destination).hostname.toLowerCase() || null; }
-  catch { return /^[a-z0-9.-]+$/i.test(destination) ? destination.toLowerCase() : null; }
+  return !destination || destination.includes("*") ? null : destinationHostPattern(destination);
 }
 
 /** Capabilities exactly covering the declared effects, or undefined. */

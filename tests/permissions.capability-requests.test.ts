@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { parseCapabilityRequest, REQUEST_CAPABILITIES_TOOL } from "../src/capabilities.js"
+import { matchCapabilityScope, parseCapabilityRequest, REQUEST_CAPABILITIES_TOOL } from "../src/capabilities.js"
 import { parsePermissionMode, type PermissionMode } from "../src/config.js"
 import { buildHeadlessApproval } from "../src/headless/approval.js"
 import { evaluateApprovalPolicy } from "../src/permission-policy.js"
@@ -44,17 +44,23 @@ describe("permission presets", () => {
 })
 
 describe("memory writes", () => {
-  it("allow project notes and ask for global memory", () => {
+  it("allow new project notes and ask for anything that steers later sessions", () => {
     const manager = new PermissionManager(cwd)
-    const save = (type: string) => decide(manager, "memory_save", { type, name: "n", description: "d", content: "c" })
-    expect(save("project")).toMatchObject({ decision: "allow", tier: "R1" })
-    expect(save("reference").decision).toBe("allow")
-    expect(save("user").decision).toBe("ask")
-    expect(save("feedback").decision).toBe("ask")
-    expect(decide(manager, "memory_save", { type: "project" }, "plan").decision).toBe("deny")
+    const save = (fields: Record<string, unknown>) => decide(manager, "memory_save", { type: "project", name: "n", description: "d", content: "c", ...fields })
+    // Without a lookup a name might already exist.
+    expect(save({}).decision).toBe("ask")
+    manager.setProjectMemoryLookup(name => name === "taken")
+    expect(save({})).toMatchObject({ decision: "allow", tier: "R1" })
+    expect(save({ type: "reference" }).decision).toBe("allow")
+    expect(save({ name: "taken" }).decision).toBe("ask")
+    expect(save({ tags: ["pinned"] }).decision).toBe("ask")
+    expect(save({ supersedes: ["old"] }).decision).toBe("ask")
+    expect(save({ type: "user" }).decision).toBe("ask")
+    expect(save({ type: "feedback" }).decision).toBe("ask")
+    expect(evaluateApprovalPolicy(manager, "memory_save", { type: "project", name: "n" }, { cwd, mode: "plan", context: context() }).decision).toBe("deny")
     savePermissionSettings(getProjectSettingsPath(cwd), { rules: [{ pattern: "memory_save", type: "ask" }] })
     manager.reload()
-    expect(save("project").decision).toBe("ask")
+    expect(save({}).decision).toBe("ask")
   })
 })
 
@@ -65,16 +71,20 @@ describe("capability requests", () => {
     for (const bad of [request(["fs.write", "/etc/**"]), request(["fs.write", "../x"]), request(["fs.delete", "~/x"]), request(["net.read", "*"]),
       request(["net.write", "localhost"]), request(["external.write", "*"]), request(["exec", "*"]), request()])
       expect(typeof parseCapabilityRequest(bad)).toBe("string")
+    expect(typeof parseCapabilityRequest(request(["external.write", "mcp:gh"]))).toBe("string")
+    const hosts = (count: number) => request(...Array.from({ length: count }, (_, i): [string, string] => ["net.read", `h${i}.example.com`]))
+    expect(parseCapabilityRequest(hosts(8))).toHaveLength(8)
+    expect(typeof parseCapabilityRequest(hosts(9))).toBe("string")
   })
 
   it("asks once and saves exactly what was requested", () => {
     const manager = new PermissionManager(cwd)
     manager.setSandboxConfined(true)
     manager.setSandboxNetworkPolicy({ allowedDomains: [...DEFAULT_ALLOWED_DOMAINS], deniedDomains: [] })
-    const args = request(["fs.write", "src/**"], ["net.read", "api.example.com"])
+    const args = request(["fs.write", "src/**"], ["net.write", "api.example.com"])
     expect(decide(manager, REQUEST_CAPABILITIES_TOOL, args)).toMatchObject({ decision: "ask", allowScope: true })
     expect(inferInvocationRules(REQUEST_CAPABILITIES_TOOL, args, cwd).map(rule => rule.pattern))
-      .toEqual(["Capability(fs.write:src/**)", "Capability(net.read:api.example.com)"])
+      .toEqual(["Capability(fs.write:src/**)", "Capability(net.write:api.example.com)"])
     manager.addSessionRule(REQUEST_CAPABILITIES_TOOL, args, context())
     expect(decide(manager, "edit_file", { path: "src/a.ts" }).decision).toBe("allow")
     expect(decide(manager, "write_file", { path: "src/deep/b.ts" }).decision).toBe("allow")
@@ -95,14 +105,53 @@ describe("capability requests", () => {
     expect(decide(manager, "edit_file", { path: "src/secret/k.ts" }).decision).toBe("deny")
   })
 
-  it("is granted for the run when a headless host approves it", async () => {
+  it("is never saved by a headless host's one-time yes", async () => {
     let asked = 0
     const approval = buildHeadlessApproval({ cwd, permissionMode: "default", onAsk: async () => { asked++; return true } })
-    const args = request(["fs.write", "src/**"])
-    expect(await approval.onApproval(REQUEST_CAPABILITIES_TOOL, args, undefined, context())).toBe(true)
-    expect(approval.capabilitiesGranted(args)).toBe(true)
+    expect(await approval.onApproval(REQUEST_CAPABILITIES_TOOL, request(["fs.write", "src/**"]), undefined, context())).toBe(true)
     expect(await approval.onApproval("edit_file", { path: "src/a.ts" }, undefined, context())).toBe(true)
+    expect(asked).toBe(2)
+  })
+
+  it("is not asked again in a headless run after the host declines it", async () => {
+    let asked = 0
+    const approval = buildHeadlessApproval({ cwd, permissionMode: "default", onAsk: async () => { asked++; return false } })
+    const args = request(["fs.write", "src/**"])
+    expect(await approval.onApproval(REQUEST_CAPABILITIES_TOOL, args, undefined, context())).toMatchObject({ approved: false })
+    expect(await approval.onApproval(REQUEST_CAPABILITIES_TOOL, args, undefined, context())).toMatchObject({ approved: false })
     expect(asked).toBe(1)
+  })
+
+  it("matches long wildcard scopes without backtracking", () => {
+    const started = performance.now()
+    expect(matchCapabilityScope("a".repeat(240) + ".com", "*a*a*a*a*a*a*a*a*b")).toBe(false)
+    expect(performance.now() - started).toBeLessThan(50)
+    expect(matchCapabilityScope("API.github.com", "*.github.com")).toBe(true)
+  })
+
+  it("logs shell egress beyond the allowlist as R2", () => {
+    const manager = new PermissionManager(cwd)
+    manager.setSandboxConfined(true)
+    manager.setSandboxNetworkPolicy({ allowedDomains: [...DEFAULT_ALLOWED_DOMAINS], deniedDomains: [] })
+    expect(decide(manager, "bash", { command: "curl -s https://x", network_destinations: ["api.example.com"] }).tier).toBe("R2")
+    expect(decide(manager, "bash", { command: "curl -s https://x", network_destinations: ["github.com"] }).tier).toBe("R1")
+  })
+
+  it("never lets a grant step around a sibling tool's restriction", () => {
+    savePermissionSettings(getProjectSettingsPath(cwd), { rules: [{ pattern: "Edit(.env)", type: "deny" }, { pattern: "Write(secrets/**)", type: "ask" },
+      { pattern: "Capability(net.read:secret.example.com)", type: "deny" }] })
+    const manager = new PermissionManager(cwd)
+    manager.setSandboxConfined(true)
+    manager.setSandboxNetworkPolicy({ allowedDomains: [...DEFAULT_ALLOWED_DOMAINS], deniedDomains: [] })
+    manager.addSessionRule("edit_file", { path: "src/a.ts" }, context())
+    manager.addToolRules([{ pattern: "Capability(net.write:*.example.com)", type: "allow" }], "session")
+    for (const tool of ["edit_file", "write_file", "multi_edit", "create_file"]) expect(decide(manager, tool, { path: ".env" }).decision).toBe("deny")
+    expect(decide(manager, "edit_file", { path: "secrets/k.ts" }).decision).toBe("ask")
+    expect(decide(manager, "edit_file", { path: "src/b.ts" }).decision).toBe("allow")
+    const curl = (host: string) => decide(manager, "bash", { command: "curl -s https://x", network_destinations: [host] }).decision
+    expect(curl("*.example.com")).toBe("deny")
+    expect(curl("api.example.com")).toBe("allow")
+    expect(decide(manager, REQUEST_CAPABILITIES_TOOL, request(["net.write", "*.example.com"])).decision).toBe("deny")
   })
 
   it("reports whether the grant was saved", async () => {

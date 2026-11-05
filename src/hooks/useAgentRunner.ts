@@ -546,11 +546,12 @@ export function useAgentRunner({
     systemPrompt?: string,
     images?: import("../../zapsdk/core/types.js").ImageContent[],
     memoryQueryText?: string,
-    invocation?: { goalTurn?: GoalTurnInput; goalController?: AbortController; onOutcome?: (outcome: AgentOutcomeV1) => void; signal?: AbortSignal; propagateErrors?: boolean; resultSchema?: "outcome-v1" | "legacy" } & Pick<import("../../zapsdk/agent/loop.js").RunOptions,
+    invocation?: { keepTurnDenials?: boolean; goalTurn?: GoalTurnInput; goalController?: AbortController; onOutcome?: (outcome: AgentOutcomeV1) => void; signal?: AbortSignal; propagateErrors?: boolean; resultSchema?: "outcome-v1" | "legacy" } & Pick<import("../../zapsdk/agent/loop.js").RunOptions,
       "onInputAccepted" | "hasSteering" | "takeSteering" | "onSteeringAccepted">,
   ): Promise<LoopAgentResult | undefined> => {
     if (!invocation?.goalTurn) { resetGoalView(true); setGoalTodoId(undefined) }
-    permissionManager.startTurn()
+    // Background notifications are not the user answering; a decline stands.
+    if (!invocation?.keepTurnDenials) permissionManager.startTurn()
     running.current = true
     agentRunStore.clear()
     const controller = new AbortController()

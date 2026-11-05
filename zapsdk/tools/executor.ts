@@ -943,10 +943,13 @@ export class ToolExecutor {
       // the shared approval queue while awaiting them: other Agents need to
       // reach approval to release their own capacity.
       await notify("requested");
-      const settled = onApproval.precheck?.(name, parsedArgs, approvalContext);
-      if (settled !== undefined && !signal?.aborted) {
+      // Prechecks may log or notify, so a cancelled call never reaches one.
+      const settled = signal?.aborted ? undefined : onApproval.precheck?.(name, parsedArgs, approvalContext);
+      if (settled !== undefined) {
         const approved = settled === true;
-        const denial = settled && typeof settled === "object" && settled.approved === false ? settled : undefined;
+        const denial = settled && typeof settled === "object" && settled.approved === false
+          && (settled.source === "policy" || settled.source === "approval")
+          && typeof settled.reason === "string" ? settled : undefined;
         const reason = denial?.reason ?? "approval not granted";
         await notify(approved ? "approved" : "denied", approved ? undefined : reason);
         return approved ? true : { success: false, output: "", error: `Tool "${name}" denied: ${reason}`,

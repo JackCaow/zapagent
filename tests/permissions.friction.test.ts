@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test"
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { buildHeadlessApproval } from "../src/headless/approval.js"
@@ -75,6 +75,16 @@ describe("neutral shell subcommands", () => {
     manager.addSessionRule("bash", { command: "bun test" }, context())
     expect(decide(manager, "bash", { command: "cd /etc && bun test" }).decision).toBe("ask")
     expect(decide(manager, "bash", { command: "cd .. && bun test" }).decision).toBe("ask")
+  })
+
+  it("judges only the first cd from the directory it runs in", () => {
+    mkdirSync(join(cwd, "a"), { recursive: true })
+    symlinkSync(root, join(cwd, "a", "out"))
+    const manager = unconfined()
+    manager.addSessionRule("bash", { command: "bun test" }, context())
+    expect(decide(manager, "bash", { command: "cd src && bun test" }).decision).toBe("allow")
+    // `out` is checked as <workspace>/out from the start, but runs as a/out.
+    expect(decide(manager, "bash", { command: "cd a && cd out && bun test" }).decision).toBe("ask")
   })
 })
 

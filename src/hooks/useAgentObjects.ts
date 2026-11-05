@@ -5,7 +5,7 @@ import type { AskUserCallbacks, PlanModeCallbacks, TodoStore, Tool } from "../..
 import type { ApprovalCallback } from "../../zapsdk/tools/executor.js"
 import type { SkillDefinition } from "../../zapsdk/skills/types.js"
 import { buildAgentObjects } from "../agent-factory.js"
-import { delegateProvidersReady, permissionManager } from "../singletons.js"
+import { delegateProvidersReady, mdStore, permissionManager } from "../singletons.js"
 import type { AgentObjects } from "../agent/types.js"
 import { REQUEST_CAPABILITIES_TOOL } from "../capabilities.js"
 import { requestCapabilitiesTool } from "../request-capabilities-tool.js"
@@ -59,6 +59,7 @@ export function useAgentObjects(opts: UseAgentObjectsOptions & {
     permissionManager.setSandboxConfined(objs.sandboxConfined, config.autoAllowSandboxedCommands !== false)
     permissionManager.setSandboxNetworkPolicy(objs.sandboxNetworkPolicy)
     permissionManager.setSandboxExcludedCommands(config.allowUnsandboxedCommands !== false ? config.sandboxExcludedCommands : undefined)
+    permissionManager.setProjectMemoryLookup(name => !!mdStore.get(`${name}.md`))
     objs.registry.register(requestCapabilitiesTool(args => permissionManager.checkPermission(REQUEST_CAPABILITIES_TOOL, args).decision === "allow"))
     for (const tool of mcpTools) {
       // Defensive: skip name clashes rather than throw — a misconfigured

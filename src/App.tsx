@@ -714,6 +714,7 @@ export function App() {
       try {
         return await runAgent(text, systemPrompt, images, memoryQueryText ?? displayText ?? text, {
           propagateErrors: true,
+          keepTurnDenials: silent,
           onInputAccepted: () => {
             onAccepted?.()
             if (silent) addLog("task-notification", text)

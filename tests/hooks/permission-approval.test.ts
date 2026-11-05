@@ -70,6 +70,8 @@ const fixture = String.raw`
     }
     sessionId = "next";
     const next = request(push); result.afterNew = pending.repeats; pending.resolve("deny"); await next;
+    sessionId = "escape";
+    for (let i = 0; i < 3; i++) { const call = request(i < 2 ? push : { ...push, dangerouslyDisableSandbox: true }); if (i === 2) result.escape = pending.repeats; pending.resolve("once"); await call; }
   } else if (scenario === "abort") {
     const controller = new AbortController();
     const first = request(args, controller.signal); const saved = pending;
@@ -166,6 +168,7 @@ describe("repeated one-time approvals through the real hook", () => {
     const result = run("repeats")
     expect(result.repeats).toEqual([0, 1, 2, 0])
     expect(result.afterNew).toBe(0)
+    expect(result.escape).toBe(0)
   })
 })
 

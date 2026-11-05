@@ -314,27 +314,33 @@ Deny/ask capability rules apply to the whole family, for example
 On macOS the sandbox proxy only reaches an allowlist (package registries, git
 hosts, common CDNs, plus `sandboxNetwork.allowedDomains`). A Bash command that
 needs another host declares it in `network_destinations`; the prompt asks once
-per host, **don't ask again** saves `Capability(net.read:<host>)`, and the command
-stays inside the sandbox. Hosts in `sandboxNetwork.deniedDomains` are refused
-even in bypass mode. For Bash, a `cd` into a project folder and stdin filters such as
+per host, **don't ask again** saves `Capability(net.write:<host>)` (the proxy
+filters by host, so the command can send as well as receive), and the command
+stays inside the sandbox. Only your own grants widen the proxy: this session,
+`/permissions` project grants and user settings, never a repository's
+`.zapcode/settings*.json`. Hosts in `sandboxNetwork.deniedDomains` are refused
+even in bypass mode. Capability rules govern declared hosts only; hosts already
+on the allowlist are controlled by `sandboxNetwork`. `http_request` does not
+follow a redirect to another host when the request has a body. For Bash, a `cd` into a project folder and stdin filters such as
 `| tail -20`, `| head -5` or `| grep pattern` do not need their own rule when
 they accompany an allowed command. Explicit deny/ask rules still apply to them.
 
 Calls that need no approval keep running while a prompt is open. Waiting calls
 are re-checked when their turn comes, so one **don't ask again** clears the rest
 of the same kind. When you decline a request, the agent is told not to retry it,
-and anything that needs no more than what you declined is refused without a new
-prompt until your next message. After you approve the same thing once twice in a
+and the identical call is refused without a new prompt until your next message. After you approve the same thing once twice in a
 session, the prompt points out that option 2 remembers it.
 
-Before multi-step work the agent may call `request_capabilities` to ask once for
-what it will need, for example edits under `src/**` and reads from one API host.
+In the TUI, before multi-step work the agent may call `request_capabilities` to
+ask once for what it will need, for example edits under `src/**` and access to one
+API host.
 Approving saves exactly those capability rules for the session or project; deny
 and ask rules still win, and shell commands or running outside the sandbox
 cannot be requested this way.
 
-Saving project or reference memory does not ask; global user/feedback memory
-and `memory_merge` still do.
+Saving a new project or reference memory note does not ask. Updating an
+existing note, pinning one, superseding others, global user/feedback memory and
+`memory_merge` still do.
 
 For ordinary tools, open `/permissions` and press `a` to select multiple tools,
 choose entire tools, a folder and its descendants, or a project-relative file

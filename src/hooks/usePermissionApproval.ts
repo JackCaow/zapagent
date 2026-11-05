@@ -6,6 +6,7 @@ import { appLogger, permissionManager } from "../singletons.js"
 import { ApprovalQueue } from "../approval-queue.js"
 import { getCurrentSessionId } from "../session.js"
 import { approvalFacts } from "../approval-facts.js"
+import { REQUEST_CAPABILITIES_TOOL } from "../capabilities.js"
 import { evaluateApprovalPolicy } from "../permission-policy.js"
 import { buildToolGrantRules, type ToolGrantRequest } from "../tool-grants.js"
 import type { PermissionRule } from "../permissions.js"
@@ -144,7 +145,8 @@ export function usePermissionApproval(
           name,
           args: ar,
           allowScope,
-          repeats: permissionManager.priorOnceApprovals(name, ar, context),
+          // Outside-sandbox prompts never count: their option 2 is a far broader grant.
+          repeats: approvalFacts(name, ar, context).sandboxEscape || name === REQUEST_CAPABILITIES_TOOL ? 0 : permissionManager.priorOnceApprovals(name, ar, context),
           grant: (request, availableTools, reviewedRules) => {
             const expired = validate()
             if (expired) return expired

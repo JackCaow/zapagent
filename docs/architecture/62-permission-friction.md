@@ -95,11 +95,11 @@ Bash(bun test:*) 已允许
 - `rm -r` 目标为临时目录（`os.tmpdir()`、`/tmp` 的真实路径）的严格子路径时不视为系统路径；临时根本身、家目录、系统目录仍为 R3。不透明字符串的保守扫描不变。
 
 ### 自有资源工具
-- `task_stop` 的 handler 已限定本会话任务，改为 `permission: "auto"`。
-- `memory_*` 暂保持 confirm，待 P2 分级后决定（写入会影响后续提示词，存在持久化注入面）。
+- `task_stop` 的 handler 已限定本会话任务，由 zapcode 的 Host 策略放行；SDK 定义仍为 confirm，其他嵌入方自行决定。
+- `memory_save` 的 `project`/`reference` 写入由 Host 放行（P4 决定）；`user`/`feedback` 与 `memory_merge` 仍询问（写入会影响后续提示词，存在持久化注入面）。
 
 ### 沙箱失败分流（P3）
-- 网络拦截 → 声明 `network_destinations`，经 `net.read(主机)` 授权后只为该命令扩展代理 allowlist；工作区外读写 → 沿用已有的 `read_paths`/`write_paths` 声明与文件授权；只有确需宿主环境才申请 `sandbox.escape`。
+- 网络拦截 → 声明 `network_destinations`，经 `net.write(主机)` 授权后只为该命令扩展代理 allowlist；工作区外读写 → 沿用已有的 `read_paths`/`write_paths` 声明与文件授权；只有确需宿主环境才申请 `sandbox.escape`。
 
 ### 交互（P4）
 - 同一轮并行调用合并审批，展示能力并集；
@@ -125,7 +125,7 @@ Bash(bun test:*) 已允许
 | --- | --- | --- |
 | 新默认档位是否为 balanced（R1 编辑自动允许） | 默认仍为 strict（default）；balanced 需用户选择。工作区编辑一次授权已覆盖整个项目，默认 balanced 等于未经同意自动允许所有项目内编辑 | 已定 |
 | 无沙箱时单独的只读命令是否免审批 | 维持 57 的取舍：不免；仅复合命令中的中性子命令跳过 | 已定，可复议 |
-| memory 写入分级 | `project`/`reference` 为 R1，default 下免审批；`user`/`feedback` 写入全局、影响所有项目，仍询问；`memory_merge` 会删除来源，仍询问 | 已定 |
+| memory 写入分级 | 新建、未置顶、不带 supersedes 的 `project`/`reference` 记录为 R1，default 下免审批（覆盖已有记录仍询问）；`user`/`feedback` 写入全局、影响所有项目，仍询问；`memory_merge` 会删除来源，仍询问 | 已定 |
 
 ## 任务规划
 
@@ -138,7 +138,7 @@ Bash(bun test:*) 已允许
 - [x] Shell 中性子命令（`cd`、标准输入过滤），裁决、规则推断、覆盖校验三处对称。
 - [x] 编辑授权按工作区记住（P2 起保存为 `Capability(fs.write:**)`）；审批条友好描述。
 - [x] 危险判定排除临时目录子路径。
-- [x] `task_stop` 改为 auto。
+- [x] `task_stop` 由 Host 策略放行。
 - [x] 回归测试与文档。
 
 ### P2 能力模型
@@ -159,12 +159,13 @@ P2 实现要点：
 - 能力集合只在每个 effect 都可表达时存在；含进程、`*` 目标、破坏性外部操作或 unknown effects 的调用没有能力集合，继续使用工具级规则。Shell 与 `delegate_agent` 不参与能力裁决。
 - 内建文件工具的能力从参数推出（与其工具规则一致），Shell 的 `write_paths` 检查不会借用 Shell 自身的事实。
 - allow 只覆盖同一种能力且需覆盖全部能力（文件需覆盖真实目标与目录条目）；deny/ask 作用于整个族：`fs.*`、`net.*`、`external.*`，命中任一能力即生效，bypass 下同样生效。
+- 能力授权覆盖同族的多个工具，因此这些工具各自的 deny/ask 规则也约束该能力：`Edit(.env)` 为 deny 时，`fs.write` 授权不会让 `write_file .env` 通过。通配范围（`*.example.com`）与其内部任一限制规则相交即受限。
 - 移动文件需要源路径的 `fs.delete`，因此批准一次 src 内的移动后，后续从 src 移出的操作被覆盖，但从其他目录移动仍询问。
 - 风险分级只用于度量，不改变 default 模式的自动允许行为（见决定记录）。
 
 ### P3 沙箱失败分流
 - [x] 网络：主机沙箱代理执行 allowlist 时（macOS、非 open 模式），bash 提供 `network_destinations`；代理 403 与结构化失败（`missingCapabilities: network:<host>`）的建议改为声明主机，不再建议退出沙箱。
-- [x] Host 裁决：allowlist 内主机无需审批；`deniedDomains` 直接拒绝（bypass 同样）；其余需要 `Capability(net.read:<host>)`，询问一次后可记住；显式 deny/ask 能力规则优先；沙箱外执行（escape、`sandboxExcludedCommands`）与未过滤出口时不检查。
+- [x] Host 裁决：allowlist 内主机无需审批；`deniedDomains` 直接拒绝（bypass 同样）；其余需要 `Capability(net.write:<host>)`（代理只按主机过滤，Shell 可收发，因此不是只读授权），询问一次后可记住；该 allow 只认会话、Host 项目授权文件与用户设置，仓库 `.zapcode/settings*.json` 不能扩大出口；显式 deny/ask 能力规则优先；沙箱外执行（escape、`sandboxExcludedCommands`）与未过滤出口时不检查。
 - [x] SDK 传递：bash effects 为 `["*", ...声明]`；broker 只把 shell 的已批准声明（规范化为主机模式）交给沙箱上下文；沙箱仅对该命令的代理实例调用 `allowDomains`，不影响共享代理与并发命令。
 - [x] 目录：沿用已有的 `read_paths`/`write_paths` 声明与 Host 文件授权（P2 起写入可由 `fs.write` 能力覆盖），本阶段未新增机制。
 
@@ -178,7 +179,7 @@ P3 实现要点：
 ### P4 交互
 - [x] 非阻塞：`ApprovalCallback.precheck` 让策略可直接裁决的调用（allow/deny）不进 `approvalQueue`，审批弹窗打开期间无需审批的调用照常执行；无 precheck 的嵌入方保持原有串行顺序。
 - [x] 排队调用轮到时重新裁决：前一个弹窗选择“不再询问”后，同批其余被覆盖的调用不再弹窗。真正的多调用合并对话框暂缓（见下）。
-- [x] 拒绝记忆：用户拒绝后记录该请求所需的授权（推断规则；整工具规则附加参数指纹），本轮内所需授权是其子集的请求直接拒绝并提示先询问用户；新用户消息、接受 steering、切换会话时清除。
+- [x] 拒绝记忆：用户拒绝后记录该调用（工具名 + 参数指纹），本轮内完全相同的调用直接拒绝并提示先询问用户；不同调用照常询问。新用户消息、接受 steering、切换会话时清除；后台通知触发的轮次不清除。Headless 宿主拒绝同样记录，直至本次运行结束。
 - [x] 授权建议：会话内对同一授权“仅此一次”批准 ≥2 次后，第 3 次弹窗提示选择 2 记住本会话；仅提示，不自动授予；沙箱逃逸不计数。
 - [x] `request_capabilities` 工具：开工前一次申请所需能力，Host 裁决，批准即保存为会话或项目能力规则。
 - [x] 预设档位 `strict` / `balanced` / `autonomous`：`/mode` 与 `--permission-mode` 接受档位名，映射 default / acceptEdits / bypassPermissions；默认仍为 strict。
@@ -187,11 +188,20 @@ P3 实现要点：
 P4 实现要点：
 
 - precheck 只在策略结论无需人工时返回结果；ask 仍走队列，轮到时再次裁决并记录日志，因此每个调用只记录一条 `permission_decision`。
-- 拒绝记忆在 `evaluateApprovalPolicy` 的显式 deny 之后检查，只会把 ask 变成 deny，不会影响本就允许的调用（如读取）。
+- 拒绝记忆只作用于策略结论为 ask 的调用：把这次询问变成拒绝。本就允许的调用（读取、用户随后切换的模式或新增的规则）照常执行。
 - 多调用合并对话框暂缓：重新裁决已消除“同一授权连续弹窗”，合并只在多个互不覆盖的授权同时等待时有收益，且会增加对话框高度（见 `dialog-approval.tsx` 关于滚动残留的说明）。
-- `request_capabilities` 的所需能力就是它申请的能力：已被覆盖时直接放行；族级 deny/ask 照常生效；审批只提供“本会话 / 本项目 / 否”，保存时按原样保存，文件范围不会扩大为 `**`。文件范围只接受项目相对路径/glob，网络范围只接受主机或 `*.主机`，外部范围只接受单个 system；不能申请 Shell 命令或沙箱逃逸。plan 模式拒绝；Headless 仅在有 `onAsk` 时注册，宿主批准即为本次运行保存会话规则。工具结果如实说明是否已保存。
+- `request_capabilities` 的所需能力就是它申请的能力：已被覆盖时直接放行；族级 deny/ask 照常生效；审批只提供“本会话 / 本项目 / 否”，保存时按原样保存，文件范围不会扩大为 `**`。文件范围只接受项目相对路径/glob，网络范围只接受主机或 `*.主机`，外部范围只接受单个 system；不能申请 Shell 命令或沙箱逃逸。plan 模式拒绝；只在 TUI 注册（ACP 等宿主只有“允许一次”，无法表达保存范围）。`external.write mcp:*` 不可申请（MCP 写工具无已知 effects，按工具授权）。工具结果如实说明是否已保存。
 - 档位只是现有模式的名字，不引入新语义；`/mode bypass` 之前未校验就写入配置，现在与档位共用 `parsePermissionMode`，未知名称报错。
 - 测试：`tests/permissions.capability-requests.test.ts`（档位解析、memory 分级、申请校验、精确保存与覆盖、限制优先、Headless 授予、结果说明、审批选项）、`zapsdk/tests/tools/approval-precheck.test.ts`（弹窗期间放行/拒绝、无 precheck 保持顺序）、`tests/permissions.turn-denials.test.ts`（子集匹配、整工具参数指纹、轮次/会话清除、不影响允许的调用）、`tests/hooks/permission-approval.test.ts` 的 repeats 场景。
+
+### 审查修复（PR #66）
+- 能力授权会覆盖同族的多个工具，这些工具各自的 deny/ask 规则也约束该能力（`Edit(.env)` 拦截 `write_file .env`）。
+- 通配范围与其内部任一限制规则相交即受限；`matchCapabilityScope` 改为线性匹配，声明主机最长 253 字符。
+- 只有第一个 `cd` 可视为中性，后续 `cd` 不再从错误的目录判断。
+- 声明 allowlist 外主机的 Shell 记为 R2。
+- 回环判断只认字面 IP（`127.evil.com` 不再被放行，main 上已有的问题）。
+- `request_capabilities` 弹窗不显示重复批准提示；理由文本去除控制字符并单行显示。
+- 已知限制：能力规则只约束声明的主机，allowlist 内主机仍由 `sandboxNetwork` 控制；`.github/workflows`、`.envrc` 等文件仍可被 `fs.write:**` 覆盖（`.git`、`.zapcode` 由文件工具的 protectedPaths 拒绝）。
 
 ## 验收
 

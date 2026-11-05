@@ -11,7 +11,8 @@ import { writeFileAtomic } from "./utils/secure-write.js"
 import { canonicalizeWithNearestExistingAncestorSync, resolveToolPathCanonical } from "../zapsdk/builtin-tools/filesystem.js"
 import type { ToolCapability } from "../zapsdk/tools/approval.js"
 import { decideHost, destinationHostPattern, type NetworkPolicy } from "../zapsdk/execution/network-proxy.js"
-import { REQUEST_CAPABILITIES_TOOL, capabilityPattern, fileToolCapabilities, isFileCapability, matchCapabilityScope, parseCapabilityPattern, parseCapabilityRequest } from "./capabilities.js"
+export { WORKSPACE_EDIT_TOOLS } from "./capabilities.js"
+import { REQUEST_CAPABILITIES_TOOL, capabilityFileTools, capabilityPattern, fileToolCapabilities, isFileCapability, matchCapabilityScope, parseCapabilityPattern, parseCapabilityRequest } from "./capabilities.js"
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -185,7 +186,14 @@ export { splitShellSubcommands }
  * filter rides along with a sibling judged on its own; alone it is kept. */
 function significantShellSubcommands(subs: string[], workspace: string, runDir: string | null): string[] {
   if (runDir === null) return subs
-  const kept = subs.filter(sub => !isNeutralShellSubcommand(sub, workspace, runDir))
+  // Only the first `cd` is judged from the directory it really runs in.
+  let moved = false
+  const kept = subs.filter(sub => {
+    const cd = /^\s*cd(?:\s|$)/.test(sub)
+    const neutral = !(cd && moved) && isNeutralShellSubcommand(sub, workspace, runDir)
+    moved ||= cd
+    return !neutral
+  })
   return kept.length ? kept : subs
 }
 
@@ -213,9 +221,6 @@ const FILE_TOOLS = new Set([
 ])
 
 const MUTATION_TOOLS = new Set(["write_file", "create_file", "edit_file", "multi_edit", "delete_file", "move_file"])
-
-/** The content-editing tools; one `fs.write` consent covers all of them. */
-export const WORKSPACE_EDIT_TOOLS = ["write_file", "create_file", "edit_file", "multi_edit"]
 
 const PATH_READ_TOOLS = new Set([
   "read_file", "list_tree", "search_files", "glob_files", "read_document",
@@ -480,6 +485,8 @@ function capabilityRuleMatches(rule: PermissionRule, capability: ToolCapability,
   const family = (kind: string) => kind.slice(0, kind.indexOf("."))
   if (rule.type === "allow" ? parsed.kind !== capability.kind : family(parsed.kind) !== family(capability.kind)) return false
   if (!isFileCapability(capability.kind)) return matchCapabilityScope(capability.scope, parsed.scope)
+    // A wildcard request (`*.example.com`) meets any restriction inside it.
+    || rule.type !== "allow" && matchCapabilityScope(parsed.scope, capability.scope)
   const views = fileCapabilityViews(capability.scope, cwd, context)
   return rule.type === "allow"
     ? views.covered.every(path => matchFilePattern(path, parsed.scope, rule.canonicalPath))
@@ -675,7 +682,7 @@ export function inferInvocationRules(name: string, args: Record<string, unknown>
   }
   const pathPatterns = name === "bash" ? [...shellPathRequests(args, context?.cwd ?? cwd)
     .map(request => inferPattern(request.tool, { path: request.path }, cwd)).filter((pattern): pattern is string => !!pattern),
-    ...shellNetworkHosts(args).map(host => capabilityPattern("net.read", host))] : []
+    ...shellNetworkHosts(args).map(host => capabilityPattern("net.write", host))] : []
   if (opaqueShell(approvalFacts(name, args, context), context)) return [name, ...pathPatterns].map(pattern => ({ pattern, type: "allow" }))
   const views = [normalizeFileArgs(name, args, cwd, context)]
   if (MUTATION_TOOLS.has(name)) views.push(normalizeFileArgs(name, args, cwd, context, "entry"))
@@ -761,33 +768,39 @@ export class PermissionManager {
     this.sandboxSessionId = sessionId
     this.sessionSandboxEscape = undefined
     this.sessionRules = []
-    this.turnDenials = []
+    this.turnDenials.clear()
     this.onceApprovals.clear()
   }
 
-  /** Requests the user declined since their last message, as the consent each
-   * would have needed. Whole-tool consent also pins the exact arguments. */
-  private turnDenials: string[][] = []
+  /** Calls the user declined since their last message. Only the identical call
+   * is refused again: a declined edit says nothing about the next one. */
+  private turnDenials = new Set<string>()
 
-  private denialKey(name: string, args: Record<string, unknown>, context?: Readonly<ApprovalContext>): string[] {
-    const patterns = inferInvocationRules(name, args, this.cwd, context).map(rule => rule.pattern)
-    return patterns.some(pattern => !pattern.includes("(")) ? [...patterns, `#${argsFingerprint(args)}`] : patterns
+  private denialKey(name: string, args: Record<string, unknown>): string {
+    return `${name}#${argsFingerprint(args)}`
   }
 
-  recordDenial(name: string, args: Record<string, unknown>, context?: Readonly<ApprovalContext>): void {
-    const key = this.denialKey(name, args, context)
-    if (key.length) this.turnDenials.push(key)
+  recordDenial(name: string, args: Record<string, unknown>, _context?: Readonly<ApprovalContext>): void {
+    this.turnDenials.add(this.denialKey(name, args))
   }
 
-  /** Nothing in this request goes beyond one the user already declined this turn. */
-  declinedThisTurn(name: string, args: Record<string, unknown>, context?: Readonly<ApprovalContext>): boolean {
-    if (!this.turnDenials.length) return false
-    const key = this.denialKey(name, args, context)
-    return key.length > 0 && this.turnDenials.some(denied => key.every(part => denied.includes(part)))
+  /** The model is retrying a call the user already declined this turn. */
+  declinedThisTurn(name: string, args: Record<string, unknown>, _context?: Readonly<ApprovalContext>): boolean {
+    return this.turnDenials.size > 0 && this.turnDenials.has(this.denialKey(name, args))
+  }
+
+  private memoryRecordExists?: (name: string) => boolean
+
+  /** How the policy learns whether a project memory name is already taken. */
+  setProjectMemoryLookup(exists: ((name: string) => boolean) | undefined): void { this.memoryRecordExists = exists }
+
+  /** A project memory name that is not yet in use; unknown counts as taken. */
+  isNewProjectMemory(name: string): boolean {
+    try { return !!this.memoryRecordExists && !this.memoryRecordExists(name) } catch { return false }
   }
 
   /** A new user message may change their answer. */
-  startTurn(): void { this.turnDenials = [] }
+  startTurn(): void { this.turnDenials.clear() }
 
   /** One-time approvals this session, by the consent a saved rule would hold. */
   private onceApprovals = new Map<string, number>()
@@ -858,7 +871,7 @@ export class PermissionManager {
       return rules.some(rule => rule.type === "allow" && ruleMatchesTool(rule, tool, fileArgs))
     })) return false
     if (name === "bash" && !shellNetworkHosts(args).every(host => this.checkShellNetwork({ ...args, network_destinations: [host] }, context).decision === "allow"
-      || rules.some(rule => rule.type === "allow" && capabilityRuleMatches(rule, { kind: "net.read", scope: host }, this.cwd, context)))) return false
+      || rules.some(rule => rule.type === "allow" && capabilityRuleMatches(rule, { kind: "net.write", scope: host }, this.cwd, context)))) return false
     if (opaqueShell(facts, context)) return rules.some(rule => rule.type === "allow" && isWholeToolRule(rule, name))
     if (name === "bash") {
       const commands = shellExecutionCommands(normalized).flatMap(command =>
@@ -916,8 +929,18 @@ export class PermissionManager {
       ?? decisions.find(value => value.decision === "ask") ?? { decision: "allow" }
   }
 
+  /** A shell declares a host the sandbox allowlist would refuse. */
+  reachesBeyondAllowlist(args: Record<string, unknown>): boolean {
+    const policy = this.sandboxNetworkPolicy
+    return !!policy && shellNetworkHosts(args).some(host => !decideHost(policy, host).allowed)
+  }
+
   /** Declared hosts extend the sandbox proxy for one command. Allowlisted
-   * hosts need nothing, denied hosts are refused, others need `net.read`. */
+   * hosts need nothing, denied hosts are refused, others need `net.write`:
+   * the proxy filters by host only, so a shell can send as well as receive.
+   * Like `sandboxNetwork.allowedDomains`, only the user can widen egress:
+   * allows count from this session, host-owned project grants and user
+   * settings, never from repository `.zapcode/settings*.json` files. */
   checkShellNetwork(args: Record<string, unknown>, context?: Readonly<ApprovalContext>): PermissionDecision {
     const policy = this.sandboxNetworkPolicy
     if (!policy) return { decision: "allow" }
@@ -925,15 +948,18 @@ export class PermissionManager {
     // Outside the sandbox no proxy applies; that path has its own consent.
     if (facts.sandboxEscape || (facts.shellCommands ?? []).some(command => matchesAnyCommandPattern(command, this.sandboxExcluded))) return { decision: "allow" }
     this.merged = loadMergedSettings(this.cwd)
+    const granted = [...this.sessionRules, ...loadPermissionSettings(getProjectAuthorizationSettingsPath(this.cwd)).rules,
+      ...loadPermissionSettings(getGlobalSettingsPath()).rules].filter(rule => rule.type === "allow")
     const decisions = shellNetworkHosts(args).map((host): PermissionDecision => {
-      const capability: ToolCapability = { kind: "net.read", scope: host }
+      const capability: ToolCapability = { kind: "net.write", scope: host }
       const restriction = this.matchRules(rule => rule.type !== "allow" && capabilityRuleMatches(rule, capability, this.cwd, context))
       if (restriction) return restriction
       const refused = decideHost({ allowedDomains: ["*"], deniedDomains: policy.deniedDomains }, host)
       if (!refused.allowed) return { decision: "deny", reason: refused.reason }
       if (decideHost(policy, host).allowed) return { decision: "allow" }
-      return this.matchRules(rule => rule.type === "allow" && capabilityRuleMatches(rule, capability, this.cwd, context))
-        ?? { decision: "ask", reason: `Shell network access requires authorization: ${host}` }
+      const grant = granted.find(rule => capabilityRuleMatches(rule, capability, this.cwd, context))
+      return grant ? { decision: "allow", rule: grant, scope: this.sessionRules.includes(grant) ? "session" : this.locateRuleScope(grant) }
+        : { decision: "ask", reason: `Shell network access requires authorization: ${host}` }
     })
     return decisions.find(value => value.decision === "deny")
       ?? decisions.find(value => value.decision === "ask" && value.rule)
@@ -996,7 +1022,11 @@ export class PermissionManager {
 
   private capabilityRestriction(capabilities: readonly ToolCapability[] | undefined, context?: Readonly<ApprovalContext>): PermissionDecision | null {
     if (!capabilities?.length) return null
-    return this.matchRules(rule => rule.type !== "allow" && capabilities.some(capability => capabilityRuleMatches(rule, capability, this.cwd, context)))
+    return this.matchRules(rule => rule.type !== "allow" && capabilities.some(capability => capabilityRuleMatches(rule, capability, this.cwd, context)
+      // A capability grant covers sibling tools, so their deny/ask rules apply too:
+      // `Edit(.env)` must still stop write_file once fs.write is granted.
+      || isFileCapability(capability.kind) && fileCapabilityViews(capability.scope, this.cwd, context).touched.some(path =>
+        capabilityFileTools(capability.kind).some(tool => ruleMatchesTool(rule, tool, tool === "move_file" ? { source: path, destination: path } : { path })))))
   }
 
   /** Every capability must be covered; the first match explains the decision. */

@@ -201,7 +201,7 @@ export function executeCommandTool(options: ExecuteCommandOptions = {}): Tool {
           .describe("Exact HTTP(S) URLs, domains, or wildcard subdomains requested by this command; subject to the execution backend's network policy"),
       } : options.declaredNetwork ? {
         network_destinations: z
-          .array(z.string().min(1))
+          .array(z.string().min(1).max(253))
           .max(16)
           .optional()
           .describe("Hosts outside the sandbox network allowlist this command must reach (api.example.com or *.example.com); each needs approval once"),

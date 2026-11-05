@@ -7,7 +7,6 @@
 import type { PermissionMode } from "../config.js"
 import { evaluateApprovalPolicy, type ApprovalPolicyDecision } from "../permission-policy.js"
 import { PermissionManager } from "../permissions.js"
-import { REQUEST_CAPABILITIES_TOOL } from "../capabilities.js"
 import type { ApprovalCallback, ApprovalDenial, ApprovalResponse } from "../../zapsdk/tools/executor.js"
 import type { NetworkPolicy } from "../../zapsdk/execution/network-proxy.js"
 
@@ -31,9 +30,8 @@ export interface HeadlessApprovalResult {
   setSandboxConfined: (confined: boolean, autoAllowAll?: boolean) => void
   setSandboxExcludedCommands: (patterns: string[] | undefined) => void
   setSandboxNetworkPolicy: (policy: NetworkPolicy | undefined) => void
+  setProjectMemoryLookup: (exists: ((name: string) => boolean) | undefined) => void
   onApproval: ApprovalCallback
-  /** Whether rules now cover a `request_capabilities` call. */
-  capabilitiesGranted: (args: Record<string, unknown>) => boolean
   /** True iff at least one tool was denied during the run. */
   anyDenied: () => boolean
 }
@@ -76,11 +74,9 @@ export function buildHeadlessApproval(opts: HeadlessApprovalOptions): HeadlessAp
     if (signal?.aborted) return deny(toolName, "approval cancelled", "policy", decision)
     const current = evaluate(toolName, args, context)
     if (current.decision === "deny" || current.source === "dangerous") return deny(toolName, current.reason, "policy", current)
-    if (granted === true && toolName === REQUEST_CAPABILITIES_TOOL) {
-      // The host's yes is the user's grant for the rest of this run.
-      try { mgr.addSessionRule(toolName, args, context) } catch {}
-    }
     if (granted === true) return allow(toolName, "host approval", decision)
+    // The model must not loop back to the same request within this run.
+    mgr.recordDenial(toolName, args, context)
     return granted && typeof granted === "object"
       ? deny(toolName, granted.reason, granted.source, decision)
       : deny(toolName, "host declined approval", "approval", decision)
@@ -93,8 +89,8 @@ export function buildHeadlessApproval(opts: HeadlessApprovalOptions): HeadlessAp
     setSandboxConfined: (confined, autoAllowAll) => mgr.setSandboxConfined(confined, autoAllowAll),
     setSandboxExcludedCommands: patterns => mgr.setSandboxExcludedCommands(patterns),
     setSandboxNetworkPolicy: policy => mgr.setSandboxNetworkPolicy(policy),
+    setProjectMemoryLookup: exists => mgr.setProjectMemoryLookup(exists),
     onApproval,
-    capabilitiesGranted: args => mgr.checkPermission(REQUEST_CAPABILITIES_TOOL, args).decision === "allow",
     anyDenied: () => denied,
   }
 }

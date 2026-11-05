@@ -39,6 +39,18 @@ describe("approval precheck", () => {
     expect(await prompted).toMatchObject({ success: true, output: "prompted" })
   })
 
+  it("never prechecks a cancelled call", async () => {
+    let prechecked = 0
+    const callback: ApprovalCallback = Object.assign(async () => true as ApprovalResponse, { precheck: () => { prechecked++; return true as ApprovalResponse } })
+    const controller = new AbortController()
+    // Cancelled while the request is being announced, just before the precheck.
+    const executor = new ToolExecutor(registry(), { onApproval: callback,
+      onApprovalLifecycle: event => { if (event.status === "requested") controller.abort() } })
+    const result = await executor.execute("settled", {}, controller.signal)
+    expect(result.success).toBe(false)
+    expect(prechecked).toBe(0)
+  })
+
   it("keeps the queued order for callbacks without a precheck", async () => {
     const { callback, answer } = approval(false)
     const executor = new ToolExecutor(registry(), { onApproval: callback })

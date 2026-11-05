@@ -65,7 +65,7 @@ describe("capability rules", () => {
     expect(matchCapabilityScope("api.github.com", "*.github.com")).toBe(true)
     expect(matchCapabilityScope("github.com.evil.io", "*.github.com")).toBe(false)
     expect(describeCapabilityPatterns(["Capability(fs.write:**)", "Capability(net.write:api.x.com)"]))
-      .toBe("file edits anywhere in this project, network writes to api.x.com")
+      .toBe("file edits anywhere in this project, network access to api.x.com (send and receive)")
     expect(describeCapabilityPatterns(["Capability(external.read:mcp:gh)"])).toBe("read-only tools of MCP server gh")
     expect(describeCapabilityPatterns(["Bash(git:*)"])).toBeNull()
     expect(describeCapabilityPatterns(["Bash(curl:*)", "Capability(net.read:api.x.com)"])).toBe("Bash(curl:*), network reads from api.x.com")

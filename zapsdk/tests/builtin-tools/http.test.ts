@@ -253,7 +253,7 @@ describe("HTTP redirect credential forwarding", () => {
       return location ? new Response(null, { status: 302, headers: { location } }) : new Response("done");
     };
     const result = await httpRequestTool({ resolveHostname: publicResolver }).handler({
-      url: "https://example.test/start", method: "PUT", body: "{}", headers: { ...credentials, "X-Fixture": "keep" },
+      url: "https://example.test/start", method: "GET", headers: { ...credentials, "X-Fixture": "keep" },
     });
     expect(result.success).toBe(true);
     expect(calls.map(call => call.url)).toEqual(["https://example.test/start", "https://other.test/a", "https://example.test/back"]);
@@ -263,6 +263,17 @@ describe("HTTP redirect credential forwarding", () => {
       expect(calls[2].headers.has(name)).toBe(false);
     }
     expect(calls[2].headers.get("X-Fixture")).toBe("keep");
+  });
+
+  it("never replays a request body to another host", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = async (input) => {
+      calls.push(String(input));
+      return calls.length === 1 ? new Response(null, { status: 307, headers: { location: "https://other.test/a" } }) : new Response("done");
+    };
+    const result = await httpRequestTool({ resolveHostname: publicResolver }).handler({ url: "https://example.test/start", method: "PUT", body: "{}" });
+    expect(calls).toEqual(["https://example.test/start"]);
+    expect(result.error).toContain("HTTP 307");
   });
 
   it("keeps credentials across same-origin redirects", async () => {

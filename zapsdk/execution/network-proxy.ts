@@ -31,6 +31,7 @@ export function destinationHostPattern(value: string): string | null {
     try { host = new URL(trimmed).hostname; } catch { return null; }
   }
   host = host.replace(/\.$/, "");
+  if (host.length > 253) return null;
   return /^(?:\*\.)?[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/.test(host) ? host : null;
 }
 
@@ -41,7 +42,8 @@ function normalizeHost(host: string): string {
 }
 
 function isLoopbackAddress(host: string): boolean {
-  return LOOPBACK_NAMES.has(host) || /^127\./.test(host) || host === "::1" || host === "::ffff:127.0.0.1";
+  // Only a literal address: a name like 127.evil.com resolves wherever its owner wants.
+  return LOOPBACK_NAMES.has(host) || (isIP(host) === 4 && /^127\./.test(host)) || host === "::1" || host === "::ffff:127.0.0.1";
 }
 
 /** Link-local space holds cloud metadata services (169.254.169.254) and is never
