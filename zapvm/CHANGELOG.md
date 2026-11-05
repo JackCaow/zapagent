@@ -8,6 +8,9 @@ changes that are called out explicitly.
 
 ### Fixed
 
+- Base r15 refreshes both architectures' signed Alpine closures to apk-tools
+  3.0.9-r0, libarchive 3.8.11-r0 and tzdata 2026f-r0 after the 3.23 repository
+  dropped the pinned versions; the package set and counts are unchanged.
 - Base r13 refreshes both signed Alpine kernel closures to linux-virt 6.18.60-r0,
   retaining exact input constraints and complete installed-database verification.
 - Base r8 refreshes the signed Alpine package closure for both architectures.
