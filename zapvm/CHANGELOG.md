@@ -8,6 +8,9 @@ changes that are called out explicitly.
 
 ### Fixed
 
+- Base r16 refreshes both architectures' signed Alpine closures to
+  alpine-release 3.23.8-r0 and openssh 10.2_p1-r1 after the 3.23 repository
+  dropped the pinned versions; the package set and counts are unchanged.
 - Base r15 refreshes both architectures' signed Alpine closures to apk-tools
   3.0.9-r0, libarchive 3.8.11-r0 and tzdata 2026f-r0 after the 3.23 repository
   dropped the pinned versions; the package set and counts are unchanged.
