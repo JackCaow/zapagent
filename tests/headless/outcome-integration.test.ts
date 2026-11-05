@@ -60,8 +60,10 @@ it("real CLI preserves legacy delivery failure while outcome-v1 finishes after w
         ]);
         expect(sealing.every(line => line.detail.attemptId === finals[0].attemptId && line.detail.elapsedMs >= 0)).toBe(true);
       } else expect(sealing).toHaveLength(0);
-      expect(requests - prior).toBe(background ? 3 : 5);
-      expect(reviewRequests - priorReviews).toBe(1);
+      // Only the denied run has a failed tool call to reconcile before finishing.
+      const reviewed = profile === "denied" ? 1 : 0;
+      expect(requests - prior).toBe((background ? 2 : 4) + reviewed);
+      expect(reviewRequests - priorReviews).toBe(reviewed);
       expect(finals[0].toolCalls).toHaveLength(background ? 1 : 3);
       if (background) {
         expect(finals[0].execution.backgroundTasks).toHaveLength(1);

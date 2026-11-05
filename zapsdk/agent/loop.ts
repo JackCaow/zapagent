@@ -8,7 +8,7 @@ import { normalizeAssistantText } from "./output-text.js";
 import { earliestDeadlineAt } from "../execution/deadline.js";
 import { toolOutputTool } from "../builtin-tools/tool-output.js";
 import { assembleSubagentTool } from "./subagent-assembly.js";
-import { type TaskDecompositionMode, primaryArgSig, stepSignature, createRunToolExecutionHooks, isRepeatFriendlyStep, isLiveTaskWait, progressPollSignature } from "./tool-execution-guards.js";
+import { type TaskDecompositionMode, primaryArgSig, stepSignature, createRunToolExecutionHooks, duplicateQueryKey, isDuplicateQuery, isRepeatFriendlyStep, isLiveTaskWait, progressPollSignature } from "./tool-execution-guards.js";
 import type { LLMProvider, LLMCallOptions } from "../core/llm.js";
 import { hasMeaningfulOutput } from "../core/provider-request.js";
 import { assertProviderRequestAllowed } from "../core/provider-deadline.js";
@@ -962,6 +962,10 @@ export class LoopAgent {
       } else {
         localMessages = msgs;
       }
+      // Pruning and compaction shorten earlier results. A duplicate notice
+      // must never point the model at output it can no longer see.
+      seenFiles.clear();
+      toolExecutionHooks.forgetObservations();
     };
     this.recoveryContext = (requestMessages) => {
       let revision: string | undefined;
@@ -2486,7 +2490,9 @@ export class LoopAgent {
     seenFiles: SeenFiles,
     success: boolean,
   ): { content: string; suppression?: "duplicate" } {
-    if (!toolCall.name.includes("read_file") && toolCall.name !== "pr_file_content") return { content: resultContent };
+    if (!toolCall.name.includes("read_file") && toolCall.name !== "pr_file_content") {
+      return this.deduplicateQuery(toolCall, resultContent, seenFiles, success);
+    }
     if (!(toolCall.arguments as any).path && !(toolCall.arguments as any).ref) return { content: resultContent };
 
     const filePath = String((toolCall.arguments as any).path ?? (toolCall.arguments as any).ref ?? "");
@@ -2507,6 +2513,36 @@ export class LoopAgent {
     return { content: resultContent };
   }
 
+  /** Fold a repeated search or read-only shell query whose output has not
+   *  changed. The query has already run, so a change made outside the agent's
+   *  tools still reaches the model. */
+  private deduplicateQuery(
+    toolCall: ToolCallRequest,
+    resultContent: string,
+    seenFiles: SeenFiles,
+    success: boolean,
+  ): { content: string; suppression?: "duplicate" } {
+    const args = (toolCall.arguments ?? {}) as Record<string, unknown>;
+    if (!isDuplicateQuery(toolCall.name, args)) return { content: resultContent };
+    const key = duplicateQueryKey(toolCall.name, args);
+    if (!success) {
+      seenFiles.delete(key);
+      return { content: resultContent };
+    }
+    const contentHash = createHash("sha256").update(resultContent).digest("hex");
+    if (seenFiles.get(key) === contentHash) {
+      const target = primaryArgSig(toolCall.name, args) || "the same arguments";
+      this.emitter.emit({ type: "observation", kind: "duplicate_tool_suppressed", detail: { tool: toolCall.name, target } });
+      return {
+        content: `[Duplicate ${toolCall.name} suppressed for ${target}. It returned the same output as the previous call; ` +
+          "reuse that result and choose the next concrete action.]",
+        suppression: "duplicate",
+      };
+    }
+    seenFiles.set(key, contentHash);
+    return { content: resultContent };
+  }
+
   /** Append error classification hints or system notices to the result content. */
   private classifyError(
     toolCall: ToolCallRequest,
@@ -2515,12 +2551,23 @@ export class LoopAgent {
     resultContent: string,
   ): string {
     if (result.success) {
-      errorTracker.delete(toolCall.name);
+      // A successful change to the workspace makes every earlier failure
+      // worth retrying: rerunning tests after an edit is not a blind retry.
+      const readOnly = this.executor.workspaceGate
+        ? !!result.runtime?.effects && isEffectivelyReadOnly(result.runtime.effects)
+        : this.executor.isReadOnly(toolCall.name, toolCall.arguments);
+      if (readOnly) errorTracker.delete(toolCall.name);
+      else errorTracker.clear();
       return resultContent;
     }
     if (!result.error) return resultContent;
 
-    const errorSig = `${toolCall.name}:${result.error.slice(0, 100)}`;
+    // Count only the identical call failing identically. Error headers such as
+    // "Command failed: <cmd> … Message: <first line>" repeat across different
+    // test failures, so the whole observation is part of the signature.
+    const errorSig = createHash("sha256")
+      .update(JSON.stringify([toolCall.arguments ?? {}, result.error, result.output ?? ""]))
+      .digest("hex");
     if (!errorTracker.has(toolCall.name)) errorTracker.set(toolCall.name, new Map());
     const toolErrors = errorTracker.get(toolCall.name)!;
     const count = (toolErrors.get(errorSig) ?? 0) + 1;

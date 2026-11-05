@@ -1371,11 +1371,13 @@ function buildDiagnosticsFromSegments(segments: ContextSegment[], fullText: stri
 
 /** Review observed work against the original request before natural finish.
  *  LoopAgent bounds this to one reminder and permits an honest incomplete
- *  response. Todo completion does not suppress review of settled tool work. */
+ *  response. The review costs a model call, so it runs only when there is
+ *  something to reconcile: an unfinished todo or a failed tool call, even if
+ *  the todo list was cleared afterwards. */
 export function makeTurnEndGuard(getTodos: () => Todo[]): (result?: Pick<LoopAgentResult, "toolResults">) => string | null {
   return (result) => {
     const active = getTodos().find((t) => t.status === "in_progress")
-    if (!active && !result?.toolResults.length) return null
+    if (!active && !result?.toolResults.some((r) => !r.success)) return null
     return (
       "<system-reminder>\n" +
       (active ? `Todo "${escapeContextText(active.content)}" remains in_progress.\n` : "") +

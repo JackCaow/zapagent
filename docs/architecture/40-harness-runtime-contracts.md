@@ -10,7 +10,7 @@
 
 `LoopAgent` 保留模型循环、会话提交、上下文压缩及失败恢复。以下组件独立维护，公开的 LoopAgent API 保持兼容：
 
-- `agent/tool-execution-guards.ts`：单次运行的重复查询缓存、失败构建防护、计划 gate、重复步骤签名和进度轮询判定。
+- `agent/tool-execution-guards.ts`：远程抓取复用、失败构建防护、计划 gate、重复步骤签名和进度轮询判定。本地读取、搜索和只读 shell 查询照常执行，结果与上次完全相同时才由 `LoopAgent` 折叠成指向上次结果的提示；历史被剪枝或压缩时清空这份记录。工具失败计数按“相同参数 + 相同完整输出”识别，工作区有成功修改后清零。
 - `agent/call-budget.ts`：消息与工具 schema 的输入估算、context/input ceiling 和输出预算计算。
 - `agent/nonstreaming-tool-executor.ts`：非流式工具批次的授权、资源冲突调度及结果配对。
 - `agent/subagent-assembly.ts`：每个 loop 的 registry 克隆和子 Agent 装配；继承 policy、broker、审批队列、checkpoint 约束和 lifecycle observers。
@@ -55,12 +55,12 @@
 
 ## 自然结束前的有限证据复核
 
-应用的自然结束复核使用同一个 `makeTurnEndGuard` 接入 Headless 和 TUI：已有工具
-结果或仍在进行的 Todo 时，最多提醒一次，将原始需求与本轮真实观察重新对照。
-Todo 完成、列表清空或命令 exit 0 都不能代替功能证据。复核不判定答案正确与否，
-不强制追加工具调用，允许明确报告未完成或未验证；第二次自然结束直接退出。
-无工具结果、无进行中 Todo 的直接对话不增加复核请求。只读工具工作可能增加一次
-模型请求，其耗时和成本必须纳入评估。共享预算、本轮 token/step 上限和收尾时间
+应用的自然结束复核使用同一个 `makeTurnEndGuard` 接入 Headless 和 TUI：本轮有失败的
+工具调用，或仍有进行中的 Todo 时，最多提醒一次，将原始需求与本轮真实观察重新对照。
+失败后清空 Todo 列表不会跳过复核。复核不判定答案正确与否，不强制追加工具调用，
+允许明确报告未完成或未验证；第二次自然结束直接退出。工具全部成功且没有进行中 Todo
+时不复核：每次复核都多一次模型请求，实测会让模型重读文件、重复总结。代价是 exit 0
+但输出里写着失败的命令不再触发复核。共享预算、本轮 token/step 上限和收尾时间
 预留均优先于复核；已到上限的完整回答仍能正常结束。
 
 复核只使用模型已有的需求、用户后续指示和工具观察，不引入外部 verifier、隐藏

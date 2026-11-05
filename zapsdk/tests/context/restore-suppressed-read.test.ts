@@ -33,13 +33,18 @@ async function fixture() {
   const hooks = createRunToolExecutionHooks(executor, () => {}, "off", false);
   const messages: Message[] = [];
   let index = 0;
+  let lastOutput: string | undefined;
   async function executeRead() {
     const call = { id: `read-${index++}`, name: "read_file", arguments: { path } };
     const turn = await executeNonStreamingTurn({ type: "tool_call", text: "", toolCalls: [call], usage: { inputTokens: 0, outputTokens: 0 } },
       { executor, emitter: new AgentEventEmitter(), sessionId: "restore-duplicate" }, index, undefined, hooks);
     const result = turn.results.get(call.id)!;
-    messages.push(...turnToMessages(buildToolTurn({ text: "", completed: [{ ...call, result }] })));
-    return result;
+    // LoopAgent folds an identical successful reread into a pointer after it runs.
+    const folded = result.success && result.output === lastOutput;
+    lastOutput = result.success ? result.output : undefined;
+    messages.push(...turnToMessages(buildToolTurn({ text: "", completed: [{ ...call, result,
+      ...(folded ? { formattedOutput: `[File already read — see previous result for ${path}]`, formattedOutputSuppression: "duplicate" as const } : {}) }] })));
+    return { result, folded };
   }
   return { root, messages, executeRead, readCount: () => readCount,
     invalidateAndDeny() { failRead = true; hooks.afterExecute?.("write_file", { path }, { success: true, output: "changed" }); } };
@@ -51,12 +56,12 @@ describe("restoring suppressed reads", () => {
     try {
       await f.executeRead();
       const suppressed = await f.executeRead();
-      expect(f.readCount()).toBe(1);
-      expect(suppressed.runtime?.suppression).toBe("duplicate");
+      expect(f.readCount()).toBe(2);
+      expect(suppressed.folded).toBe(true);
       expect(f.messages[3]?.toolResultSuppression).toBe("duplicate");
       const restored = await restoreRecentFiles(f.messages);
       expect(restored).toContain("ACTUAL_AUTHORIZED_SNAPSHOT");
-      expect(restored).not.toContain("Duplicate read_file suppressed");
+      expect(restored).not.toContain("File already read");
     } finally { await rm(f.root, { recursive: true, force: true }); }
   });
 
@@ -81,10 +86,10 @@ describe("restoring suppressed reads", () => {
     try {
       await f.executeRead(); await f.executeRead();
       f.invalidateAndDeny();
-      const failed = await f.executeRead();
+      const { result: failed } = await f.executeRead();
       expect(failed.success).toBe(false);
       expect(failed.runtime?.suppression).toBeUndefined();
-      expect(f.readCount()).toBe(2);
+      expect(f.readCount()).toBe(3);
       expect(await restoreRecentFiles(f.messages)).toBeNull();
       const cm = new ConversationManager({ maxMessages: 100 });
       f.messages.forEach(message => cm.add(message));
