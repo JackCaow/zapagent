@@ -10,6 +10,7 @@ import type { Todo } from "../../zapsdk/index.js"
 
 async function runFixture(options: {
   work?: boolean
+  failWork?: boolean
   activeTodo?: boolean
   clearTodoAfterWork?: boolean
   sharedTokens?: number
@@ -25,7 +26,9 @@ async function runFixture(options: {
   registry.register({ definition: { name: "observe", description: "Return a synthetic observation", parameters: z.object({}) }, handler: async () => {
     effects++
     if (options.clearTodoAfterWork) todos = []
-    return { success: true, output: "Command exit 0; functional check FAILED." }
+    return options.failWork
+      ? { success: false, output: "functional check FAILED", error: "Command failed: check\nExit code: 1" }
+      : { success: true, output: "Command exit 0; functional check FAILED." }
   } })
   const conversation = new ConversationManager({ maxMessages: 100 })
   const agent = new LoopAgent({ registry, executor: new ToolExecutor(registry, { onApproval: async () => true }), conversation,
@@ -52,8 +55,8 @@ async function runFixture(options: {
 }
 
 describe("application finish evidence review", () => {
-  test("reviews settled observations even after a Todo list is cleared, without replaying work", async () => {
-    const run = await runFixture({ work: true, activeTodo: true, clearTodoAfterWork: true })
+  test("reviews a failed tool call even after the Todo list is cleared, without replaying work", async () => {
+    const run = await runFixture({ work: true, failWork: true, activeTodo: true, clearTodoAfterWork: true })
     expect(run.calls).toBe(3)
     expect(run.reviews).toBe(1)
     expect(run.effects).toBe(1)
@@ -81,12 +84,20 @@ describe("application finish evidence review", () => {
     expect(run.effects).toBe(0)
   })
 
-  test("read-only tool work receives at most one review without requiring mutation", async () => {
-    const run = await runFixture({ work: true })
+  test("a failed tool call receives at most one review without requiring mutation", async () => {
+    const run = await runFixture({ work: true, failWork: true })
     expect(run.calls).toBe(3)
     expect(run.effects).toBe(1)
     expect(run.reviews).toBe(1)
     expect(run.result.text).toContain("unverified")
+  })
+
+  test("successful tool work with no open Todo ends without an extra review call", async () => {
+    const run = await runFixture({ work: true })
+    expect(run.calls).toBe(2)
+    expect(run.effects).toBe(1)
+    expect(run.reviews).toBe(0)
+    expect(run.result.text).toBe("Done.")
   })
 
   for (const kind of ["sharedTokens", "localTokens"] as const) {

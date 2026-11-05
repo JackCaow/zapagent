@@ -15,7 +15,7 @@ import {
   AgentLogger,
 } from "../zapsdk/index.js"
 import { getAppDataDir } from "../zapsdk/utils/platform.js"
-import { cronTools, monitorTool, detectProviders, type DetectedProvider } from "../zapsdk/builtin-tools/index.js"
+import { detectProviders, type DetectedProvider } from "../zapsdk/builtin-tools/index.js"
 import { TaskStore } from "../zapsdk/tasks/store.js"
 import { buildTaskNotificationXml, classifyTaskExit } from "../zapsdk/tasks/notification.js"
 import { pushSystemEvent } from "./queue/systemInbox.js"
@@ -106,17 +106,9 @@ export const tokenAccounting = {
   promptOverhead: 0,
 }
 
-// ─── Cron + Monitor session-scoped handles ───
-// Singletons (not per-config-reload): session-only jobs should survive
-// config changes but die with the process. No `agentId` → main agent has
-// team-lead semantics (sees and deletes all jobs). `onFire` is left
-// undefined until the CLI prompt-queue integration is wired — fires are
-// recorded on the job (lastFiredAt) but do not inject into agent turns yet.
-export const cronHandle = cronTools({})
-// Single shared TaskStore — monitor, bash bg, and future task_* tools all
+// Single shared TaskStore — bash background commands and the task_* tools
 // register and look up tasks here so the UI gets a unified view.
 export const taskStore = new TaskStore({ projectCwd: process.cwd() })
-export const monitorHandle = monitorTool({ store: taskStore })
 
 // ─── Task-completion → systemInbox bridge ───
 // When a background task exits, build a `<task-notification>` XML payload
@@ -142,15 +134,13 @@ taskStore.on("exited", (e) => {
 })
 
 // ─── Process shutdown cleanup ───
-// Kill every still-running monitor child so Ctrl-C doesn't leave background
-// processes orphaned. Cron scheduler is setInterval(unref'd), dies with the
-// process; calling stop() is belt-and-suspenders.
+// Kill every still-running background command so Ctrl-C doesn't leave
+// processes orphaned.
 let _shutdownRan = false
 function _shutdown(): void {
   if (_shutdownRan) return
   _shutdownRan = true
   try { taskStore.stopAll("SIGTERM") } catch {}
-  try { cronHandle.stop() } catch {}
 }
 process.on("exit", _shutdown)
 const shutdownOnInterrupt = () => { _shutdown(); process.exit(130) }

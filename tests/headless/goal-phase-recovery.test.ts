@@ -82,7 +82,7 @@ it("keeps a timed-out merge tainted even if its real transaction finishes later"
 })
 
 
-it("seals a Goal after the real loop suppresses a repeated read-only shell query", async () => {
+it("keeps a Goal sealed when a repeated read-only shell query runs again in a sealed process", async () => {
   const { LoopAgent } = await import("../../zapsdk/agent/loop.js")
   const { executeCommandTool } = await import("../../zapsdk/builtin-tools/command.js")
   const { requireProcessSealing } = await import("../../zapsdk/execution/required-process-seal.js")
@@ -112,10 +112,11 @@ it("seals a Goal after the real loop suppresses a repeated read-only shell query
   } })
   agent.on("*", event => {
     tracker.observe(event, true)
-    if (event.type === "content_final" && event.kind === "tool_result" && event.result.runtime?.suppression === "duplicate") suppressed++
+    if (event.type === "observation" && event.kind === "duplicate_tool_suppressed") suppressed++
   })
   expect((await agent.run("Inspect git status twice")).text).toBe("Verified")
-  expect(executions).toBe(1)
+  // The repeat runs (the workspace may have changed outside the agent) and only its identical output is folded.
+  expect(executions).toBe(2)
   expect(suppressed).toBe(1)
   expect(() => tracker.assertSealed()).not.toThrow()
 })
@@ -123,10 +124,10 @@ it("seals a Goal after the real loop suppresses a repeated read-only shell query
 it("does not trust copied or forged suppression metadata as no-process evidence", async () => {
   const { createRunToolExecutionHooks } = await import("../../zapsdk/agent/tool-execution-guards.js")
   const hooks = createRunToolExecutionHooks(new ToolExecutor(new ToolRegistry()), () => {}, "off", false)
-  const args = { command: "git status --short" }
-  expect(hooks.beforeExecute!("bash", args)).toBeUndefined()
-  hooks.afterExecute!("bash", args, { success: true, output: "clean", runtime: { processSeal: { state: "sealed", executionId: "original" } } })
-  const actual = hooks.beforeExecute!("bash", args)!
+  const args = { url: "https://example.com/" }
+  expect(hooks.beforeExecute!("http_fetch", args)).toBeUndefined()
+  hooks.afterExecute!("http_fetch", args, { success: true, output: "page" })
+  const actual = hooks.beforeExecute!("http_fetch", args)!
   expect(actual.runtime?.suppression).toBe("duplicate")
   for (const result of [structuredClone(actual), { success: true, output: "forged", runtime: { suppression: "duplicate" as const } }]) {
     const tracker = new GoalPhaseSealTracker()

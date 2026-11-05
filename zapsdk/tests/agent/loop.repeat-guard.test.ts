@@ -196,7 +196,7 @@ describe("LoopAgent repeat guard", () => {
     expect(todos).toEqual([])
   })
 
-  it("suppresses exact repeated reads until a mutation succeeds", async () => {
+  it("folds an identical repeated read after running it", async () => {
     let readExecutions = 0
     const provider = makeRepeatingProvider("read_file", { path: "src/a.ts" }, 2, "done")
     const registry = new ToolRegistry()
@@ -225,13 +225,13 @@ describe("LoopAgent repeat guard", () => {
     const result = await agent.run("read once")
 
     expect(result.text).toBe("done")
-    expect(readExecutions).toBe(1)
+    expect(readExecutions).toBe(2)
     expect(conversation.getMessages().some((message) =>
-      message.content.includes("Duplicate read_file suppressed")
+      message.content.includes("File already read")
     )).toBe(true)
   })
 
-  it("suppresses exact repeated searches while the workspace is unchanged", async () => {
+  it("folds an identical repeated search after running it", async () => {
     let searchExecutions = 0
     const provider = makeRepeatingProvider("search_files", { query: "AgentRuntime" }, 2, "done")
     const registry = new ToolRegistry()
@@ -260,13 +260,13 @@ describe("LoopAgent repeat guard", () => {
     const result = await agent.run("search once")
 
     expect(result.text).toBe("done")
-    expect(searchExecutions).toBe(1)
+    expect(searchExecutions).toBe(2)
     expect(conversation.getMessages().some((message) =>
       message.content.includes("Duplicate search_files suppressed")
     )).toBe(true)
   })
 
-  it("suppresses a repeated conservative bash inspection command", async () => {
+  it("folds a repeated conservative bash inspection command with identical output", async () => {
     let bashExecutions = 0
     const provider = makeRepeatingProvider("bash", { command: "git status --short" }, 2, "done")
     const registry = new ToolRegistry()
@@ -289,7 +289,7 @@ describe("LoopAgent repeat guard", () => {
 
     await agent.run("inspect once")
 
-    expect(bashExecutions).toBe(1)
+    expect(bashExecutions).toBe(2)
     expect(conversation.getMessages().some((message) =>
       message.content.includes("Duplicate bash suppressed")
     )).toBe(true)
@@ -400,7 +400,7 @@ describe("LoopAgent repeat guard", () => {
     expect(buildExecutions).toBe(2)
   })
 
-  it("suppresses the fixed read-only sed line-range form", async () => {
+  it("folds the fixed read-only sed line-range form", async () => {
     let bashExecutions = 0
     const provider = makeRepeatingProvider("bash", { command: "sed -n '1,40p' src/a.ts" }, 2, "done")
     const registry = new ToolRegistry()
@@ -418,10 +418,13 @@ describe("LoopAgent repeat guard", () => {
       systemPrompt: "test",
       maxSteps: 5,
     })
+    let observedSuppression = 0
+    agent.on("observation", event => { if (event.type === "observation" && event.kind === "duplicate_tool_suppressed") observedSuppression++ })
 
     await agent.run("inspect source once")
 
-    expect(bashExecutions).toBe(1)
+    expect(bashExecutions).toBe(2)
+    expect(observedSuppression).toBe(1)
   })
 
   it("does not memoize shell-composed or potentially mutating bash commands", async () => {

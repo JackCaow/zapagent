@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test"
 import { mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
-import { createBuiltinRegistry } from "../../builtin-tools/index.js"
+import { createBuiltinRegistry, moveFileTool } from "../../builtin-tools/index.js"
 import { ToolExecutor } from "../../tools/executor.js"
 
 function makeTmpDir(): string {
@@ -105,7 +105,9 @@ describe("createBuiltinRegistry defaultCwd forwarding", () => {
     expect(registry.get("multi_edit")!.definition.writesPath?.({ path: "src/a.ts" })).toEqual([
       join(projectDir, "src", "a.ts"),
     ])
-    expect(registry.get("move_file")!.definition.writesPath?.({
+    // Specialized tools stay out of the default set; hosts register them explicitly.
+    for (const name of ["move_file", "http_request", "current_time", "enter_plan_mode"]) expect(registry.get(name)).toBeUndefined()
+    expect(moveFileTool({ defaultCwd: projectDir }).definition.writesPath?.({
       source: "src/a.ts",
       destination: "src/b.ts",
     })).toEqual([

@@ -57,8 +57,9 @@ it("CLI descendants receive host instructions and emit scoped tool observations"
       try { code = await new Promise((resolve, reject) => { child.once("error", reject); child.once("close", resolve); }); }
       finally { clearTimeout(timer); }
       if (code !== 0) throw new Error(stderr + stdout);
-      expect(requests).toHaveLength(5);
-      expect(requests[4].messages.some((message: any) => message.role === "user" && String(message.content).includes("Review the original user request"))).toBe(true);
+      // Successful delegated work with no open todo finishes without a review round.
+      expect(requests).toHaveLength(4);
+      expect(requests.some((request: any) => request.messages.some((message: any) => message.role === "user" && String(message.content).includes("Review the original user request")))).toBe(false);
       for (const request of requests) {
         const system = request.messages.find((m: any) => m.role === "system").content as string;
         expect(system.split("HOST_PREPEND_SENTINEL")).toHaveLength(2);

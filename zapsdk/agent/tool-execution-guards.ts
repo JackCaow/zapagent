@@ -2,7 +2,6 @@ import type { ToolResult } from "../tools/types.js";
 import type { ToolExecutor } from "../tools/executor.js";
 import type { ToolExecutionHooks } from "./streaming-tool-executor.js";
 import { operationFailure } from "../execution/failure.js";
-import { isEffectivelyReadOnly } from "../tools/effects.js";
 import { canonicalizeJsonSchema } from "../tools/schema.js";
 import { sliceHeadCodePoints } from "../utils/logical-lines.js";
 import { createHash } from "node:crypto";
@@ -103,11 +102,11 @@ const READ_ONLY_GIT_SUBCOMMANDS = new Set([
 
 /**
  * The shell tool declares a conservative read+write effect because arbitrary
- * shell is impossible to prove safe.  For duplicate suppression we can still
+ * shell is impossible to prove safe.  For duplicate folding we can still
  * recognise a deliberately tiny subset of inspection commands.  This is not
- * a permission decision: it merely avoids replaying the exact same query in a
- * single run.  Anything involving shell composition or a potentially writing
- * flag remains non-memoizable and keeps the existing invalidation semantics.
+ * a permission decision: it only lets an identical repeated result be folded.
+ * Anything involving shell composition or a potentially writing flag is never
+ * folded.
  */
 function isMemoizableBashQuery(args: Record<string, unknown>): boolean {
   if (args.run_in_background === true || typeof args.command !== "string") return false;
@@ -146,7 +145,11 @@ function isMemoizableBashQuery(args: Record<string, unknown>): boolean {
   return true;
 }
 
-function isDuplicateQuery(name: string, args: Record<string, unknown>): boolean {
+/** Local queries whose identical repeated output may be folded into a pointer
+ * to the earlier result. They still execute: a file can change outside the
+ * agent's own tools (the user's editor, a background job), and only the fresh
+ * output can show that. */
+export function isDuplicateQuery(name: string, args: Record<string, unknown>): boolean {
   return DUPLICATE_QUERY_TOOLS.has(name) || (name === "bash" && isMemoizableBashQuery(args));
 }
 
@@ -160,7 +163,7 @@ function httpFetchKey(name: string, args: Record<string, unknown>): string | und
   return `${method} ${args.url}${args.raw === true ? " raw" : ""}`;
 }
 
-function duplicateQueryKey(name: string, args: Record<string, unknown>): string {
+export function duplicateQueryKey(name: string, args: Record<string, unknown>): string {
   return `${name}:${JSON.stringify(canonicalizeJsonSchema(args))}`;
 }
 
@@ -220,22 +223,28 @@ function taskPlanRequiredResult(mode: TaskDecompositionMode): ToolResult {
   };
 }
 
-/** Suppress exact repeated reads/searches (and a tiny read-only bash subset)
- * while the workspace is unchanged.
- * Any successful tool that is not explicitly read-only clears the memo. This
- * is deliberately conservative: an unknown shell/process call may mutate a
- * file, so the next read must execute for real. */
+export interface RunToolExecutionHooks extends ToolExecutionHooks {
+  /** Forget fetched pages once history is rewritten: their results may have
+   * been compacted away, so "reuse that result" would point at nothing. */
+  forgetObservations(): void;
+}
+
+/** Reuse a recent remote fetch instead of repeating it. Local reads and
+ * searches are not suppressed here; LoopAgent folds an identical result after
+ * it runs. */
 export function createRunToolExecutionHooks(
   executor: ToolExecutor,
   onSuppressed: (name: string, args: Record<string, unknown>) => void,
   taskDecomposition: TaskDecompositionMode,
   hasTodoTool: boolean,
-): ToolExecutionHooks {
-  const completedOrInFlight = new Set<string>();
+): RunToolExecutionHooks {
   // Remote GETs do not depend on the workspace, so a mutation must not forget them.
   const fetchedUrls = new Map<string, number>();
   const planState: TaskPlanGateState = { ready: false, baselineReads: 0 };
   return {
+    forgetObservations() {
+      fetchedUrls.clear();
+    },
     beforeExecute(name, args) {
       // Planning is not a permission boundary. Only an explicitly required
       // plan may block execution; auto must not turn a short task into retries.
@@ -265,20 +274,7 @@ export function createRunToolExecutionHooks(
           );
         }
         fetchedUrls.set(fetchKey, Date.now());
-        return undefined;
       }
-      if (!isDuplicateQuery(name, args)) return undefined;
-      const key = duplicateQueryKey(name, args);
-      if (completedOrInFlight.has(key)) {
-        onSuppressed(name, args);
-        const target = primaryArgSig(name, args) || "the same arguments";
-        return duplicateSuppression(
-          `[Duplicate ${name} suppressed for ${target}. ` +
-          "Reuse the previous result; the workspace has not changed since it was returned. " +
-          "Choose the next concrete action instead of reading/searching it again.]",
-        );
-      }
-      completedOrInFlight.add(key);
       return undefined;
     },
     afterExecute(name, args, result) {
@@ -287,18 +283,8 @@ export function createRunToolExecutionHooks(
         if (!result.success) fetchedUrls.delete(fetchedKey);
         return;
       }
-      if (isDuplicateQuery(name, args)) {
-        if (!result.success) completedOrInFlight.delete(duplicateQueryKey(name, args));
-        return;
-      }
       if (name === "todo_write" && result.success) {
         planState.ready = true;
-      }
-      const readOnly = executor.workspaceGate
-        ? !!result.runtime?.effects && isEffectivelyReadOnly(result.runtime.effects)
-        : executor.isReadOnly(name, args);
-      if (result.success && !readOnly) {
-        completedOrInFlight.clear();
       }
     },
   };

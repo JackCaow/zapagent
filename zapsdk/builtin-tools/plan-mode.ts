@@ -105,7 +105,7 @@ export function exitPlanModeTool(options: PlanModeToolsOptions): Tool {
           success: false,
           output: "",
           error:
-            "Not in plan mode — nothing to exit. Call `enter_plan_mode` first if you want to design before implementing.",
+            "Not in plan mode — nothing to exit. Present the plan in your reply instead; the user enters plan mode with /mode plan.",
         };
       }
       const plan = args.plan as string;

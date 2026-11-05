@@ -283,7 +283,7 @@ Never commit `.env`.
 
 | Variable | Purpose |
 |---|---|
-| `ZAPCODE_DATA_DIR` | Override the data directory (default: `~/.zapcode` on macOS, `${XDG_DATA_HOME:-~/.local/share}/zapcode` on Linux, `%APPDATA%\zapcode` on Windows). Affects config, sessions, logs, image cache, memory, monitor outputs, and tool-result storage. Useful for CI, sandboxed runs, and per-environment isolation. |
+| `ZAPCODE_DATA_DIR` | Override the data directory (default: `~/.zapcode` on macOS, `${XDG_DATA_HOME:-~/.local/share}/zapcode` on Linux, `%APPDATA%\zapcode` on Windows). Affects config, sessions, logs, image cache, memory, background task output, and tool-result storage. Useful for CI, sandboxed runs, and per-environment isolation. |
 
 ## Permissions and sandbox approvals
 
@@ -320,8 +320,9 @@ stays inside the sandbox. Only your own grants widen the proxy: this session,
 `/permissions` project grants and user settings, never a repository's
 `.zapcode/settings*.json`. Hosts in `sandboxNetwork.deniedDomains` are refused
 even in bypass mode. Capability rules govern declared hosts only; hosts already
-on the allowlist are controlled by `sandboxNetwork`. `http_request` does not
-follow a redirect to another host when the request has a body. For Bash, a `cd` into a project folder and stdin filters such as
+on the allowlist are controlled by `sandboxNetwork`. When a host registers
+`http_request`, it does not follow a redirect to another host when the request
+has a body. For Bash, a `cd` into a project folder and stdin filters such as
 `| tail -20`, `| head -5` or `| grep pattern` do not need their own rule when
 they accompany an allowed command. Explicit deny/ask rules still apply to them.
 
