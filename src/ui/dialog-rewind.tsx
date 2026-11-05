@@ -153,7 +153,7 @@ export function RewindDialog({ checkpoint, logs, onApply, onCancel, isRunning }:
           {diag.enabled && diag.pendingCount === 0 && (
             <Box marginTop={1} flexDirection="column">
               <Text color={c.text.faint}>Recovery points are created before each turn. File undo covers:</Text>
-              <Text color={c.text.faint}>  write_file · edit_file · multi_edit · delete_file · move_file</Text>
+              <Text color={c.text.faint}>  write_file · edit_file · multi_edit · delete_file</Text>
               <Text color={c.text.faint}>File edits via bash (sed -i, cat &gt; …) are not tracked.</Text>
             </Box>
           )}

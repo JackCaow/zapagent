@@ -58,13 +58,13 @@ export async function runGoalMachineCommand(command: string, execute: () => Prom
 
 /** These local tools do not launch opaque model requests. */
 const GOAL_TOOLS = new Set([
-  "read_file", "write_file", "edit_file", "multi_edit", "delete_file", "move_file",
+  "read_file", "write_file", "edit_file", "multi_edit", "delete_file",
   "list_tree", "read_document", "read_pdf", "read_docx",
-  "read_tool_output", "todo_write", "current_time",
+  "read_tool_output", "todo_write",
 ])
 const READ_ONLY_GOAL_TOOLS = new Set([
   "read_file", "list_tree", "read_document", "read_pdf", "read_docx",
-  "read_tool_output", "current_time",
+  "read_tool_output",
 ])
 
 export interface GoalPhaseInput {

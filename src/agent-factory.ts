@@ -29,7 +29,7 @@ import type { CheckpointManager } from "../zapsdk/checkpoint/index.js"
 import { loadAllSkills } from "../zapsdk/skills/loader.js"
 import type { SkillDefinition } from "../zapsdk/skills/types.js"
 import type { AgentEventHandler } from "../zapsdk/agent/events.js"
-import { autoMemory, cronHandle, monitorHandle, taskStore, mdStore, globalMdStore, globalMemoryDir, delegateProviders, delegateEventBridge } from "./singletons.js"
+import { autoMemory, taskStore, mdStore, globalMdStore, globalMemoryDir, delegateProviders, delegateEventBridge } from "./singletons.js"
 import { memorySaveTool } from "../zapsdk/builtin-tools/memory.js"
 import type { AgentObjects } from "./agent/types.js"
 import type { LLMProvider } from "../zapsdk/core/llm.js"
@@ -38,7 +38,7 @@ import { createExecutionEnvironment, resolveExecutionBackend, type ExecutionEnvi
 
 const CWD_SENSITIVE_TOOLS = new Set([
   "read_file", "write_file", "edit_file", "multi_edit",
-  "delete_file", "move_file", "list_tree", "bash",
+  "delete_file", "list_tree", "bash",
   "search_files", "glob_files", "read_document", "browser_screenshot", "delegate_agent", "generate_image",
 ])
 
@@ -164,7 +164,6 @@ export function buildAgentObjects(
     editFile: { allowedPaths, protectedPaths, useExecutionGrants: true },
     multiEdit: { allowedPaths, protectedPaths, useExecutionGrants: true },
     deleteFile: { allowedPaths, protectedPaths, useExecutionGrants: true },
-    moveFile: { allowedPaths, protectedPaths, useExecutionGrants: true },
     listTree: { allowedPaths, useExecutionGrants: true },
     searchFiles: { allowedPaths, useExecutionGrants: true },
     globFiles: { allowedPaths, useExecutionGrants: true },
@@ -204,12 +203,6 @@ export function buildAgentObjects(
         }
       },
     } : undefined,
-    // Cron + monitor: session-scoped singleton handles owned by the CLI
-    // (see singletons.ts). Subagents strip these out of their cloned
-    // registry — jobs created in a subagent would otherwise outlive it
-    // and fire with main-agent authority.
-    cronHandle,
-    monitorHandle,
     taskTools: { store: taskStore },
     // Delegate (claude / codex CLI hand-off): only registered when the PATH
     // probe in singletons.ts found at least one provider. The onEvent forwards
@@ -243,7 +236,6 @@ export function buildAgentObjects(
       editFile: { allowedPaths, protectedPaths, useExecutionGrants: true },
       multiEdit: { allowedPaths, protectedPaths, useExecutionGrants: true },
       deleteFile: { allowedPaths, protectedPaths, useExecutionGrants: true },
-      moveFile: { allowedPaths, protectedPaths, useExecutionGrants: true },
       listTree: { allowedPaths, useExecutionGrants: true },
       searchFiles: { allowedPaths, useExecutionGrants: true },
       globFiles: { allowedPaths, useExecutionGrants: true },

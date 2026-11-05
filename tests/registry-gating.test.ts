@@ -79,3 +79,27 @@ describe("subagent registry stripping (Fix #1)", () => {
     mon.stopAll();
   });
 });
+
+describe("app tool surface", () => {
+  it("leaves specialized tools out of the main agent registry", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs")
+    const { join } = await import("node:path")
+    const { tmpdir } = await import("node:os")
+    const { buildAgentObjects } = await import("../src/agent-factory.js")
+    const { getDefaultConfig } = await import("../src/config.js")
+    const root = mkdtempSync(join(tmpdir(), "zap-tool-surface-"))
+    const previous = process.env.ZAPCODE_DATA_DIR
+    process.env.ZAPCODE_DATA_DIR = join(root, "data")
+    try {
+      const planCallbacks = { enter: () => {}, isActive: () => false, requestExit: async () => ({ approved: false }) }
+      const { registry } = buildAgentObjects(getDefaultConfig(), undefined, undefined, planCallbacks, undefined, undefined, root, "disabled")
+      for (const name of ["monitor", "cron_create", "cron_delete", "cron_list", "move_file", "http_request", "current_time", "enter_plan_mode"])
+        expect(registry.has(name)).toBe(false)
+      for (const name of ["bash", "read_file", "http_fetch", "exit_plan_mode", "task_status"]) expect(registry.has(name)).toBe(true)
+    } finally {
+      if (previous === undefined) delete process.env.ZAPCODE_DATA_DIR
+      else process.env.ZAPCODE_DATA_DIR = previous
+      rmSync(root, { recursive: true, force: true })
+    }
+  });
+});

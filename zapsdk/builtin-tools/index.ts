@@ -3,27 +3,24 @@ import {
   readFileTool,
   writeFileTool,
   deleteFileTool,
-  moveFileTool,
   type ReadFileOptions,
   type WriteFileOptions,
   type DeleteFileOptions,
-  type MoveFileOptions,
 } from "./filesystem.js";
 import { editFileTool, type EditFileOptions } from "./edit.js";
 import { multiEditTool, type MultiEditOptions } from "./multi-edit.js";
 import { listTreeTool, type ListTreeOptions } from "./list-tree.js";
 import { executeCommandTool, type ExecuteCommandOptions } from "./command.js";
-import { httpFetchTool, httpRequestTool, type HttpFetchOptions } from "./http.js";
+import { httpFetchTool, type HttpFetchOptions } from "./http.js";
 import { searchFilesTool, type SearchFilesOptions } from "./search.js";
 import { globFilesTool, type GlobFilesOptions } from "./glob.js";
 import { webSearchTool, type WebSearchOptions } from "./web-search.js";
-import { currentTimeTool } from "./time.js";
 import { readDocumentTool, readPdfTool, readDocxTool, type DocumentReadOptions } from "./document.js";
 import { todoWriteTool, type TodoWriteToolOptions, type TodoStore, type Todo, type TodoStatus } from "./todo.js";
 import { askUserQuestionTool, type AskUserToolOptions } from "./ask-user.js";
 import { generateImageTool, type GenerateImageOptions } from "./generate-image.js";
 import { browserScreenshotTool, type BrowserScreenshotOptions } from "./browser.js";
-import { enterPlanModeTool, exitPlanModeTool, type PlanModeToolsOptions, type PlanModeCallbacks } from "./plan-mode.js";
+import { exitPlanModeTool, type PlanModeToolsOptions } from "./plan-mode.js";
 import { skillTool, type SkillToolOptions } from "./skill.js";
 import type { CronToolsHandle } from "./cron.js";
 import type { MonitorToolHandle } from "./monitor.js";
@@ -90,10 +87,8 @@ export interface BuiltinToolsOptions {
   editFile?: EditFileOptions;
   multiEdit?: MultiEditOptions;
   deleteFile?: DeleteFileOptions;
-  moveFile?: MoveFileOptions;
   executeCommand?: ExecuteCommandOptions;
   httpFetch?: HttpFetchOptions;
-  httpRequest?: HttpFetchOptions;
   searchFiles?: SearchFilesOptions;
   globFiles?: GlobFilesOptions;
   listTree?: ListTreeOptions;
@@ -106,8 +101,10 @@ export interface BuiltinToolsOptions {
    *  subagent registries), `todo_write` is not registered — mirrors CCB's
    *  "todos are main-agent-only" choice. */
   todoWrite?: TodoWriteToolOptions;
-  /** Required for the main agent to get `enter_plan_mode` / `exit_plan_mode`.
-   *  Omit to skip registration (subagent registries don't manage plan mode). */
+  /** Required for the main agent to get `exit_plan_mode`. Omit to skip
+   *  registration (subagent registries don't manage plan mode). Entering plan
+   *  mode is a user action; register `enterPlanModeTool` explicitly to let the
+   *  model request it. */
   planMode?: PlanModeToolsOptions;
   /** Main agent in an interactive UI only. Omit (headless, subagents) to leave
    *  `ask_user_question` unregistered: nobody is there to answer. */
@@ -140,6 +137,10 @@ export interface BuiltinToolsOptions {
   exclude?: string[];
 }
 
+/** Registers the core tool set. Specialized tools (`move_file`, `http_request`,
+ * `current_time`, `enter_plan_mode`, cron, monitor) remain exported for hosts
+ * that register them explicitly; each one the model sees costs prompt tokens
+ * on every request and widens its choice of tools. */
 export function createBuiltinRegistry(options: BuiltinToolsOptions = {}): ToolRegistry {
   const registry = new ToolRegistry();
   const exclude = new Set(options.exclude ?? []);
@@ -150,25 +151,19 @@ export function createBuiltinRegistry(options: BuiltinToolsOptions = {}): ToolRe
   if (!exclude.has("edit_file")) registry.register(editFileTool({ defaultCwd, ...options.editFile }));
   if (!exclude.has("multi_edit")) registry.register(multiEditTool({ defaultCwd, ...options.multiEdit }));
   if (!exclude.has("delete_file")) registry.register(deleteFileTool({ defaultCwd, ...options.deleteFile }));
-  if (!exclude.has("move_file")) registry.register(moveFileTool({ defaultCwd, ...options.moveFile }));
   if (!exclude.has("list_tree")) registry.register(listTreeTool({ defaultCwd, ...options.listTree }));
   if (options.generateImage && !exclude.has("generate_image")) registry.register(generateImageTool({ defaultCwd, ...options.generateImage }));
   if (!exclude.has("bash")) registry.register(executeCommandTool(options.executeCommand));
   if (!exclude.has("http_fetch")) registry.register(httpFetchTool(options.httpFetch));
-  if (!exclude.has("http_request")) registry.register(httpRequestTool(options.httpRequest));
   if (!exclude.has("search_files")) registry.register(searchFilesTool({ defaultCwd, ...options.searchFiles }));
   if (!exclude.has("glob_files")) registry.register(globFilesTool({ defaultCwd, ...options.globFiles }));
   if (!exclude.has("web_search")) registry.register(webSearchTool(options.webSearch));
-  if (!exclude.has("current_time")) registry.register(currentTimeTool());
   if (!exclude.has("browser_screenshot")) registry.register(browserScreenshotTool({ defaultCwd, ...options.browserScreenshot }));
   if (!exclude.has("read_document")) registry.register(readDocumentTool({ defaultCwd, ...options.documentRead }));
   if (options.todoWrite && !exclude.has("todo_write")) {
     registry.register(todoWriteTool(options.todoWrite));
   }
-  if (options.planMode) {
-    if (!exclude.has("enter_plan_mode")) registry.register(enterPlanModeTool(options.planMode));
-    if (!exclude.has("exit_plan_mode")) registry.register(exitPlanModeTool(options.planMode));
-  }
+  if (options.planMode && !exclude.has("exit_plan_mode")) registry.register(exitPlanModeTool(options.planMode));
   if (options.askUser && !exclude.has("ask_user_question")) registry.register(askUserQuestionTool(options.askUser));
   if (options.skill && !exclude.has("skill")) {
     registry.register(skillTool(options.skill));

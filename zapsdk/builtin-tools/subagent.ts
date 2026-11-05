@@ -282,12 +282,12 @@ export function readOnlyBashTool(defaultCwd?: string): Tool {
 
 const EXPLORE_TOOLS = new Set([
   "read_file", "glob_files", "search_files", "list_tree",
-  "web_search", "http_fetch", "current_time", "bash",
+  "web_search", "http_fetch", "bash",
 ]);
 
 const PLAN_TOOLS = new Set([
   "read_file", "glob_files", "search_files", "list_tree",
-  "web_search", "http_fetch", "current_time", "bash",
+  "web_search", "http_fetch", "bash",
 ]);
 
 type Thoroughness = "quick" | "medium" | "thorough";

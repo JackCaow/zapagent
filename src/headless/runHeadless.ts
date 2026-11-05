@@ -55,7 +55,7 @@ import {
   readCheckpointJournal,
   peekJournalLogIndex,
 } from "../session.js"
-import { conversation, autoMemory, taskStore, cronHandle, mdStore, globalMdStore, globalMemoryDir, memorySemanticRetriever, tokenAccounting, delegateProvidersReady } from "../singletons.js"
+import { conversation, autoMemory, taskStore, mdStore, globalMdStore, globalMemoryDir, memorySemanticRetriever, tokenAccounting, delegateProvidersReady } from "../singletons.js"
 import { buildAgentObjects } from "../agent-factory.js"
 import { CheckpointManager } from "../../zapsdk/checkpoint/index.js"
 import {
@@ -531,7 +531,7 @@ export async function runHeadless(args: HeadlessArgs, host: HeadlessHost = {}): 
   if (host.readOnlyWorkspace) {
     // No network tools: read-only Goal roles take worker output and workspace
     // files as untrusted input, and an injected URL could carry them off-host.
-    const names = new Set(["read_file", "list_tree", "read_document", "read_pdf", "read_docx", "read_tool_output", "current_time"])
+    const names = new Set(["read_file", "list_tree", "read_document", "read_pdf", "read_docx", "read_tool_output"])
     if (sandboxConfined && registry.has("bash")) {
       registry.unregister("bash"); registry.register(readOnlyBashTool(cwd)); names.add("bash")
     }
@@ -540,7 +540,7 @@ export async function runHeadless(args: HeadlessArgs, host: HeadlessHost = {}): 
   await host.prepareRegistry?.(registry)
   if (publicChecks) {
     // These tools start work outside the root provider admission budget.
-    for (const name of ["agent", "delegate_agent", "cron_create"]) registry.unregister(name)
+    for (const name of ["agent", "delegate_agent"]) registry.unregister(name)
   }
 
   // ── System prompt + per-turn attachments (mirror useAgentRunner) ─────
@@ -778,7 +778,7 @@ export async function runHeadless(args: HeadlessArgs, host: HeadlessHost = {}): 
   //
   // Fix: strip the singleton signal handlers for the duration of the run.
   // The `process.on("exit", _shutdown)` hook in singletons still fires on
-  // natural exit, so taskStore / cronHandle cleanup is preserved.
+  // natural exit, so taskStore cleanup is preserved.
   const previousSigintListeners = process.listeners("SIGINT")
   const previousSigtermListeners = process.listeners("SIGTERM")
   process.removeAllListeners("SIGINT")
@@ -888,7 +888,6 @@ export async function runHeadless(args: HeadlessArgs, host: HeadlessHost = {}): 
   // (singletons.ts already wires process.on("exit") cleanup; calling here
   // ensures cleanup before exit code is set when running embedded.)
   try { taskStore.stopAll("SIGTERM") } catch {}
-  try { cronHandle.stop() } catch {}
 
   if (outcomeFailure) return outcomeFailure.code === "REPAIR_CANCELLED" ? 130
     : outcomeFailure.code === "REPAIR_DEADLINE_EXCEEDED" ? 124 : EXIT_ERROR

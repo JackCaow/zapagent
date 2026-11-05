@@ -133,6 +133,8 @@ union / literal / record`。够覆盖现有内置工具；遇到未支持类型�
 
 按职责分组：
 
+默认注册集合只保留核心工具。`move_file`、`http_request`、`current_time`、`enter_plan_mode` 仍从 SDK 导出，但 `createBuiltinRegistry` 不再默认注册；cron 和 monitor 本就需要宿主传入 handle，CLI 现在不再传。依据：本地 108 个会话、4555 次工具调用中，这些工具合计 18 次（`monitor` 7、`current_time` 11，其余为 0），而每个注册的工具都会让每次请求多带一份描述和参数定义。
+
 ### 文件系统（无副作用）
 
 | 工具 | 主要参数 | 说明 |
@@ -142,7 +144,7 @@ union / literal / record`。够覆盖现有内置工具；遇到未支持类型�
 | `glob_files` | `pattern, cwd?` | 同 `**/*.ts` 风格匹配，`walkAndMatch` 实现 |
 | `search_files` | `pattern, path?, type?, contextLines?` | 走 `@vscode/ripgrep`，结构化输出 |
 | `read_document` | `path, pages?, format?` | 根据扩展名分发 pdf-parse / mammoth |
-| `current_time` | `tz?` | 给模型一个固定的 now() 入口 |
+| `current_time` | `tz?` | 不在默认集合；需要时由宿主显式注册 `currentTimeTool()`（环境信息已含日期和时区） |
 | `http_fetch` | `url, method?, body?, headers?` | timeout 默认 30s；Readability 提取主要内容 |
 | `web_search` | `query` | 多 backend（SerpApi / Serper / Brave），由 host 注入实现 |
 
@@ -153,22 +155,22 @@ union / literal / record`。够覆盖现有内置工具；遇到未支持类型�
 | `write_file` | `path, content` | `atomicWrite`：先写同目录临时文件再发布；新文件使用原子 create-if-absent，避免覆盖并发创建；写前 `validateSyntax`（ts/js/json） |
 | `edit_file` | `path, old_string, new_string, replace_all?, skip_syntax_check?` | 默认 unique-match；找不到时给 `nearestLines` 提示；可写 `writesPath` |
 | `multi_edit` | `path, edits: [{old, new}]` | 一次多处替换，半事务 |
-| `delete_file` / `move_file` | `path[, dest]` | 都声明 `writesPath` 给 checkpoint；`move_file` 默认原子 no-clobber，只有显式 `overwrite=true` 才替换目标 |
+| `delete_file` / `move_file` | `path[, dest]` | 都声明 `writesPath` 给 checkpoint；`move_file` 默认原子 no-clobber，只有显式 `overwrite=true` 才替换目标。`move_file` 不在默认集合，宿主需显式注册 `moveFileTool()` |
 
 ### Shell / 后台
 
 | 工具 | 关键行为 |
 |---|---|
 | `bash` | `exec()` 包装；通过 `pathConverter` 处理 Windows 路径；error 输出格式化（抽 file:line、SyntaxError/TypeError/ModuleError 分类）。当 `options.store: TaskStore` 注入且未禁用时，参数表暴露 `run_in_background:true` —— 走 `taskStore.start(...)`，返回 task id；否则同步等结果 |
-| `monitor` | 配合 `taskStore`：列 / 杀 / 取输出。Task lifecycle 见 `zapsdk/tasks` |
-| `cron_create / cron_delete / cron_list` | `croner` 封装；调用方持有 `cronTools()` handle，可注入 `onFire` 把命中投递到对话 |
+| `monitor` | 配合 `taskStore`：列 / 杀 / 取输出。Task lifecycle 见 `zapsdk/tasks`。CLI 不注册（与 `bash run_in_background` 重复） |
+| `cron_create / cron_delete / cron_list` | `croner` 封装；调用方持有 `cronTools()` handle，可注入 `onFire` 把命中投递到对话。CLI 不注册（未接入 `onFire`，到点不会触发对话） |
 
 ### Plan / Todo / Skill / Memory
 
 | 工具 | 行为 |
 |---|---|
 | `todo_write` | 通过注入的 `TodoStore` 读/写。`getKey()` 决定主 vs subagent key，主 agent 用 `"main"`，subagent 用自己的 `sa_xxx` |
-| `enter_plan_mode` / `exit_plan_mode` | 切换 PermissionMode 到 `plan`，所有写工具被拦截；exit 时通过 callback 让宿主决定是否 commit |
+| `enter_plan_mode` / `exit_plan_mode` | 切换 PermissionMode 到 `plan`，所有写工具被拦截；exit 时通过 callback 让宿主决定是否 commit。默认只注册 `exit_plan_mode`：进入计划模式是用户操作（`/mode plan`），需要模型主动进入的宿主显式注册 `enterPlanModeTool()` |
 | `skill` | 接收 skill name，把对应 `SkillDefinition` body 注入 conversation 作为系统指令；见 `zapsdk/skills` |
 | `memory_save` | 调用宿主注入的 `mdStore` 写一条 .md + 更新 MEMORY.md |
 
