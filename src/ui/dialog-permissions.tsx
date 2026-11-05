@@ -24,6 +24,7 @@ import { truncateToWidth } from "./truncate.js"
 import { ToolGrantDialog } from "./dialog-tool-grant.js"
 import { buildToolGrantRules } from "../tool-grants.js"
 import { commandInput } from "./controlled-input.js"
+import { describeCapabilityPatterns } from "../capabilities.js"
 
 interface Props { onCancel: () => void; availableTools: string[] }
 
@@ -182,6 +183,7 @@ export function PermissionsDialog({ onCancel, availableTools }: Props) {
                       {truncateToWidth(rule.pattern, 60)}
                     </Text>
                     {rule.canonicalPath && <Text color={c.text.ghost}> (fixed folder target)</Text>}
+                    {describeCapabilityPatterns([rule.pattern]) && <Text color={c.text.ghost} wrap="truncate-end"> — {describeCapabilityPatterns([rule.pattern])}</Text>}
                     {shadowedBy && (
                       <Text color={c.text.ghost} wrap="truncate-end">
                         {truncateToWidth(`  ⤴ shadowed by ${shadowedBy.rule.type} ${shadowedBy.rule.pattern} (${shadowedBy.scope})`, 70)}

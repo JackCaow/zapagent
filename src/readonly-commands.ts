@@ -357,3 +357,34 @@ export function effectiveCommandCwd(workspace: string, cwdArg: unknown): string 
   if (dir === null || !insideWorkspace(dir, workspace)) return null
   return dir
 }
+
+/**
+ * A subcommand that adds nothing to the command it accompanies: `cd` into a
+ * workspace directory, or a stdin filter (`head`/`tail` without operands, a
+ * non-recursive `grep` whose only operand is its pattern). Callers skip these
+ * only next to a sibling that is judged on its own, which already holds more
+ * capability than reading its own output.
+ */
+export function isNeutralShellSubcommand(command: string, workspace: string, runDir: string): boolean {
+  if (process.platform === "win32") return false
+  if (!command.trim() || SHELL_METACHARACTERS.test(command)) return false
+  const tokens = words(command.trim())
+  if (!tokens || tokens.length === 0 || tokens.some(token => token.unquotedExpansion)) return false
+  const name = tokens[0]!.text
+  const args = tokens.slice(1)
+  if (name === "cd") {
+    const target = args[0]?.text
+    if (args.length !== 1 || !target || target.startsWith("-") || target.startsWith("~") || target.includes("$")) return false
+    if (target.split(/[\\/]+/).includes("..")) return false
+    return effectiveCommandCwd(workspace, isAbsolute(target) ? target : join(runDir, target)) !== null
+  }
+  if (name !== "head" && name !== "tail" && name !== "grep") return false
+  if (!isReadOnlyCommand(command, runDir)) return false
+  const operands = parseArgs(args, SPECS[name]!)
+  if (operands === null) return false
+  if (name !== "grep") return operands.length === 0
+  // Conservative flag scan: any r/R or e letter in a short cluster counts.
+  const flags = args.filter(token => /^-[^-]/.test(token.text)).map(token => token.text)
+  if (flags.some(flag => /r/i.test(flag)) || args.some(token => token.text === "--recursive")) return false
+  return operands.length === (flags.some(flag => flag.includes("e")) ? 0 : 1)
+}

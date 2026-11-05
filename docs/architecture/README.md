@@ -49,6 +49,7 @@
 | 56 | [工具结果来源策略](56-tool-result-source-policy.md) | 显式 Host 来源范围、父子继承、结果扣留与评测回执绑定 |
 | 57 | [Watch 运行时观测与动态状态图](57-watch-runtime-observability.md) | 已接入运行时：`zap --watch`、只读事件投影、工具/子 Agent 动态图、SSE 重连；含验收记录与剩余边界 |
 | 58 | [能力执行、依赖恢复与完成证据](58-capability-resumption-evidence.md) | 调用级文件授权、后台事件去重和恢复、阻塞状态与验收证据 |
+| 62 | [权限打断治理：风险分级与能力授权](62-permission-friction.md) | P0–P3 已实现：度量（category/tier）、工作区编辑授权、Shell 中性子命令、临时目录清理、task_stop、`Capability(...)` 能力规则、Shell 声明网络目标代替沙箱逃逸；P4 已实现非阻塞审批、本轮拒绝记忆、重复批准提示、`request_capabilities`、预设档位与项目记忆免审批 |
 
 ## 怎么读
 

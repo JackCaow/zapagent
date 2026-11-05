@@ -11,6 +11,8 @@ export interface AgentObjects {
   executionCapacity?: ExecutionCapacityFacts
   /** Commands run inside the OS sandbox or the VM (see PermissionManager). */
   sandboxConfined: boolean
+  /** The allowlist the sandbox proxy enforces, when it enforces one. */
+  sandboxNetworkPolicy?: import("../../zapsdk/execution/network-proxy.js").NetworkPolicy
   /** Rebuilds cwd-sensitive builtin tools while preserving live MCP/plugin
    * registrations. Used by isolated writing subagents. */
   createRegistryForCwd?: (cwd: string) => ToolRegistry

@@ -185,6 +185,9 @@ async function fetchWithValidatedRedirects(
       request = { ...request, method: "GET", body: null, headers };
     }
     const next = await assertSafePublicHttpUrl(new URL(location, current).toString(), options.resolveHostname);
+    // Consent is per host: a body approved for one host is never replayed to
+    // another. Return the redirect itself instead of following it.
+    if (next.host !== current.host && request.body != null) return { response, finalUrl: current };
     if (next.origin !== current.origin) {
       // Fetch drops Authorization on cross-origin redirects; never hand caller
       // credentials to a host the caller did not name. Not restored on return.

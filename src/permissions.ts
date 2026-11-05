@@ -9,6 +9,10 @@ import type { ApprovalContext } from "../zapsdk/tools/executor.js"
 import type { Logger } from "../zapsdk/debug/logger.js"
 import { writeFileAtomic } from "./utils/secure-write.js"
 import { canonicalizeWithNearestExistingAncestorSync, resolveToolPathCanonical } from "../zapsdk/builtin-tools/filesystem.js"
+import type { ToolCapability } from "../zapsdk/tools/approval.js"
+import { decideHost, destinationHostPattern, type NetworkPolicy } from "../zapsdk/execution/network-proxy.js"
+export { WORKSPACE_EDIT_TOOLS } from "./capabilities.js"
+import { REQUEST_CAPABILITIES_TOOL, capabilityFileTools, capabilityPattern, fileToolCapabilities, isFileCapability, matchCapabilityScope, parseCapabilityPattern, parseCapabilityRequest } from "./capabilities.js"
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -175,8 +179,23 @@ function stripProcessWrappers(parts: string[]): string[] {
 
 // Import and re-export from shared utility so callers only need one import
 import { matchCommandGlob, matchesAnyCommandPattern, shellCommandDisplay, shellExecutionCommands, splitShellSubcommands } from "../zapsdk/utils/shell.js"
-import { effectiveCommandCwd, isReadOnlyCommand } from "./readonly-commands.js"
+import { effectiveCommandCwd, isNeutralShellSubcommand, isReadOnlyCommand } from "./readonly-commands.js"
 export { splitShellSubcommands }
+
+/** Subcommands that carry a shell call's decision. A neutral `cd` or stdin
+ * filter rides along with a sibling judged on its own; alone it is kept. */
+function significantShellSubcommands(subs: string[], workspace: string, runDir: string | null): string[] {
+  if (runDir === null) return subs
+  // Only the first `cd` is judged from the directory it really runs in.
+  let moved = false
+  const kept = subs.filter(sub => {
+    const cd = /^\s*cd(?:\s|$)/.test(sub)
+    const neutral = !(cd && moved) && isNeutralShellSubcommand(sub, workspace, runDir)
+    moved ||= cd
+    return !neutral
+  })
+  return kept.length ? kept : subs
+}
 
 // ─── Pattern parsing ──────────────────────────────────────────────────────────
 
@@ -434,6 +453,65 @@ export function ruleMatchesTool(
   return FILE_TOOLS.has(toolName) ? matchFilePattern(subject, argPattern, rule.type === "allow" && rule.canonicalPath) : matchGlob(subject, argPattern)
 }
 
+// ─── Capability rules ─────────────────────────────────────────────────────────
+
+/** Capabilities a call needs: built-in file tools from their arguments, other
+ * tools from the adapter's effects. Shells and delegation keep their own rules. */
+function callCapabilities(name: string, args: Record<string, unknown>, context?: Readonly<ApprovalContext>): readonly ToolCapability[] | undefined {
+  if (FILE_TOOLS.has(name)) return fileToolCapabilities(name, args)
+  if (name === "delegate_agent") return undefined
+  // A capability request needs exactly what it asks for.
+  if (name === REQUEST_CAPABILITIES_TOOL) {
+    const requested = parseCapabilityRequest(args)
+    return typeof requested === "string" ? undefined : requested
+  }
+  const facts = approvalFacts(name, args, context)
+  return facts.shellCommands !== undefined ? undefined : facts.capabilities
+}
+
+/** Workspace coordinates of a file capability. An allow must cover the real
+ * target and the directory entry; a restriction applies to any spelling. */
+function fileCapabilityViews(path: string, cwd: string, context?: Readonly<ApprovalContext>): { covered: string[]; touched: string[] } {
+  const view = (canonical: boolean | "entry") => String(normalizeFileArgs("write_file", { path }, cwd, context, canonical).path)
+  const covered = [...new Set([view(true), view("entry")])]
+  return { covered, touched: [...new Set([...covered, view(false)])] }
+}
+
+/** Restrictions apply across a family (a write deny also stops deletes and a
+ * read deny stops writes); an allow covers only its own kind. */
+function capabilityRuleMatches(rule: PermissionRule, capability: ToolCapability, cwd: string, context: Readonly<ApprovalContext> | undefined): boolean {
+  const parsed = parseCapabilityPattern(rule.pattern)
+  if (!parsed) return false
+  const family = (kind: string) => kind.slice(0, kind.indexOf("."))
+  if (rule.type === "allow" ? parsed.kind !== capability.kind : family(parsed.kind) !== family(capability.kind)) return false
+  if (!isFileCapability(capability.kind)) return matchCapabilityScope(capability.scope, parsed.scope)
+    // A wildcard request (`*.example.com`) meets any restriction inside it.
+    || rule.type !== "allow" && matchCapabilityScope(parsed.scope, capability.scope)
+  const views = fileCapabilityViews(capability.scope, cwd, context)
+  return rule.type === "allow"
+    ? views.covered.every(path => matchFilePattern(path, parsed.scope, rule.canonicalPath))
+    : views.touched.some(path => matchFilePattern(path, parsed.scope))
+}
+
+/** One rule per capability. Workspace writes share one workspace-wide grant;
+ * deletes keep their directory; anything outside keeps its exact target. */
+function inferCapabilityRules(name: string, args: Record<string, unknown>, cwd: string, context?: Readonly<ApprovalContext>): PermissionRule[] | null {
+  const capabilities = callCapabilities(name, args, context)
+  if (!capabilities?.length) return null
+  const patterns = capabilities.flatMap(capability => {
+    if (!isFileCapability(capability.kind)) return [capabilityPattern(capability.kind, capability.scope)]
+    const views = fileCapabilityViews(capability.scope, cwd, context).covered
+    if (capability.kind === "fs.write" && views.every(view => !isAbsolute(view))) return [capabilityPattern("fs.write", "**")]
+    return views.map(view => capabilityPattern(capability.kind,
+      !isAbsolute(view) && capability.kind === "fs.delete" ? fileRuleScope("delete_file", view) : view))
+  })
+  return [...new Set(patterns)].map(pattern => ({ pattern, type: "allow" }))
+}
+
+function strongestRestriction(...decisions: Array<PermissionDecision | null>): PermissionDecision | null {
+  return decisions.find(decision => decision?.decision === "deny") ?? decisions.find(decision => decision?.decision === "ask") ?? null
+}
+
 // ─── Shadow detection ─────────────────────────────────────────────────────────
 
 /** Does `a`'s arg pattern match any possible arg for the tool?
@@ -597,17 +675,31 @@ export function inferPattern(toolName: string, args: Record<string, unknown>, cw
 
 /** The same complete rule set powers previews and both persistence lifetimes. */
 export function inferInvocationRules(name: string, args: Record<string, unknown>, cwd: string, context?: Readonly<ApprovalContext>): PermissionRule[] {
-  const pathPatterns = name === "bash" ? shellPathRequests(args, context?.cwd ?? cwd)
-    .map(request => inferPattern(request.tool, { path: request.path }, cwd)).filter((pattern): pattern is string => !!pattern) : []
+  if (name === REQUEST_CAPABILITIES_TOOL) {
+    // Saved exactly as requested; file scopes are never widened to `**`.
+    const requested = parseCapabilityRequest(args)
+    return typeof requested === "string" ? [] : requested.map(capability => ({ pattern: capabilityPattern(capability.kind, capability.scope), type: "allow" }))
+  }
+  const pathPatterns = name === "bash" ? [...shellPathRequests(args, context?.cwd ?? cwd)
+    .map(request => inferPattern(request.tool, { path: request.path }, cwd)).filter((pattern): pattern is string => !!pattern),
+    ...shellNetworkHosts(args).map(host => capabilityPattern("net.write", host))] : []
   if (opaqueShell(approvalFacts(name, args, context), context)) return [name, ...pathPatterns].map(pattern => ({ pattern, type: "allow" }))
   const views = [normalizeFileArgs(name, args, cwd, context)]
   if (MUTATION_TOOLS.has(name)) views.push(normalizeFileArgs(name, args, cwd, context, "entry"))
+  const capabilityRules = name === "bash" ? null : inferCapabilityRules(name, args, cwd, context)
+  if (capabilityRules) return capabilityRules
   const invocations = views.flatMap(normalized => name === "bash"
-    ? shellExecutionCommands(normalized).flatMap(command => splitShellSubcommands(command, context?.shell?.syntax)).map(command => ({ ...normalized, command }))
+    ? shellExecutionCommands(normalized).flatMap(command => significantShellSubcommands(splitShellSubcommands(command, context?.shell?.syntax), cwd, effectiveCommandCwd(cwd, args.cwd))).map(command => ({ ...normalized, command }))
     : name === "move_file" ? [normalized.source, normalized.destination].map(path => ({ source: path, destination: path })) : [normalized])
   const patterns = invocations.map(value => inferPattern(name, value, cwd)).filter((pattern): pattern is string => !!pattern)
   patterns.push(...pathPatterns)
   return [...new Set(patterns)].map(pattern => ({ pattern, type: "allow" }))
+}
+
+/** Hosts a shell declares beyond the sandbox allowlist. */
+function shellNetworkHosts(args: Record<string, unknown>): string[] {
+  const declared = Array.isArray(args.network_destinations) ? args.network_destinations.filter((value): value is string => typeof value === "string") : []
+  return [...new Set(declared.map(destinationHostPattern).filter((host): host is string => !!host))]
 }
 
 function shellPathRequests(args: Record<string, unknown>, cwd: string): Array<{ tool: "read_file" | "write_file"; path: string }> {
@@ -646,6 +738,19 @@ export class PermissionManager {
   private sandboxExcluded: string[] = []
   setSandboxExcludedCommands(patterns: string[] | undefined): void { this.sandboxExcluded = patterns ?? [] }
 
+  isSandboxConfined(): boolean { return this.sandboxConfined }
+
+  /** The allowlist the sandbox proxy enforces; undefined when egress is not filtered. */
+  private sandboxNetworkPolicy?: NetworkPolicy
+  setSandboxNetworkPolicy(policy: NetworkPolicy | undefined): void { this.sandboxNetworkPolicy = policy }
+
+  /** True when every capability is a file change inside the workspace (R1). */
+  changesOnlyWorkspaceFiles(name: string, args: Record<string, unknown>, context?: Readonly<ApprovalContext>): boolean {
+    const capabilities = callCapabilities(name, args, context)
+    return !!capabilities?.length && capabilities.every(capability => isFileCapability(capability.kind)
+      && fileCapabilityViews(capability.scope, this.cwd, context).covered.every(view => !isAbsolute(view)))
+  }
+
   setSandboxConfined(confined: boolean, autoAllowAll = true): void {
     this.sandboxConfined = confined
     this.sandboxAutoAllow = autoAllowAll
@@ -663,6 +768,56 @@ export class PermissionManager {
     this.sandboxSessionId = sessionId
     this.sessionSandboxEscape = undefined
     this.sessionRules = []
+    this.turnDenials.clear()
+    this.onceApprovals.clear()
+  }
+
+  /** Calls the user declined since their last message. Only the identical call
+   * is refused again: a declined edit says nothing about the next one. */
+  private turnDenials = new Set<string>()
+
+  private denialKey(name: string, args: Record<string, unknown>): string {
+    return `${name}#${argsFingerprint(args)}`
+  }
+
+  recordDenial(name: string, args: Record<string, unknown>, _context?: Readonly<ApprovalContext>): void {
+    this.turnDenials.add(this.denialKey(name, args))
+  }
+
+  /** The model is retrying a call the user already declined this turn. */
+  declinedThisTurn(name: string, args: Record<string, unknown>, _context?: Readonly<ApprovalContext>): boolean {
+    return this.turnDenials.size > 0 && this.turnDenials.has(this.denialKey(name, args))
+  }
+
+  private memoryRecordExists?: (name: string) => boolean
+
+  /** How the policy learns whether a project memory name is already taken. */
+  setProjectMemoryLookup(exists: ((name: string) => boolean) | undefined): void { this.memoryRecordExists = exists }
+
+  /** A project memory name that is not yet in use; unknown counts as taken. */
+  isNewProjectMemory(name: string): boolean {
+    try { return !!this.memoryRecordExists && !this.memoryRecordExists(name) } catch { return false }
+  }
+
+  /** A new user message may change their answer. */
+  startTurn(): void { this.turnDenials.clear() }
+
+  /** One-time approvals this session, by the consent a saved rule would hold. */
+  private onceApprovals = new Map<string, number>()
+
+  private approvalKey(name: string, args: Record<string, unknown>, context?: Readonly<ApprovalContext>): string {
+    return inferInvocationRules(name, args, this.cwd, context).map(rule => rule.pattern).sort().join("\n")
+  }
+
+  recordOnceApproval(name: string, args: Record<string, unknown>, context?: Readonly<ApprovalContext>): void {
+    const key = this.approvalKey(name, args, context)
+    if (key) this.onceApprovals.set(key, (this.onceApprovals.get(key) ?? 0) + 1)
+  }
+
+  /** How often the user already approved the same consent once this session. */
+  priorOnceApprovals(name: string, args: Record<string, unknown>, context?: Readonly<ApprovalContext>): number {
+    const key = this.approvalKey(name, args, context)
+    return key ? this.onceApprovals.get(key) ?? 0 : 0
   }
 
   /** Dedicated consent is separate from ordinary Bash command allow rules. */
@@ -715,12 +870,18 @@ export class PermissionManager {
       const fileArgs = normalizeFileArgs(tool, { path }, this.cwd, context)
       return rules.some(rule => rule.type === "allow" && ruleMatchesTool(rule, tool, fileArgs))
     })) return false
+    if (name === "bash" && !shellNetworkHosts(args).every(host => this.checkShellNetwork({ ...args, network_destinations: [host] }, context).decision === "allow"
+      || rules.some(rule => rule.type === "allow" && capabilityRuleMatches(rule, { kind: "net.write", scope: host }, this.cwd, context)))) return false
     if (opaqueShell(facts, context)) return rules.some(rule => rule.type === "allow" && isWholeToolRule(rule, name))
     if (name === "bash") {
-      const commands = shellExecutionCommands(normalized).flatMap(command => splitShellSubcommands(command, context?.shell?.syntax))
+      const commands = shellExecutionCommands(normalized).flatMap(command =>
+        significantShellSubcommands(splitShellSubcommands(command, context?.shell?.syntax), this.cwd, effectiveCommandCwd(this.cwd, args.cwd)))
       return commands.length > 0 && commands.every(command => rules.some(rule =>
         ruleMatchesTool(rule, name, { command }) || ruleMatchesTool(rule, name, { command: normalizeBashSubcommand(command) })))
     }
+    const capabilities = callCapabilities(name, args, context)
+    if (capabilities?.length && capabilities.every(capability =>
+      rules.some(rule => rule.type === "allow" && capabilityRuleMatches(rule, capability, this.cwd, context)))) return true
     const views = [normalized]
     if (MUTATION_TOOLS.has(name)) views.push(normalizeFileArgs(name, args, this.cwd, context, "entry"))
     return views.every(view => name === "move_file" ? [view.source, view.destination].every(path =>
@@ -743,7 +904,7 @@ export class PermissionManager {
   checkPermission(toolName: string, args: Record<string, unknown>, context?: Readonly<ApprovalContext>): PermissionDecision {
     const base = this.checkPermissionCore(toolName, args, context)
     if (toolName !== "bash" || base.decision === "deny") return base
-    const decisions = [base, this.checkShellPaths(args, context)]
+    const decisions = [base, this.checkShellPaths(args, context), this.checkShellNetwork(args, context)]
     return decisions.find(value => value.decision === "deny")
       ?? decisions.find(value => value.decision === "ask" && value.rule)
       ?? decisions.find(value => value.decision === "ask") ?? base
@@ -768,6 +929,43 @@ export class PermissionManager {
       ?? decisions.find(value => value.decision === "ask") ?? { decision: "allow" }
   }
 
+  /** A shell declares a host the sandbox allowlist would refuse. */
+  reachesBeyondAllowlist(args: Record<string, unknown>): boolean {
+    const policy = this.sandboxNetworkPolicy
+    return !!policy && shellNetworkHosts(args).some(host => !decideHost(policy, host).allowed)
+  }
+
+  /** Declared hosts extend the sandbox proxy for one command. Allowlisted
+   * hosts need nothing, denied hosts are refused, others need `net.write`:
+   * the proxy filters by host only, so a shell can send as well as receive.
+   * Like `sandboxNetwork.allowedDomains`, only the user can widen egress:
+   * allows count from this session, host-owned project grants and user
+   * settings, never from repository `.zapcode/settings*.json` files. */
+  checkShellNetwork(args: Record<string, unknown>, context?: Readonly<ApprovalContext>): PermissionDecision {
+    const policy = this.sandboxNetworkPolicy
+    if (!policy) return { decision: "allow" }
+    const facts = approvalFacts("bash", args, context)
+    // Outside the sandbox no proxy applies; that path has its own consent.
+    if (facts.sandboxEscape || (facts.shellCommands ?? []).some(command => matchesAnyCommandPattern(command, this.sandboxExcluded))) return { decision: "allow" }
+    this.merged = loadMergedSettings(this.cwd)
+    const granted = [...this.sessionRules, ...loadPermissionSettings(getProjectAuthorizationSettingsPath(this.cwd)).rules,
+      ...loadPermissionSettings(getGlobalSettingsPath()).rules].filter(rule => rule.type === "allow")
+    const decisions = shellNetworkHosts(args).map((host): PermissionDecision => {
+      const capability: ToolCapability = { kind: "net.write", scope: host }
+      const restriction = this.matchRules(rule => rule.type !== "allow" && capabilityRuleMatches(rule, capability, this.cwd, context))
+      if (restriction) return restriction
+      const refused = decideHost({ allowedDomains: ["*"], deniedDomains: policy.deniedDomains }, host)
+      if (!refused.allowed) return { decision: "deny", reason: refused.reason }
+      if (decideHost(policy, host).allowed) return { decision: "allow" }
+      const grant = granted.find(rule => capabilityRuleMatches(rule, capability, this.cwd, context))
+      return grant ? { decision: "allow", rule: grant, scope: this.sessionRules.includes(grant) ? "session" : this.locateRuleScope(grant) }
+        : { decision: "ask", reason: `Shell network access requires authorization: ${host}` }
+    })
+    return decisions.find(value => value.decision === "deny")
+      ?? decisions.find(value => value.decision === "ask" && value.rule)
+      ?? decisions.find(value => value.decision === "ask") ?? { decision: "allow" }
+  }
+
   private checkPermissionCore(toolName: string, args: Record<string, unknown>, context?: Readonly<ApprovalContext>): PermissionDecision {
     // Normalize once at the entry; rule evaluation and generation both
     // operate in cwd-relative space afterwards. This is the fix for the
@@ -779,14 +977,16 @@ export class PermissionManager {
       const lexical = normalizeFileArgs(toolName, args, this.cwd, context, false)
       const views = [a]
       if (MUTATION_TOOLS.has(toolName)) views.push(normalizeFileArgs(toolName, args, this.cwd, context, "entry"))
-      const restriction = this.matchRules(rule => rule.type !== "allow" && (
+      const capabilities = fileToolCapabilities(toolName, args)
+      const restriction = strongestRestriction(this.matchRules(rule => rule.type !== "allow" && (
         [...views, lexical].some(view => ruleMatchesTool(rule, toolName, view))
-        || isDirectoryReadTool(toolName) && directoryRuleIntersects(rule, toolName, args, this.cwd, context)))
+        || isDirectoryReadTool(toolName) && directoryRuleIntersects(rule, toolName, args, this.cwd, context))),
+        this.capabilityRestriction(capabilities, context))
       if (restriction) return restriction
       const matches = views.flatMap(view => toolName === "move_file" ? [view.source, view.destination].map(path =>
         typeof path === "string" && !!path ? this.matchRules(rule => rule.type === "allow" && ruleMatchesTool(rule, toolName, { source: path, destination: path })) : null)
         : [this.matchRules(rule => rule.type === "allow" && ruleMatchesTool(rule, toolName, view))])
-      return matches.every(Boolean) ? matches[0]! : { decision: "ask" }
+      return matches.every(Boolean) ? matches[0]! : this.capabilityAllow(capabilities, context) ?? { decision: "ask" }
     }
 
     const facts = approvalFacts(toolName, args, context)
@@ -813,7 +1013,27 @@ export class PermissionManager {
       return decisions.find(decision => decision.decision === "ask") ?? decisions[0] ?? { decision: "ask" }
     }
 
-    return this.matchRules(rule => ruleMatchesTool(rule, toolName, a)) ?? { decision: "ask" }
+    const capabilities = callCapabilities(toolName, args, context)
+    const tool = this.matchRules(rule => ruleMatchesTool(rule, toolName, a))
+    const restriction = strongestRestriction(tool?.decision === "allow" ? null : tool, this.capabilityRestriction(capabilities, context))
+    if (restriction) return restriction
+    return tool ?? this.capabilityAllow(capabilities, context) ?? { decision: "ask" }
+  }
+
+  private capabilityRestriction(capabilities: readonly ToolCapability[] | undefined, context?: Readonly<ApprovalContext>): PermissionDecision | null {
+    if (!capabilities?.length) return null
+    return this.matchRules(rule => rule.type !== "allow" && capabilities.some(capability => capabilityRuleMatches(rule, capability, this.cwd, context)
+      // A capability grant covers sibling tools, so their deny/ask rules apply too:
+      // `Edit(.env)` must still stop write_file once fs.write is granted.
+      || isFileCapability(capability.kind) && fileCapabilityViews(capability.scope, this.cwd, context).touched.some(path =>
+        capabilityFileTools(capability.kind).some(tool => ruleMatchesTool(rule, tool, tool === "move_file" ? { source: path, destination: path } : { path })))))
+  }
+
+  /** Every capability must be covered; the first match explains the decision. */
+  private capabilityAllow(capabilities: readonly ToolCapability[] | undefined, context?: Readonly<ApprovalContext>): PermissionDecision | null {
+    if (!capabilities?.length) return null
+    const matches = capabilities.map(capability => this.matchRules(rule => rule.type === "allow" && capabilityRuleMatches(rule, capability, this.cwd, context)))
+    return matches.every(Boolean) ? matches[0]! : null
   }
 
   private matchRules(matches: (rule: PermissionRule) => boolean): PermissionDecision | null {
@@ -839,13 +1059,22 @@ export class PermissionManager {
     if (!command.trim()) return { decision: "ask" }
     const subs = splitShellSubcommands(command, syntax)
     if (subs.length === 0) return { decision: "ask" }
+    const significant = significantShellSubcommands(subs, this.cwd, runDir)
 
     let firstAllowRule: PermissionRule | undefined
     let firstAllowScope: RuleScope | undefined
     let ask: PermissionDecision | undefined
+    let dir = runDir
     for (const sub of subs) {
-      const r = this.checkShellSubcommand(sub, runDir, toolName)
+      const r = this.checkShellSubcommand(sub, dir, toolName)
       if (r === null) {
+        // Rules still apply to neutral subcommands; only the missing rule is waived.
+        if (!significant.includes(sub)) {
+          // Later pieces run elsewhere than built-in allowances would judge
+          // them (`cd sub; cat link`), so only user rules may allow them.
+          if (/^cd\s/.test(sub.trim())) dir = null
+          continue
+        }
         ask ??= { decision: "ask" }
         continue
       }

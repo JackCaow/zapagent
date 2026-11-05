@@ -77,6 +77,7 @@ for (const scenario of ["session", "project", "custom", "folder", "folder-retarg
       if (scenario === "custom" || folderScenario && !fromMenu) {
         phase = "waiting approval"; await send("WRITE_TEST"); await settle(screen => screen.includes("Approve?"))
         if (folderScenario) expect(capture()).toContain("d authorize folder / select tools")
+        else expect(capture()).toContain("don't ask again for file edits anywhere in this project")
         text(folderScenario ? "d" : "g")
       } else {
         phase = "open permissions"; await send("/permissions"); await settle(screen => screen.includes("No permission rules active")); text("a")

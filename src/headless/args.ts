@@ -3,7 +3,7 @@
 //
 // Accepts:
 //   -p, --print <text>           prompt string
-//   --permission-mode <mode>     default | acceptEdits | bypassPermissions | plan
+//   --permission-mode <mode>     default | acceptEdits | bypassPermissions | plan, or strict | balanced | autonomous
 //   --result-schema <schema>      outcome-v1 (default) | legacy
 //   --output-format <fmt>        text | json | stream-json
 //   --max-turns <n>              integer cap
@@ -27,7 +27,7 @@
 // Any positional arg before flags is treated as the prompt (unless -p was
 // given). Multiple positionals are joined with spaces.
 
-import type { PermissionMode } from "../config.js"
+import { parsePermissionMode, type PermissionMode } from "../config.js"
 import { isValidSessionId } from "../utils/session-id.js"
 
 export type ResultSchema = "outcome-v1" | "legacy"
@@ -80,10 +80,6 @@ export interface ParseResult {
 export interface ParseError {
   ok: false
   message: string
-}
-
-function isPermissionMode(s: string): s is PermissionMode {
-  return s === "default" || s === "acceptEdits" || s === "bypassPermissions" || s === "plan"
 }
 
 function isOutputFormat(s: string): s is OutputFormat {
@@ -181,8 +177,9 @@ export function parseHeadlessArgs(argv: readonly string[]): ParseResult | ParseE
       }
       case "--permission-mode": {
         const v = take(i, a); if (typeof v !== "string") return v
-        if (!isPermissionMode(v)) return { ok: false, message: `invalid --permission-mode: ${v}` }
-        permissionMode = v; i++; break
+        const mode = parsePermissionMode(v)
+        if (!mode) return { ok: false, message: `invalid --permission-mode: ${v}` }
+        permissionMode = mode; i++; break
       }
       case "--output-format": {
         const v = take(i, a); if (typeof v !== "string") return v
@@ -398,6 +395,7 @@ Options:
   --watch-linger <s>            Retain the viewer after completion (0..300)
   -p, --print <text>            Prompt to send (alternative: positional / stdin pipe)
   --permission-mode <mode>      default | acceptEdits | bypassPermissions | plan
+                                (presets: strict | balanced | autonomous)
                                 (default: 'default' — any non-allowed tool is denied)
   --result-schema <schema>      outcome-v1 (default) | legacy
   --output-format <fmt>         text (default) | json | stream-json

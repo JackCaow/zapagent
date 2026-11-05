@@ -145,6 +145,7 @@ abstract class CommandWrappingSandbox implements OsSandbox {
           }
         }
         if (input.externalCliIntegration) proxy?.allowDomains(options.networkDomains ?? []);
+        proxy?.allowDomains(input.declaredNetworkDomains ?? []);
         wrapped = this.wrap(executable, args, {
           cwd: canonicalPath(resolve(options.cwd)),
           readablePaths: [...new Set([

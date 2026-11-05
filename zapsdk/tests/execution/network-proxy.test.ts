@@ -30,7 +30,7 @@ describe("decideHost", () => {
     for (const h of ["pypi.org", "files.pythonhosted.org", "api.github.com", "example.org", "a.b.corp.test", "localhost", "127.0.0.1", "::1", "PyPI.org."]) expect(ok(h)).toBe(true)
   })
   it("refuses everything else, the wildcard apex, lookalikes and metadata addresses", () => {
-    for (const h of ["attacker.com", "corp.test", "pypi.org.attacker.com", "notgithub.com", "169.254.169.254", "evil.github.com", "10.0.0.5"]) expect(ok(h)).toBe(false)
+    for (const h of ["attacker.com", "corp.test", "pypi.org.attacker.com", "notgithub.com", "169.254.169.254", "evil.github.com", "10.0.0.5", "127.evil.com", "127.0.0.1.nip.io"]) expect(ok(h)).toBe(false)
   })
   it("'*' opens everything except link-local", () => {
     expect(decideHost({ allowedDomains: ["*"] }, "anything.net").allowed).toBe(true)

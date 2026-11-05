@@ -38,7 +38,7 @@ import { useAgentRunner } from "./hooks/useAgentRunner.js"
 import { useToasts } from "./hooks/useToasts.js"
 import { useUpdateCheck } from "./hooks/useUpdateCheck.js"
 import { UpdateNotice } from "./ui/UpdateNotice.js"
-import { autoMemory, appLogger, agentLogger, conversation, tokenAccounting } from "./singletons.js"
+import { autoMemory, appLogger, agentLogger, conversation, permissionManager, tokenAccounting } from "./singletons.js"
 import { CheckpointManager } from "../zapsdk/checkpoint/index.js"
 import { type Todo, type TodoStore } from "../zapsdk/index.js"
 import { loadAllSkills } from "../zapsdk/skills/loader.js"
@@ -714,6 +714,7 @@ export function App() {
       try {
         return await runAgent(text, systemPrompt, images, memoryQueryText ?? displayText ?? text, {
           propagateErrors: true,
+          keepTurnDenials: silent,
           onInputAccepted: () => {
             onAccepted?.()
             if (silent) addLog("task-notification", text)
@@ -730,6 +731,7 @@ export function App() {
           onSteeringAccepted: input => {
             const entry = steering.get(input.id)
             if (!entry) return
+            permissionManager.startTurn()
             const warning = queue.acknowledge(entry.id, entry.sessionId)
             if (warning) addLog("error", warning)
             logUser(entry.displayForm, entry.restoreText, entry.images?.map(image => image.content))
@@ -1130,6 +1132,7 @@ export function App() {
           args={pendingApproval.args}
           onChoose={pendingApproval.resolve}
           allowScope={pendingApproval.allowScope}
+          repeats={pendingApproval.repeats}
           onGrant={pendingApproval.grant}
           availableTools={agentRef.current.registry.definitions().filter(tool => tool.permission === "confirm").map(tool => tool.name)}
           unsandboxed={approvalFacts(pendingApproval.name, pendingApproval.args, pendingApproval.context).sandboxEscape}

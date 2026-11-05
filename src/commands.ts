@@ -108,7 +108,7 @@ export function parseCommand(input: string): CommandResult | null {
           "",
           "  Permissions:",
           "  /permissions     — Manage active permission rules (interactive)",
-          "  /mode [name]     — Set permission mode (default | acceptEdits | plan | bypass)",
+          "  /mode [name]     — Set permission mode (default | acceptEdits | plan | bypass; presets strict | balanced | autonomous)",
           "",
           "  Todos:",
           "  /todos [on|off]   — Show or hide the todo panel",

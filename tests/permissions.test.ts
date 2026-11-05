@@ -352,9 +352,24 @@ describe("PermissionManager session keys", () => {
     expect(pm.checkPermission("write_file", { path: join(cwd, "src", "index.ts") }).decision).toBe("allow")
   })
 
-  it("write_file: different directory is not allowed", () => {
+  it("workspace edit consent covers every edit tool and directory, not deletes or outside paths", () => {
     pm.addSessionRule("write_file", { path: join(cwd, "src", "App.tsx") })
-    expect(pm.checkPermission("write_file", { path: join(cwd, "lib", "util.ts") }).decision).toBe("ask")
+    for (const tool of ["write_file", "create_file", "edit_file", "multi_edit"]) {
+      expect(pm.checkPermission(tool, { path: join(cwd, "lib", "util.ts") }).decision).toBe("allow")
+    }
+    expect(pm.checkPermission("delete_file", { path: join(cwd, "src", "App.tsx") }).decision).toBe("ask")
+    expect(pm.checkPermission("edit_file", { path: "/etc/hosts" }).decision).toBe("ask")
+  })
+
+  it("explicit ask and deny rules still win over workspace edit consent", () => {
+    mkdirSync(join(cwd, ".zapcode"), { recursive: true })
+    writeFileSync(join(cwd, ".zapcode", "settings.json"), JSON.stringify({ rules: [
+      { pattern: "edit_file(secrets/**)", type: "deny" }, { pattern: "write_file(config/**)", type: "ask" },
+    ] }))
+    pm.reload()
+    pm.addSessionRule("edit_file", { path: join(cwd, "src", "a.ts") })
+    expect(pm.checkPermission("edit_file", { path: join(cwd, "secrets", "k.ts") }).decision).toBe("deny")
+    expect(pm.checkPermission("write_file", { path: join(cwd, "config", "x.json") }).decision).toBe("ask")
   })
 
   it("empty-path write_file cannot create a rule that later matches everything", () => {
@@ -376,9 +391,13 @@ describe("PermissionManager session keys", () => {
 
     // The destination scope alone cannot authorize an unrelated external source.
     expect(pm.checkPermission("move_file", { source: "/x.ts", destination: dest2 }).decision).toBe("ask")
-    expect(pm.checkPermission("move_file", { source: dest1, destination: dest2 }).decision).toBe("allow")
-    // Different directory → ask
+    // Moving a workspace file away deletes it, which that approval never covered.
+    expect(pm.checkPermission("move_file", { source: dest1, destination: dest2 }).decision).toBe("ask")
     expect(pm.checkPermission("move_file", { source: "/x.ts", destination: destOther }).decision).toBe("ask")
+    // Approving a move inside src covers later moves out of src.
+    pm.addSessionRule("move_file", { source: dest1, destination: dest2 })
+    expect(pm.checkPermission("move_file", { source: join(cwd, "src", "c.ts"), destination: destOther }).decision).toBe("allow")
+    expect(pm.checkPermission("move_file", { source: join(cwd, "lib", "d.ts"), destination: dest2 }).decision).toBe("ask")
   })
 
   it("move_file: approving one move does NOT grant all moves (the old bug)", () => {
@@ -439,10 +458,10 @@ describe("PermissionManager session keys", () => {
     expect(pm.checkPermission("edit_file", { path: "src/foo.ts" }).decision).toBe("allow")
     // ./ prefix → also allow
     expect(pm.checkPermission("edit_file", { path: "./src/foo.ts" }).decision).toBe("allow")
-    // Sibling in same dir (glob expansion) → allow
-    expect(pm.checkPermission("edit_file", { path: join(cwd, "src", "bar.ts") }).decision).toBe("allow")
-    // Different dir → still ask
-    expect(pm.checkPermission("edit_file", { path: join(cwd, "lib", "util.ts") }).decision).toBe("ask")
+    // Workspace edit consent covers the rest of the project
+    expect(pm.checkPermission("edit_file", { path: join(cwd, "lib", "util.ts") }).decision).toBe("allow")
+    // A path outside the workspace does not
+    expect(pm.checkPermission("edit_file", { path: "/etc/hosts" }).decision).toBe("ask")
   })
 
   it("session rule honors abs subject after relative inference", () => {
