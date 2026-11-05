@@ -97,6 +97,8 @@ export interface OsSandbox {
     executionId: string;
     /** Broker-authorized external CLI integration, never derived from shell arguments. */
     externalCliIntegration?: boolean;
+    /** Hosts a shell declared and the host approved; the proxy admits them for this command only. */
+    declaredNetworkDomains?: string[];
     workspace: WorkspaceIdentity;
     effects: ToolEffects;
     grant: CapabilityGrant;

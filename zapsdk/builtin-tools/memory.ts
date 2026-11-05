@@ -61,8 +61,8 @@ const MEMORY_TIMESTAMP_SCHEMA = z.string().min(1).max(80).refine(
  *   - project   — facts about the current project not derivable from code/git
  *   - reference — pointers to external systems (Linear, Slack, dashboards)
  *
- * Permission default is `confirm` so the user sees what's being saved on first
- * write. Allow via `/permissions allow memory_save` to skip prompts after vetting.
+ * Permission is `confirm`; the zapcode host allows project/reference writes
+ * and asks for global user/feedback writes. Other hosts decide for themselves.
  */
 export function memorySaveTool(options: MemorySaveToolOptions): Tool {
   const { store, globalStore } = options;

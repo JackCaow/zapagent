@@ -49,12 +49,18 @@ export interface ApprovalContext {
   readonly shell: Readonly<ShellExecutionEnvironment>;
   readonly authorization?: Readonly<ToolApprovalFacts>;
 }
-export type ApprovalCallback = (
+export type ApprovalCallback = ((
   toolName: string,
   args: Record<string, unknown>,
   signal?: AbortSignal,
   context?: Readonly<ApprovalContext>,
-) => Promise<ApprovalResponse>;
+) => Promise<ApprovalResponse>) & {
+  /** Optional synchronous decision that needs no human. A settled answer skips
+   * the shared approval queue, so allowed calls never wait behind a prompt;
+   * undefined queues the call for `onApproval` as usual. Wrappers that do not
+   * forward it simply keep the queued path. */
+  precheck?: (toolName: string, args: Record<string, unknown>, context?: Readonly<ApprovalContext>) => ApprovalResponse | undefined;
+};
 
 export type ApprovalLifecycleStatus =
   | "requested"
@@ -937,6 +943,15 @@ export class ToolExecutor {
       // the shared approval queue while awaiting them: other Agents need to
       // reach approval to release their own capacity.
       await notify("requested");
+      const settled = onApproval.precheck?.(name, parsedArgs, approvalContext);
+      if (settled !== undefined && !signal?.aborted) {
+        const approved = settled === true;
+        const denial = settled && typeof settled === "object" && settled.approved === false ? settled : undefined;
+        const reason = denial?.reason ?? "approval not granted";
+        await notify(approved ? "approved" : "denied", approved ? undefined : reason);
+        return approved ? true : { success: false, output: "", error: `Tool "${name}" denied: ${reason}`,
+          failure: operationFailure("POLICY_DENIED", denial?.source ?? "approval", approvalId) };
+      }
       const previousApproval = this.approvalQueue.current.catch(() => undefined);
       const approval = previousApproval.then(() => {
         if (signal?.aborted) throw new ExecutionBoundaryError("aborted", operationFailure("CANCELLED", "approval"));

@@ -1,6 +1,6 @@
 import { dirname, isAbsolute, join, relative, resolve } from "node:path"
 import { homedir } from "node:os"
-import { type PermissionRule } from "./permissions.js"
+import { WORKSPACE_EDIT_TOOLS, type PermissionRule } from "./permissions.js"
 import { canonicalizeWithNearestExistingAncestorSync } from "../zapsdk/builtin-tools/filesystem.js"
 
 export interface ToolGrantRequest {
@@ -11,7 +11,7 @@ export interface ToolGrantRequest {
 
 export const FILE_GRANT_TOOLS = ["read_file", "list_tree", "read_document", "search_files", "glob_files", "write_file", "create_file", "edit_file", "multi_edit", "delete_file", "move_file"]
 export const READ_GRANT_TOOLS = ["read_file", "list_tree", "read_document", "search_files", "glob_files"]
-export const EDIT_GRANT_TOOLS = ["write_file", "create_file", "edit_file", "multi_edit"]
+export const EDIT_GRANT_TOOLS = [...WORKSPACE_EDIT_TOOLS]
 
 function expandDirectory(value: string): string {
   return value === "~" ? homedir() : value.startsWith("~/") ? join(homedir(), value.slice(2)) : value

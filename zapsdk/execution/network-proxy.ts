@@ -23,6 +23,17 @@ export const DEFAULT_ALLOWED_DOMAINS: readonly string[] = [
   "fonts.googleapis.com", "fonts.gstatic.com",
 ];
 
+/** Host pattern for a declared destination (URL, host or `*.host`), or null. */
+export function destinationHostPattern(value: string): string | null {
+  const trimmed = value.trim().toLowerCase();
+  let host = trimmed;
+  if (/^[a-z][a-z0-9+.-]*:\/\//.test(trimmed)) {
+    try { host = new URL(trimmed).hostname; } catch { return null; }
+  }
+  host = host.replace(/\.$/, "");
+  return /^(?:\*\.)?[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/.test(host) ? host : null;
+}
+
 const LOOPBACK_NAMES = new Set(["localhost", "localhost.localdomain", "ip6-localhost"]);
 
 function normalizeHost(host: string): string {
@@ -161,7 +172,7 @@ export class NetworkProxy {
       if (!this.blocked.has(key)) this.blocked.set(key, decision.reason);
       return this.reject(client, 403,
         `zap sandbox: network access to ${key} is blocked (${decision.reason}). `
-        + "Add it to sandboxNetwork.allowedDomains in the config, or retry the command outside the sandbox with approval.");
+        + "Declare it in the command's network_destinations to request approval, or add it to sandboxNetwork.allowedDomains in the config.");
     }
     let address = normalizeHost(host);
     if (isIP(address) === 0) {

@@ -285,5 +285,5 @@ export function buildAgentObjects(
     postProcess: createMemoryReadPostProcess({ autoMemory, globalMemoryDir }),
   })
 
-  return { provider, registry, executor, modelId: model, cwd: effectiveCwd, createRegistryForCwd, executionFacts: environment.facts, executionCapacity: environment.capacity, sandboxConfined }
+  return { provider, registry, executor, modelId: model, cwd: effectiveCwd, createRegistryForCwd, executionFacts: environment.facts, executionCapacity: environment.capacity, sandboxConfined, sandboxNetworkPolicy: environment.sandboxNetworkPolicy }
 }

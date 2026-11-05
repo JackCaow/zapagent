@@ -194,6 +194,16 @@ export type MCPServerConfig = SDKMCPServerConfig
 
 export type PermissionMode = "default" | "acceptEdits" | "plan" | "bypassPermissions"
 
+/** Presets name the trade-off; each is an existing mode. */
+export const PERMISSION_PRESETS = { strict: "default", balanced: "acceptEdits", autonomous: "bypassPermissions" } as const satisfies Record<string, PermissionMode>
+
+/** A mode, the `bypass` short form, or a preset name. */
+export function parsePermissionMode(value: string): PermissionMode | null {
+  if (value === "default" || value === "acceptEdits" || value === "plan" || value === "bypassPermissions") return value
+  if (value === "bypass") return "bypassPermissions"
+  return Object.hasOwn(PERMISSION_PRESETS, value) ? PERMISSION_PRESETS[value as keyof typeof PERMISSION_PRESETS] : null
+}
+
 /** Pointer to the currently active (provider, model) pair. Both fields
  *  must reference something that exists in `providers[]` — loadAppConfig
  *  normalises this on startup. */

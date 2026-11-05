@@ -26,10 +26,10 @@ interface DialogProps {
 
 // ── Mode picker ──────────────────────────────────────────────────────────
 const MODES: { id: PermissionMode; label: string; meta: string }[] = [
-  { id: "default",           label: "default",            meta: "ask before write/edit/exec" },
-  { id: "acceptEdits",       label: "acceptEdits",        meta: "auto-approve file edits" },
+  { id: "default",           label: "default",            meta: "strict: ask before write/edit/exec" },
+  { id: "acceptEdits",       label: "acceptEdits",        meta: "balanced: auto-approve file edits" },
   { id: "plan",              label: "plan",               meta: "research only — no edits or commands" },
-  { id: "bypassPermissions", label: "bypassPermissions",  meta: "auto-approve everything (use with care)" },
+  { id: "bypassPermissions", label: "bypassPermissions",  meta: "autonomous: auto-approve everything (use with care)" },
 ]
 
 export function ModeDialog({ config, onCommit, onCancel }: DialogProps) {

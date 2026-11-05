@@ -27,7 +27,8 @@ import { useHideNativeCursor } from "./dialog-frame.js"
 import { c } from "./theme.js"
 import { ToolGrantDialog } from "./dialog-tool-grant.js"
 import { suggestToolGrantDirectory, type ToolGrantRequest } from "../tool-grants.js"
-import type { PermissionRule } from "../permissions.js"
+import { inferPattern, type PermissionRule } from "../permissions.js"
+import { REQUEST_CAPABILITIES_TOOL, describeCapabilityPatterns } from "../capabilities.js"
 import { formatToolCall, getToolAlias } from "./transcript-format.js"
 
 export type ApprovalChoice = "once" | "always" | "forever" | "deny"
@@ -47,6 +48,8 @@ interface Props {
   rulePreview?: string | null
   unsandboxed?: boolean
   allowScope?: boolean
+  /** One-time approvals of the same consent earlier this session. */
+  repeats?: number
   availableTools?: string[]
   cwd?: string
   workspaceRoot?: string
@@ -58,7 +61,7 @@ interface Option {
   label: string
 }
 
-export function ApprovalBar({ toolName, args, onChoose, rulePreview, unsandboxed: escape, allowScope = true, availableTools = [], cwd, workspaceRoot, onGrant }: Props) {
+export function ApprovalBar({ toolName, args, onChoose, rulePreview, unsandboxed: escape, allowScope = true, repeats = 0, availableTools = [], cwd, workspaceRoot, onGrant }: Props) {
   useHideNativeCursor()
   // Three accept tiers ("once" / session-scoped "always" / persistent
   // "forever") + deny. Both persistent consent and ordinary tool grants
@@ -66,13 +69,21 @@ export function ApprovalBar({ toolName, args, onChoose, rulePreview, unsandboxed
   // When rulePreview is provided, surface the actual saved pattern in
   // both "always" and "forever" labels so the user sees the literal
   // glob/prefix rather than a vague "in this session/project".
-  const scopeText = rulePreview
+  const capabilityText = rulePreview ? describeCapabilityPatterns(rulePreview.split(", ")) : null
+  const scopeText = capabilityText ?? (rulePreview
     ? rulePreview === toolName ? `${getToolAlias(toolName)} (entire tool)` : `${rulePreview}`
-    : `${getToolAlias(toolName)} commands`
+    : `${getToolAlias(toolName)} commands`)
   const unsandboxed = escape ?? isUnsandboxedBash(toolName, args)
-  const canCustomize = allowScope && !unsandboxed && toolName !== "delegate_agent" && availableTools.includes(toolName) && !!onGrant
+  const request = toolName === REQUEST_CAPABILITIES_TOOL
+  const canCustomize = allowScope && !unsandboxed && !request && toolName !== "delegate_agent" && availableTools.includes(toolName) && !!onGrant
   const directory = canCustomize ? suggestToolGrantDirectory(toolName, args, cwd) : undefined
-  const options: Option[] = !allowScope
+  // A capability request is only worth something when it is remembered.
+  const options: Option[] = request && allowScope ? [
+        { value: "always",  label: `Yes, allow ${scopeText} for this session` },
+        { value: "forever", label: `Yes, allow ${scopeText} for this project` },
+        { value: "deny",    label: "No" },
+      ]
+    : !allowScope
     ? [
         { value: "once", label: unsandboxed ? "Yes, run outside the sandbox this once" : "Yes, this once" },
         { value: "deny", label: "No" },
@@ -95,14 +106,14 @@ export function ApprovalBar({ toolName, args, onChoose, rulePreview, unsandboxed
   useInput((input, key) => {
     if (input === "g" && canCustomize) { setDirectoryShortcut(false); setCustomizing(true); return }
     if (input === "d" && directory) { setDirectoryShortcut(true); setCustomizing(true); return }
-    const directChoice = approvalChoiceForInput(input, key, idx, allowScope)
+    const directChoice = approvalChoiceForInput(input, key, idx, allowScope, options.map(option => option.value))
     if (directChoice) { onChoose(directChoice); return }
     if (key.upArrow)   { setIdx(i => (i - 1 + options.length) % options.length); return }
     if (key.downArrow) { setIdx(i => (i + 1) % options.length); return }
   }, { isActive: !(customizing && canCustomize) })
 
   if (customizing && canCustomize && onGrant) return <ToolGrantDialog availableTools={availableTools} initialTools={[toolName]}
-    initialPattern={rulePreview?.match(/^[^(]+\(([^()]*)\)$/)?.[1] ?? ""}
+    initialPattern={(capabilityText ? inferPattern(toolName, args, workspaceRoot ?? cwd ?? process.cwd()) : rulePreview)?.match(/^[^(]+\(([^()]*)\)$/)?.[1] ?? ""}
     initialDirectory={directory} directoryShortcut={directoryShortcut} cwd={workspaceRoot}
     onSave={(request, reviewedRules) => onGrant(request, availableTools, reviewedRules)} onCancel={() => setCustomizing(false)} />
 
@@ -121,6 +132,7 @@ export function ApprovalBar({ toolName, args, onChoose, rulePreview, unsandboxed
       {toolName === "bash" && ([ ["read_paths", "Additional read access"], ["write_paths", "Additional write access"] ] as const).map(([field, label]) =>
         Array.isArray(args[field]) && args[field].length > 0
           ? <Text key={field} color={c.warning}>{label}: {JSON.stringify(args[field])}</Text> : null)}
+      {request && typeof args.reason === "string" && <Text color={c.text.secondary}>{`Reason: ${args.reason}`}</Text>}
       {unsandboxed && <Text color={c.error}>Runs outside the OS sandbox: full access to your files and network.</Text>}
       <Text color={c.warning} bold>Approve?</Text>
       <Box flexDirection="column">
@@ -136,6 +148,7 @@ export function ApprovalBar({ toolName, args, onChoose, rulePreview, unsandboxed
           )
         })}
       </Box>
+      {allowScope && repeats >= 2 && <Text color={c.text.muted}>{`Approved ${repeats} times this session; 2 stops asking for the rest of it`}</Text>}
       {canCustomize && <Text color={c.text.muted}>g customize scope / select tools</Text>}
       {directory && <Text color={c.text.muted}>d authorize folder / select tools: {directory}</Text>}
     </Box>
@@ -151,9 +164,9 @@ export function approvalChoiceForInput(
   key: { escape?: boolean; return?: boolean },
   selectedIndex: number,
   allowScope = true,
+  choices: readonly ApprovalChoice[] = allowScope ? APPROVAL_CHOICES : ["once", "deny"],
 ): ApprovalChoice | null {
   if (key.escape) return "deny"
-  const choices: ApprovalChoice[] = allowScope ? APPROVAL_CHOICES : ["once", "deny"]
   const prefix = commandInput(input, key)
   if (prefix !== null && /^[1-9]$/.test(prefix)) return choices[Number(prefix) - 1] ?? null
   if (isReturnInput(input, key)) return choices[selectedIndex] ?? null

@@ -28,6 +28,8 @@ interface PendingApproval {
   name: string
   args: Record<string, unknown>
   allowScope: boolean
+  /** One-time approvals of the same consent earlier this session. */
+  repeats: number
   resolve: (choice: ApprovalChoice) => void
   grant: (request: ToolGrantRequest, availableTools: string[], reviewedRules?: readonly PermissionRule[]) => string | void
 }
@@ -67,8 +69,6 @@ export function usePermissionApproval(
     async (
       name: string,
       ar: Record<string, unknown>,
-      mode: string,
-      why: string,
       signal?: AbortSignal,
       allowScope = true,
       context?: Readonly<ApprovalContext>,
@@ -76,13 +76,6 @@ export function usePermissionApproval(
     ): Promise<ApprovalResponse> => {
       const sessionId = getCurrentSessionId()
       if (signal?.aborted) return false
-      try {
-        // Match the `permission_decision` log line emitted in onApproval's
-        // synchronous decision tiers so log consumers see a uniform format.
-        appLogger.info(
-          `permission_decision tool=${name} mode=${mode} decision=ask (${why})`,
-        )
-      } catch {}
       // For edit/create tools, push a scrollback "approval" log carrying the
       // proposed diff *before* showing the live ApprovalBar. The entry is
       // finalized at addLog time (no replaceLog) so it commits to Static
@@ -151,6 +144,7 @@ export function usePermissionApproval(
           name,
           args: ar,
           allowScope,
+          repeats: permissionManager.priorOnceApprovals(name, ar, context),
           grant: (request, availableTools, reviewedRules) => {
             const expired = validate()
             if (expired) return expired
@@ -169,7 +163,7 @@ export function usePermissionApproval(
             clear()
             // A stale or synthetic scope choice cannot extend a one-time prompt.
             if (!scopeAllowed && choice !== "deny") choice = "once"
-            try { appLogger.info(`permission_user tool=${name} choice=${choice}`) } catch {}
+            try { appLogger.info("permission_user", { tool: name, choice }) } catch {}
             const escape = approvalFacts(name, ar, context).sandboxEscape
             if (escape) {
               if (choice === "always" || choice === "forever") {
@@ -196,7 +190,9 @@ export function usePermissionApproval(
             } else if (choice === "deny") {
               addLog("system", `Permission: user denied ${getToolAlias(name)}`)
             }
-            settle(choice !== "deny" ? true : { approved: false, source: "approval", reason: "user declined approval" })
+            if (choice === "deny") permissionManager.recordDenial(name, ar, context)
+            else if (choice === "once" && !escape) permissionManager.recordOnceApproval(name, ar, context)
+            settle(choice !== "deny" ? true : { approved: false, source: "approval", reason: "user declined approval; do not retry the same request this turn" })
           },
         })
       })
@@ -204,26 +200,46 @@ export function usePermissionApproval(
     [addLog, configRef],
   )
 
-  const onApproval = useCallback(
+  /** Policy decision without a human. Unsettled ones are logged only when
+   * the queue reaches them, so a precheck never logs twice. */
+  const decide = useCallback(
+    (toolName: string, args: Record<string, unknown>, context?: Readonly<ApprovalContext>, logAsk = true) => {
+      permissionManager.setSessionId(getCurrentSessionId())
+      const mode = configRef.current.permissionMode
+      const decision = evaluateApprovalPolicy(permissionManager, toolName, args, { mode, cwd: process.cwd(), context })
+      if (decision.decision === "ask" && !logAsk) return decision
+      try { appLogger.info("permission_decision", { tool: toolName, mode, decision: decision.decision, category: decision.category, tier: decision.tier, source: decision.source, reason: decision.reason }) } catch {}
+      if (decision.decision === "deny") addLog("system", `Permission: denied ${getToolAlias(toolName)} — ${decision.reason}`)
+      return decision
+    },
+    [addLog, configRef],
+  )
+
+  const queued = useCallback(
     (toolName: string, args: Record<string, unknown>, signal?: AbortSignal, context?: Readonly<ApprovalContext>): Promise<ApprovalResponse> => {
       queue.cancelStale()
       return queue.enqueue(async (signal, id) => {
         if (signal?.aborted) return Promise.resolve(false)
-        permissionManager.setSessionId(getCurrentSessionId())
-        const mode = configRef.current.permissionMode
-        const decision = evaluateApprovalPolicy(permissionManager, toolName, args, { mode, cwd: process.cwd(), context })
-        try { appLogger.info(`permission_decision tool=${toolName} mode=${mode} decision=${decision.decision} (${decision.reason})`) } catch {}
+        // Re-decided when the prompt's turn comes: an earlier answer may cover it.
+        const decision = decide(toolName, args, context)
         if (decision.decision === "allow") return Promise.resolve(true)
-        if (decision.decision === "deny") {
-          addLog("system", `Permission: denied ${getToolAlias(toolName)} — ${decision.reason}`)
-          return Promise.resolve({ approved: false, source: "policy", reason: decision.reason })
-        }
+        if (decision.decision === "deny") return Promise.resolve({ approved: false, source: "policy", reason: decision.reason })
         if (decision.source === "dangerous") addLog("system", `Approval required for ${decision.reason}`)
-        return promptApproval(toolName, args, mode, decision.reason, signal, decision.allowScope, context, id)
+        return promptApproval(toolName, args, signal, decision.allowScope, context, id)
       }, signal)
     },
-    [addLog, configRef, promptApproval, queue],
+    [addLog, decide, promptApproval, queue],
   )
+
+  // Calls the policy settles never wait behind an open prompt.
+  const onApproval: ApprovalCallback = useCallback(Object.assign(
+    (toolName: string, args: Record<string, unknown>, signal?: AbortSignal, context?: Readonly<ApprovalContext>) => queued(toolName, args, signal, context),
+    { precheck: (toolName: string, args: Record<string, unknown>, context?: Readonly<ApprovalContext>): ApprovalResponse | undefined => {
+      const decision = decide(toolName, args, context, false)
+      return decision.decision === "allow" ? true
+        : decision.decision === "deny" ? { approved: false, source: "policy", reason: decision.reason } : undefined
+    } },
+  ), [decide, queued])
 
   return { onApproval, pendingApproval }
 }

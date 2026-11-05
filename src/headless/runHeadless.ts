@@ -91,6 +91,7 @@ import {
   persistCompactSummaryBestEffort,
   type PersistCompactSummary,
 } from "../agent/memoryDiagnostics.js"
+import { requestCapabilitiesTool } from "../request-capabilities-tool.js"
 import type { AutoMemory } from "../../zapsdk/memory/auto-memory.js"
 import type { HarnessPolicyOverrides } from "../../zapsdk/harness/policy.js"
 import type { ContextDiagnostics } from "../../zapsdk/agent/events.js"
@@ -435,7 +436,7 @@ export async function runHeadless(args: HeadlessArgs, host: HeadlessHost = {}): 
       formatter.progress(`✗ denied ${getToolAlias(tool)}: ${reason}`)
       host.onPermissionDenied?.(tool, reason)
     },
-    onDecision: (tool, decision, reason) => {
+    onDecision: (tool, decision, reason, evaluated) => {
       if (args.outputFormat === "stream-json" && !host.formatter) {
         // Surface decisions as observations so downstream tooling can see
         // the gate without parsing stderr.
@@ -445,6 +446,7 @@ export async function runHeadless(args: HeadlessArgs, host: HeadlessHost = {}): 
           alias: getToolAlias(tool),
           decision,
           reason,
+          ...(evaluated ? { category: evaluated.category, tier: evaluated.tier } : {}),
         }) + "\n")
       }
     },
@@ -497,7 +499,7 @@ export async function runHeadless(args: HeadlessArgs, host: HeadlessHost = {}): 
     executionEnvironment.commandOptions.disableBackgroundTasks = true
     if (host.requireProcessSeal) executionEnvironment.broker = requireProcessSealing(executionEnvironment.broker, host.onProcessSealUnconfirmed)
   }
-  const { provider: llmProvider, registry, executor: baseExecutor, createRegistryForCwd, executionFacts, executionCapacity, sandboxConfined } = buildAgentObjects(
+  const { provider: llmProvider, registry, executor: baseExecutor, createRegistryForCwd, executionFacts, executionCapacity, sandboxConfined, sandboxNetworkPolicy } = buildAgentObjects(
     config,
     approval.onApproval,
     /* todoStore   */ headlessTodoStore,
@@ -524,7 +526,10 @@ export async function runHeadless(args: HeadlessArgs, host: HeadlessHost = {}): 
   const isolatedExecutor = host.readOnlyWorkspace ? guardedExecutor.withWorkspace({ root: realpathSync(cwd), mode: "shared-readonly", sandbox: sandboxConfined ? "enforced" : "none" }) : host.isolateWorkspace ? guardedExecutor.withWorkspace({ root: realpathSync(cwd), mode: "isolated-write", sandbox: sandboxConfined ? "enforced" : "none", ...(host.privateGit ? { privateGitDirectory: host.privateGit.directory, privateGitIdentity: { device: host.privateGit.device, inode: host.privateGit.inode } } : {}) }) : guardedExecutor
   const executor = host.admitToolExecution ? isolatedExecutor.withExecutionAdmission(host.admitToolExecution) : isolatedExecutor
   approval.setSandboxConfined(sandboxConfined, config.autoAllowSandboxedCommands !== false)
+  approval.setSandboxNetworkPolicy(sandboxNetworkPolicy)
   approval.setSandboxExcludedCommands(config.allowUnsandboxedCommands !== false ? config.sandboxExcludedCommands : undefined)
+  // Only hosts that can ask the user can grant a capability request.
+  if (host.onAsk) registry.register(requestCapabilitiesTool(approval.capabilitiesGranted))
   if (host.readOnlyWorkspace) {
     // No network tools: read-only Goal roles take worker output and workspace
     // files as untrusted input, and an injected URL could carry them off-host.

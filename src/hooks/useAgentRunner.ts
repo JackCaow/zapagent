@@ -23,7 +23,7 @@ import { buildCustomSystemPrompt, buildSystemPrompt, deriveCompaction, getActive
 import { appendUsage, saveLastOutput, getCurrentSessionId } from "../session.js"
 import type { AppConfig } from "../config.js"
 import type { LogType, ToolCallInfo, UserImageRef } from "../ui/types.js"
-import { appLogger, delegateEventBridge, mdStore, globalMdStore, globalMemoryDir, memorySemanticRetriever, tokenAccounting } from "../singletons.js"
+import { appLogger, permissionManager, delegateEventBridge, mdStore, globalMdStore, globalMemoryDir, memorySemanticRetriever, tokenAccounting } from "../singletons.js"
 import { createStreamingPreview } from "../agent/streamingPreview.js"
 import {
   buildMemoryQueryHistoryFromLogs,
@@ -550,6 +550,7 @@ export function useAgentRunner({
       "onInputAccepted" | "hasSteering" | "takeSteering" | "onSteeringAccepted">,
   ): Promise<LoopAgentResult | undefined> => {
     if (!invocation?.goalTurn) { resetGoalView(true); setGoalTodoId(undefined) }
+    permissionManager.startTurn()
     running.current = true
     agentRunStore.clear()
     const controller = new AbortController()

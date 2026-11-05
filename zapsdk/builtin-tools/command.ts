@@ -43,6 +43,9 @@ export interface ExecuteCommandOptions {
   workspaceOnly?: boolean;
   /** Expose destination declarations for a restricted execution backend. */
   restrictedNetwork?: boolean;
+  /** The host sandbox filters egress through an allowlist: offer
+   * network_destinations for other hosts, which the host approves. */
+  declaredNetwork?: boolean;
   /** Offer the per-call `dangerouslyDisableSandbox` retry. Defaults to true;
    * hosts set false when a backend (VM) or policy has no sandbox escape. */
   allowUnsandboxed?: boolean;
@@ -196,6 +199,12 @@ export function executeCommandTool(options: ExecuteCommandOptions = {}): Tool {
           .max(128)
           .optional()
           .describe("Exact HTTP(S) URLs, domains, or wildcard subdomains requested by this command; subject to the execution backend's network policy"),
+      } : options.declaredNetwork ? {
+        network_destinations: z
+          .array(z.string().min(1))
+          .max(16)
+          .optional()
+          .describe("Hosts outside the sandbox network allowlist this command must reach (api.example.com or *.example.com); each needs approval once"),
       } : {}),
     });
 
@@ -245,6 +254,12 @@ export function executeCommandTool(options: ExecuteCommandOptions = {}): Tool {
         "No sleep/ps polling. Exit sends a <task-notification>. For logs, use task_status: task_id with include_output=true (tail) or output_offset=0 (pages). outputFile grants no read_file access. Wait only for dependencies.",
       ]
     : [];
+  if (options.declaredNetwork) {
+    promptLines.push(
+      "",
+      "Sandboxed network reaches an allowlist (package registries, git hosts, common CDNs). For another host, declare it in network_destinations; the user approves each host once and the command stays sandboxed. Do not use dangerouslyDisableSandbox for network access.",
+    );
+  }
   if (options.restrictedNetwork) {
     promptLines.push(
       "",
@@ -294,7 +309,7 @@ export function executeCommandTool(options: ExecuteCommandOptions = {}): Tool {
           (args.cwd as string | undefined) ?? options.defaultCwd ?? context.cwd,
           options.defaultCwd ?? context.cwd,
         );
-        const declaredDestinations = options.restrictedNetwork
+        const declaredDestinations = (options.restrictedNetwork || options.declaredNetwork)
           && Array.isArray((args as { network_destinations?: unknown }).network_destinations)
           ? ((args as { network_destinations: string[] }).network_destinations)
           : [];
@@ -305,10 +320,11 @@ export function executeCommandTool(options: ExecuteCommandOptions = {}): Tool {
             { kind: "filesystem", operation: "read", paths: [accessRoot, ...((args.read_paths ?? []) as string[]).map(path => resolveToolPathCanonical(path, cwd))] },
             { kind: "filesystem", operation: "modify", paths: [accessRoot, ...((args.write_paths ?? []) as string[]).map(path => resolveToolPathCanonical(path, cwd))] },
           ],
-          network: declaredDestinations.length > 0
+          network: options.restrictedNetwork && declaredDestinations.length > 0
             ? [{ kind: "network", operation: "connect", destinations: declaredDestinations, methods: [] }]
             : options.sandboxNetwork === true
-              ? [{ kind: "network", operation: "connect", destinations: ["*"], methods: [] }]
+              // The proxy still filters "*" through its allowlist; declared hosts extend it.
+              ? [{ kind: "network", operation: "connect", destinations: ["*", ...declaredDestinations], methods: [] }]
               : [],
           process: [{
             kind: "process",

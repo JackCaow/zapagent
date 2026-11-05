@@ -1,4 +1,5 @@
 import { realpathSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { isAbsolute, relative, resolve, sep, dirname, basename, posix } from "node:path";
 
 export interface ShellSafetyContext {
@@ -183,6 +184,19 @@ function canonical(path: string): string | null {
   }
 }
 
+/** Scratch roots whose strict descendants are not system paths. A root that is
+ * the home directory or one of its ancestors (an unusual TMPDIR) is ignored,
+ * and so is one holding the workspace, whose siblings may be other projects. */
+function temporaryRoots(lexical: boolean): string[] {
+  if (lexical) return ["/tmp"];
+  const home = canonical(homedir());
+  return [...new Set([tmpdir(), "/tmp"].map(canonical))].filter((root): root is string => {
+    if (!root || root === resolve(root, "..")) return false;
+    const rel = home ? relative(root, home) : "..";
+    return rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel);
+  });
+}
+
 function worldWritable(mode: string): boolean {
   if (/^[0-7]{3,4}$/.test(mode)) return (parseInt(mode, 8) & 2) !== 0;
   return mode.split(",").some(clause => /^(?:[ugoa]*[oa][ugoa]*|)[+=][rwxXst]*w/.test(clause));
@@ -245,6 +259,8 @@ function scopedRisk(
     const rel = paths.relative(root, path);
     return rel !== "" && rel !== ".." && !rel.startsWith(`..${paths.sep}`) && !paths.isAbsolute(rel);
   };
+  const scratch = temporaryRoots(context.pathResolution === "lexical")
+    .filter(tmp => !root || !(root === tmp || strictChild(root, tmp)));
   const stack: Array<Array<string | null>> = [];
   let words: Word[] = [];
   let documents: HereDocument[] = [];
@@ -360,7 +376,10 @@ function scopedRisk(
         const path = pathFrom(base, target);
         // A filesystem-root workspace cannot turn system-wide operations into
         // narrow project operations. The workspace itself is broad too.
-        if (!root || root === paths.resolve(root, "..") || !path || !strictChild(path, root)) return id;
+        const inWorkspace = !!root && root !== paths.resolve(root, "..") && !!path && strictChild(path, root);
+        // Recursive removal under a scratch root is routine cleanup; chmod is not.
+        const inScratch = name === "rm" && !!path && scratch.some(tmp => strictChild(path, tmp));
+        if (!inWorkspace && !inScratch) return id;
       }
     }
     return null;

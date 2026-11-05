@@ -9,7 +9,7 @@ import {
   createZapVmCloudExecutionBroker, createPlatformSandbox, hostPackageWriteRoots, NetworkProxy, DEFAULT_ALLOWED_DOMAINS,
   discoverZapVmCloudConfig, discoverZapVmInstallation, readZapVmCapabilities,
   selectZapVmCloudConfigForWorkspace,
-  type ExecutionBroker, type SandboxMode, type ExecutionEnvironmentFacts, type AuthorizedServiceBackend,
+  type ExecutionBroker, type SandboxMode, type ExecutionEnvironmentFacts, type AuthorizedServiceBackend, type NetworkPolicy,
 } from "../zapsdk/index.js"
 import type { ExecuteCommandOptions } from "../zapsdk/builtin-tools/command.js"
 import { observeLocalExecutionCapacity, type ExecutionCapacityFacts } from "../zapsdk/execution/capacity.js"
@@ -20,9 +20,12 @@ export interface ExecutionEnvironment {
   workspaceId?: string
   facts?: ExecutionEnvironmentFacts
   capacity?: ExecutionCapacityFacts
+  /** The allowlist the host sandbox proxy enforces, when it enforces one.
+   * Hosts outside it need a declared, approved destination. */
+  sandboxNetworkPolicy?: NetworkPolicy
   // No prompt, model, retry, budget or completion policy is accepted here.
   commandOptions: Pick<ExecuteCommandOptions,
-    "disableBackgroundTasks" | "restrictedNetwork" | "preserveEnvironment" | "allowUnsandboxed" | "sandboxNetwork" | "sandboxExcludedCommands" | "sandboxGitIntegration" | "workspaceOnly">
+    "disableBackgroundTasks" | "restrictedNetwork" | "preserveEnvironment" | "allowUnsandboxed" | "sandboxNetwork" | "sandboxExcludedCommands" | "sandboxGitIntegration" | "workspaceOnly" | "declaredNetwork">
 }
 
 export type ExecutionBackend = "local" | "vm"
@@ -88,15 +91,19 @@ export interface SandboxNetworkConfig {
   deniedDomains?: string[]
 }
 
+/** The proxy allowlist, or undefined where no proxy filters host egress. */
+function sandboxNetworkPolicy(config: SandboxNetworkConfig | undefined): NetworkPolicy | undefined {
+  if (process.platform !== "darwin") return undefined
+  if (process.env.ZAPCODE_SANDBOX_NETWORK?.trim().toLowerCase() === "open" || config?.mode === "open") return undefined
+  return { allowedDomains: [...DEFAULT_ALLOWED_DOMAINS, ...(config?.allowedDomains ?? [])], deniedDomains: [...(config?.deniedDomains ?? [])] }
+}
+
 /** Each command owns a proxy with a policy snapshot, including subagents.
  * Configuration changes cannot close a running background command's proxy. */
 function networkProxyFor(config: SandboxNetworkConfig | undefined): NetworkProxy | undefined {
-  if (process.platform !== "darwin") return undefined
-  if (process.env.ZAPCODE_SANDBOX_NETWORK?.trim().toLowerCase() === "open" || config?.mode === "open") return undefined
-  const allowedDomains = [...DEFAULT_ALLOWED_DOMAINS, ...(config?.allowedDomains ?? [])]
-  const deniedDomains = [...(config?.deniedDomains ?? [])]
+  const policy = sandboxNetworkPolicy(config)
   // Initialization failure must not silently turn an allowlist into open egress.
-  return new NetworkProxy(() => ({ allowedDomains, deniedDomains }))
+  return policy ? new NetworkProxy(() => policy) : undefined
 }
 
 export function createExecutionEnvironment(
@@ -138,11 +145,13 @@ export function createExecutionEnvironment(
   // A VM or resident boundary has no host sandbox to step out of, and a VM
   // failure must never fall back to an arbitrary host shell.
   const hostSandboxed = !installation && !cloud && !resident
+  const networkPolicy = hostSandboxed && sandboxMode !== "disabled" && local.sandboxStatus().available ? sandboxNetworkPolicy(sandboxNetwork) : undefined
   return {
     ...(serviceOwner ? { workspaceId: serviceOwner.capabilities.workspaceId } : {}),
     facts: describeExecutionEnvironment(runtime, sandboxMode !== "disabled" && local.sandboxStatus().available),
     // A VM transport has its own execution resources. Never substitute Host observations.
     capacity: !installation && !cloud ? observeLocalExecutionCapacity() : undefined,
+    ...(networkPolicy ? { sandboxNetworkPolicy: networkPolicy } : {}),
     broker: new TransparentExecutionBroker({
       local,
       runtime: installation ? new ZapVmRuntime({ installation }) : undefined,
@@ -160,6 +169,7 @@ export function createExecutionEnvironment(
       // Host sandbox confines writes to the workspace; network stays open so
       // installs and fetches work, like Claude Code's default sandbox.
       sandboxNetwork: hostSandboxed ? true : undefined,
+      declaredNetwork: networkPolicy ? true : undefined,
     },
   }
 }

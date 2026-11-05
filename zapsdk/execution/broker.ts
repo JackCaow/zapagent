@@ -6,6 +6,7 @@ import { relative, resolve, sep } from "node:path";
 import { DEFAULT_TOOL_RESOURCE_LIMITS, type ToolResourceLimits } from "../tools/effects.js";
 import type { ToolResult } from "../tools/types.js";
 import { createPlatformSandbox } from "./sandbox.js";
+import { destinationHostPattern } from "./network-proxy.js";
 import { DefaultExecutionProcessBroker } from "./process.js";
 import { earliestDeadlineAt, hasDeadlineExpired } from "./deadline.js";
 import { ExecutionBoundaryError, executionFailureResult, normalizeToolFailure, operationFailure } from "./failure.js";
@@ -124,12 +125,13 @@ export class DefaultExecutionBroker implements ExecutionBroker {
       const denials = processBroker?.networkDenials?.slice(0, 16) ?? [];
       if (denials.length) {
         result = { ...result,
-          output: `${result.output}\n[Sandbox network refusals] ${JSON.stringify(denials)}\nThe proxy refused these destinations. Resolve the network policy or request authorization before retrying; a zero shell exit does not prove all requests succeeded.`,
+          output: `${result.output}\n[Sandbox network refusals] ${JSON.stringify(denials)}\nThe proxy refused these destinations. To retry, declare the refused hosts in network_destinations (the user approves each host once); a zero shell exit does not prove all requests succeeded.`,
           ...(!result.success && !result.runtime?.command?.timedOut && !result.runtime?.command?.aborted
             && (!result.failure || result.failure.source === "unknown") ? { failure: {
             ...operationFailure("SANDBOX_DENIED", "backend", request.executionId),
             missingCapabilities: denials.map(item => `network:${item.host}`),
-            safeAlternatives: ["Ask the user to authorize the required destination in sandboxNetwork.allowedDomains, or an approved unsandboxed command."],
+            safeAlternatives: ["Retry inside the sandbox with network_destinations listing the refused hosts; each host needs approval once.",
+              "Ask the user to add the destination to sandboxNetwork.allowedDomains."],
           } } : {}),
         };
       }
@@ -215,7 +217,12 @@ export class DefaultExecutionBroker implements ExecutionBroker {
               && request.tool.definition.executionLocation === "host"
               && request.workspace.mode !== "shared-readonly"
               && request.effects.workspace.mode === "root-integration"
-              && request.effects.process.some(effect => effect.commandClass === "external-cli") })
+              && request.effects.process.some(effect => effect.commandClass === "external-cli"),
+            // Only a shell declares extra hosts; the approved grant carries them.
+            declaredNetworkDomains: request.effects.process.some(effect => effect.commandClass === "shell")
+              ? [...new Set((request.grant.network?.destinations ?? []).filter(value => value !== "*")
+                .map(destinationHostPattern).filter((host): host is string => !!host))]
+              : undefined })
         : undefined;
       processBroker = needsProcessSandbox
         ? this.processBrokerFactory?.({ request, sandbox, signal: executionAbort.signal, limits })

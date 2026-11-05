@@ -61,6 +61,15 @@ const fixture = String.raw`
     result.promptAgain = pending !== null;
     if (pending) pending.resolve("deny");
     result.afterNew = await next;
+  } else if (scenario === "repeats") {
+    mgr.setSandboxConfined(false);
+    const push = { command: "git push origin main" };
+    result.repeats = [];
+    for (const ar of [push, push, { command: "git push origin other" }, { command: "npm publish" }]) {
+      const next = request(ar); result.repeats.push(pending.repeats); pending.resolve("once"); await next;
+    }
+    sessionId = "next";
+    const next = request(push); result.afterNew = pending.repeats; pending.resolve("deny"); await next;
   } else if (scenario === "abort") {
     const controller = new AbortController();
     const first = request(args, controller.signal); const saved = pending;
@@ -121,7 +130,7 @@ describe("sandbox approval through the real hook", () => {
       expect(result.scope).toBe(scope)
       expect(result.fresh).toBe(scope === "project" ? "allow" : "ask")
       expect(result.promptAgain).toBe(scope === "session")
-      expect(result.afterNew).toEqual(scope === "project" ? true : { approved: false, source: "approval", reason: "user declined approval" })
+      expect(result.afterNew).toEqual(scope === "project" ? true : { approved: false, source: "approval", reason: "user declined approval; do not retry the same request this turn" })
     })
   }
   for (const scenario of ["abort", "stale", "double", "mode-change"]) {
@@ -151,6 +160,14 @@ describe("sandbox approval through the real hook", () => {
   })
 })
 
+
+describe("repeated one-time approvals through the real hook", () => {
+  it("counts approvals of the same consent within a session", () => {
+    const result = run("repeats")
+    expect(result.repeats).toEqual([0, 1, 2, 0])
+    expect(result.afterNew).toBe(0)
+  })
+})
 
 describe("custom tool authorization through the real hook", () => {
   it("saves a reviewed batch and approves the covered waiting command", () => {
