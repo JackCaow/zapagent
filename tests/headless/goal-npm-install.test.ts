@@ -1,4 +1,5 @@
 import { expect, it } from "bun:test"
+import { VM_EXECUTION_ENABLED } from "../../src/execution-environment.js"
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -6,7 +7,8 @@ import { createCustomProvider, getDefaultConfig } from "../../src/config.js"
 import { runGoalPhase } from "../../src/headless/goalPhase.js"
 import { GoalBudgetLedger } from "../../zapsdk/goal/budget.js"
 
-it("prepares npm inputs for isolated worker and child before model access", async () => {
+// Exercises the sealed zapVM path with a fake runtime; kept for when VM execution is re-enabled.
+(VM_EXECUTION_ENABLED ? it : it.skip)("prepares npm inputs for isolated worker and child before model access", async () => {
   const root = await mkdtemp(join(tmpdir(), "goal-npm-phase-"))
   const cwd = join(root, "work"), data = join(root, "data"), runtime = join(root, "runtime"), audit = join(root, "audit")
   await mkdir(cwd); await mkdir(data); await mkdir(join(runtime, "images"), { recursive: true })

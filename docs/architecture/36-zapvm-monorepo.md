@@ -1,5 +1,11 @@
 # zapAgent / zapVM monorepo
 
+> **Superseded (2026-11-26).** zapVM moved back to [its own repository](https://github.com/JackCaow/zapVM).
+> zapAgent no longer builds, tests or bundles the VM runtime; it discovers an
+> installed runtime through `zapsdk/execution/zapvm*.ts`. The changes made under
+> `zapvm/` while it lived here were replayed onto zapVM (JackCaow/zapVM#140).
+> The record below is kept for history.
+
 ## Source import
 
 zapVM main `b9b29bae4ed89692c2aff20911dc7f3acb3b2cc5` was imported under

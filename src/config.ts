@@ -225,7 +225,8 @@ export interface AppConfig {
   permissionMode: PermissionMode
   followUpMode?: "queue" | "steer"
   /** Where project shell commands run. "local" (default) uses the host OS
-   *  sandbox; "vm" routes them into zapVM. ZAPCODE_EXECUTION overrides. */
+   *  sandbox. "vm" (zapVM) is currently disabled and treated as "local";
+   *  see VM_EXECUTION_ENABLED in execution-environment.ts. */
   executionBackend?: "local" | "vm"
   /** Let the model retry a sandbox-blocked bash command outside the OS
    *  sandbox, after explicit approval. Default true; false removes the option. */

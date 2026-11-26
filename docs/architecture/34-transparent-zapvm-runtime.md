@@ -151,6 +151,10 @@ Host 为 Windows 时，prompt 仍明确告知 Agent bash 的实际目标是 Linu
 
 ## 已接通的发布门禁
 
+> **已过时（2026-11-26）**：zapVM 已迁回独立仓库（JackCaow/zapVM），zap 的发布不再打包
+> Runtime archive，`install.sh` 也不再安装或替换 Runtime。本节描述的是迁出前的流程，
+> 现由 zapVM 仓库自己的发布流程承担；zap 侧仍按上文的发现逻辑使用已安装的 Runtime。
+
 - release workflow 将 zapVM 源码锁定到 reviewed commit，分别构建 amd64/arm64 Guest，
   用仓库 secret 中稳定的 Ed25519 私钥签名，再把平台 zapVM binary、可信公钥和已验证
   image bundle 组装进 Runtime archive；安装器校验 archive checksum 后原子替换 Runtime。

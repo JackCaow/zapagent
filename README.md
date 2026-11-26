@@ -170,7 +170,7 @@ The host starts a run through `AgentRuntime`. `LoopAgent` manages the model/tool
 | :--- | :--- |
 | [`src/`](src/) | Terminal UI, provider setup, sessions, headless/ACP hosts, and Watch. |
 | [`zapsdk/`](zapsdk/) | TypeScript agent runtime: model loop, orchestration, tools, permissions, workspaces, merge, context, memory, and events. |
-| [`zapvm/`](zapvm/) | Independent Go execution runtime. Optional VM execution connects through the SDK protocol; the VM does not own agent prompts, permissions, or completion decisions. |
+| [zapVM](https://github.com/JackCaow/zapVM) (separate repository) | Optional Go VM runtime, installed separately. Zap connects to an installed runtime through the SDK protocol; the VM does not own agent prompts, permissions, or completion decisions. |
 
 Git workspaces use private clones of a working-tree snapshot, including eligible uncommitted changes. Non-Git projects use controlled copy snapshots. Read-only agents can share the parent workspace view.
 
@@ -186,8 +186,8 @@ bun test
 bun run build
 ```
 
-For the independent VM module, use `bun run check:vm`; `bun run build:all` builds both host components. See [CONTRIBUTING.md](CONTRIBUTING.md), [open issues](https://github.com/JackCaow/zapagent/issues), and [SECURITY.md](SECURITY.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md), [open issues](https://github.com/JackCaow/zapagent/issues), and [SECURITY.md](SECURITY.md).
 
 ## License
 
-CLI and SDK: [MIT](LICENSE). Independent VM module: [Apache-2.0](zapvm/LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.md) and [visual asset notes](docs/images/readme/README.md).
+CLI and SDK: [MIT](LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.md) and [visual asset notes](docs/images/readme/README.md).

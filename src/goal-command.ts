@@ -10,6 +10,9 @@ import type { GoalRecord } from "../zapsdk/goal/contracts.js"
 import { loadAppConfig } from "./config.js"
 import { createExecutionEnvironment, resolveExecutionBackend } from "./execution-environment.js"
 
+/** zapVM is optional and installed separately; only these Goal options need it. */
+const VM_SETUP_HINT = "zapVM execution is disabled in this version of zap, so this Goal option is unavailable."
+
 function machineCheckSupported(cwd: string): boolean {
   const config = loadAppConfig(join(getAppDataDir(), "config.json"))
   const environment = createExecutionEnvironment(cwd, "required", resolveExecutionBackend(config.executionBackend), false, config.sandboxNetwork, [])
@@ -85,8 +88,8 @@ export function goalCommand(args: string[], cwd: string, currentMode: import("./
   const modeArgs = args.filter(arg => arg === "--permission-mode" || arg.startsWith("--permission-mode="))
   if (!control && (modeArgs.length > 1 || modeArgs.some(arg => !/^--permission-mode=(default|acceptEdits|bypassPermissions|plan)$/.test(arg)) || modeArgs.length > 0 && args.includes("--accept-edits"))) throw new Error("Invalid Goal permission mode")
   if (!control && (installArgs.length > 1 || installArgs.some(arg => arg !== "--install=npm"))) throw new Error("Invalid Goal dependency installation; use --install=npm")
-  if (!control && args.includes("--artifact") && installArgs.length && !machineCheckSupported(cwd)) throw new Error("Goal --install=npm requires a VM backend with verified process sealing.")
-  if (!control && args.includes("--artifact") && checkArgs.length && !machineCheckSupported(cwd)) throw new Error("Goal --check machine verification is currently unavailable: process-tree sealing cannot be verified.")
+  if (!control && args.includes("--artifact") && installArgs.length && !machineCheckSupported(cwd)) throw new Error(`Goal --install=npm requires a VM backend with verified process sealing. ${VM_SETUP_HINT}`)
+  if (!control && args.includes("--artifact") && checkArgs.length && !machineCheckSupported(cwd)) throw new Error(`Goal --check machine verification is currently unavailable: process-tree sealing cannot be verified. ${VM_SETUP_HINT}`)
   if (!control && (checkArgs.length > 1 || checkArgs.some(arg => !/^--check=(bun|npm|pytest|go)$/.test(arg)))) throw new Error("Invalid Goal machine check; use --check=bun, npm, pytest or go")
   const background = args.includes("--background")
   if (args.filter(arg => arg === "--background").length > 1 || args.some(arg => arg.startsWith("--background="))) throw new Error("Invalid Goal background flag")
@@ -154,7 +157,7 @@ export function goalCommand(args: string[], cwd: string, currentMode: import("./
     }
     if (action === "resume") {
       const goal = selectGoal(store, cwd, args[1], sessionId)
-      if (goal.executionMode !== "session" && (goal.machineCheck || goal.dependencyInstall) && !machineCheckSupported(cwd)) throw new Error("Goal VM execution is currently unavailable: process-tree sealing cannot be verified.")
+      if (goal.executionMode !== "session" && (goal.machineCheck || goal.dependencyInstall) && !machineCheckSupported(cwd)) throw new Error(`Goal VM execution is currently unavailable: process-tree sealing cannot be verified. ${VM_SETUP_HINT}`)
       if (enforceSessionMode && !background && goal.executionMode === "session" && goal.permissionMode !== currentMode) throw new Error("Goal permission mode differs from the current session; restore its mode before resuming")
       const stopped = recoverStoppedOwner(store, goal)
       if (sessionId && stopped.sessionId === sessionId) store.pauseForInput(cwd, sessionId)

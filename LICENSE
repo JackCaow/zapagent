@@ -20,6 +20,5 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-The independent zapvm/ module is licensed under Apache-2.0; see zapvm/LICENSE
-and zapvm/NOTICE. Third-party components retain their own licenses. Prior
-copyright and permission notices are retained in THIRD_PARTY_NOTICES.md.
+Third-party components retain their own licenses. Prior copyright and
+permission notices are retained in THIRD_PARTY_NOTICES.md.

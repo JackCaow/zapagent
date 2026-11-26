@@ -1,3 +1,0 @@
-[test]
-# The VM web client owns a separate npm/Vitest suite and dependency graph.
-pathIgnorePatterns = ["**/zapvm/**"]

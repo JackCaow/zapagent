@@ -1,12 +1,11 @@
 # Releases
 
-The CLI/SDK are MIT licensed. The separate `zapvm/` module keeps its Apache-2.0
-license and its own signed image release requirements.
+The CLI/SDK are MIT licensed. zapVM is released from [its own repository](https://github.com/JackCaow/zapVM).
 
 ## CI and release channels
 
 - Pull requests and `main`: typecheck, tests, dependency/secret scans, native
-  sandbox acceptance, npm consumer checks, and the existing VM checks.
+  sandbox acceptance, and npm consumer checks.
 - `vX.Y.Z` or `vX.Y.Z-rc.N`: validate the version and `main` ancestry, run tests,
   build native CLI binaries, smoke-test each binary, verify the npm candidate,
   then publish one GitHub Release after every required job succeeds.
@@ -14,9 +13,6 @@ license and its own signed image release requirements.
   This uploads Actions artifacts and does not publish a release from a branch.
 - **Publish npm release** is a separate manual workflow. It downloads the exact
   checksum-verified tarball from an already published GitHub Release.
-- `vm-vX.Y.Z`: the existing **Signed VM Release** flow builds draft VM/runtime
-  candidates. It still requires `ZAPVM_IMAGE_SIGNING_PRIVATE_KEY` and its signed
-  annotated tag verification. CLI release tags do not require VM credentials.
 
 CLI assets support Linux x64/arm64, macOS x64/arm64, and Windows x64. Each binary
 has a `.sha256` sidecar; `SHA256SUMS` covers all binaries and the npm tarball.

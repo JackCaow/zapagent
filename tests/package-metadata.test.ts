@@ -11,12 +11,14 @@ declare const Bun: { which(command: string): string | null };
 const root = process.cwd()
 
 describe("package metadata", () => {
-  it("ships root license notices and documents the separate VM license", () => {
+  it("ships root license notices and no longer contains the VM module", () => {
     const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf-8"))
     expect(pkg.license).toBe("MIT")
     expect(pkg.files).toContain("LICENSE")
     expect(pkg.files).toContain("THIRD_PARTY_NOTICES.md")
-    expect(readFileSync(join(root, "LICENSE"), "utf-8")).toContain("zapvm/LICENSE")
+    // zapVM lives in its own repository and is installed separately.
+    expect(readFileSync(join(root, "LICENSE"), "utf-8")).not.toContain("zapvm/")
+    expect(existsSync(join(root, "zapvm"))).toBe(false)
     for (const file of ["CONTRIBUTING.md", "SECURITY.md", "CODE_OF_CONDUCT.md"]) {
       expect(readFileSync(join(root, file), "utf-8").length).toBeGreaterThan(100)
     }
@@ -84,50 +86,6 @@ describe("package metadata", () => {
     const release = readFileSync(join(root, ".github/workflows/release.yml"), "utf-8")
     expect(ci).toContain("bun install --frozen-lockfile")
     expect(release.match(/bun install --frozen-lockfile/g)?.length).toBe(3)
-  })
-
-  it("publishes checksums for signed VM runtime binaries", () => {
-    const release = readFileSync(join(root, ".github/workflows/release-vm.yml"), "utf-8")
-    expect(release).toContain('bun scripts/write-release-checksum.ts "dist/${{ matrix.artifact }}"')
-    expect(release).toContain('bun scripts/write-release-checksum.ts "dist/${{ matrix.artifact }}.runtime.tar.gz"')
-    expect(release).toContain("dist/${{ matrix.artifact }}.sha256")
-    expect(release).toContain("dist/${{ matrix.artifact }}.runtime.tar.gz.sha256")
-    expect(release).toContain("zapvm-image-${{ matrix.arch }}.bundle.tar.zst.sha256")
-    expect(release).toContain("zapvm-image-${{ matrix.arch }}.public.pem.sha256")
-    expect(release).toContain("target-custom-${{ matrix.arch }}-schema3.json.sha256")
-    expect(release).toContain("layer-targets-${{ matrix.arch }}.sha256")
-  })
-
-  it("stages the independent Runtime image without embedding an Agent", () => {
-    const release = readFileSync(join(root, ".github/workflows/release-vm.yml"), "utf-8")
-    expect(release).toContain("ZAPVM_IMAGE_PROFILE: host-runtime")
-    expect(release).not.toContain("ZAPVM_ZAP_BINARY")
-    expect(release).toContain('bundle="$release_dir/zapvm-image-${{ matrix.arch }}.bundle.tar.zst"')
-    expect(release).toContain("signed-image/zapvm-image-${{ matrix.arch }}.bundle.tar.zst")
-    expect(release).toContain("signed-image/zapvm-image-${{ matrix.arch }}.public.pem")
-    expect(release).toContain('"$image_tool" bundle-layers')
-    expect(release).toContain("signed-image/layer-targets/*")
-    expect(release).toContain("--layer-target-prefix \"layers/${{ matrix.arch }}\"")
-  })
-
-  it("builds both modules from the same checkout and keeps candidates draft", () => {
-    const release = readFileSync(join(root, ".github/workflows/release-vm.yml"), "utf-8")
-    expect(release).toContain("go-version-file: zapvm/go.mod")
-    expect(release).toContain('--zapvm-revision "$GITHUB_SHA"')
-    expect(release).not.toContain("ZAPVM_REPOSITORY_TOKEN")
-    expect(release).not.toContain("ZAPVM_REVISION")
-    expect(release).not.toContain("repository: JackCaow/zapVM")
-    expect(release).not.toContain("--draft=false")
-    expect(release).toContain("draft: true")
-  })
-
-  it("authorizes only a GitHub-verified annotated VM release tag reachable from main", () => {
-    const release = readFileSync(join(root, ".github/workflows/release-vm.yml"), "utf-8")
-    expect(release).toContain("release tag must be annotated and signed")
-    expect(release).toContain(".verification.verified == true")
-    expect(release).toContain(".verification.reason == \"valid\"")
-    expect(release).toContain(".merge_base_commit.sha == $commit")
-    expect(release).toContain("persist-credentials: false")
   })
 
   it("does not publish SDK test fixtures in the runtime package", () => {

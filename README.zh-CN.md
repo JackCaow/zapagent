@@ -167,7 +167,7 @@ zap --watch -p "分析当前目录的数据并生成报告" --output-format stre
 | :--- | :--- |
 | [`src/`](src/) | 终端交互、模型配置、会话、Headless/ACP 宿主和 Watch。 |
 | [`zapsdk/`](zapsdk/) | TypeScript agent 运行时：模型循环、协作、工具、权限、工作区、合并、上下文、记忆与事件。 |
-| [`zapvm/`](zapvm/) | 独立 Go 执行运行时；可选 VM 通过 SDK 协议接入，不负责 agent 提示词、权限或完成判定。 |
+| [zapVM](https://github.com/JackCaow/zapVM)（独立仓库） | 可选的 Go VM 运行时，需单独安装；zap 通过 SDK 协议连接已安装的运行时，VM 不负责 agent 提示词、权限或完成判定。 |
 
 Git 项目使用工作树快照的私有克隆，包含符合规则的未提交修改；非 Git 项目使用受控复制快照。只读 agent 可以共享父工作区视图。
 
@@ -183,8 +183,8 @@ bun test
 bun run build
 ```
 
-修改独立 VM 模块时使用 `bun run check:vm`；`bun run build:all` 构建两部分宿主组件。详见 [CONTRIBUTING.md](CONTRIBUTING.md)、[Issues](https://github.com/JackCaow/zapagent/issues) 和 [SECURITY.md](SECURITY.md)。
+详见 [CONTRIBUTING.md](CONTRIBUTING.md)、[Issues](https://github.com/JackCaow/zapagent/issues) 和 [SECURITY.md](SECURITY.md)。
 
 ## 许可证
 
-CLI 与 SDK：[MIT](LICENSE)。独立 VM 模块：[Apache-2.0](zapvm/LICENSE)。另见[第三方声明](THIRD_PARTY_NOTICES.md)与[配图说明](docs/images/readme/README.md)。
+CLI 与 SDK：[MIT](LICENSE)。另见[第三方声明](THIRD_PARTY_NOTICES.md)与[配图说明](docs/images/readme/README.md)。

@@ -33,6 +33,7 @@ it("help clearly identifies unavailable Goal capabilities", () => {
 
 it("rejects unsupported npm installation and conflicting approval modes before creating state", () => {
   expect(() => goalCommand(["Create a report", "--artifact", "--install=npm"], root)).toThrow("requires a VM backend")
+  expect(() => goalCommand(["Create a report", "--artifact", "--install=npm"], root)).toThrow("zapVM execution is disabled")
   expect(() => goalCommand(["Create a report", "--install=other"], root)).toThrow("Invalid Goal dependency installation")
   expect(() => goalCommand(["Create a report", "--accept-edits", "--permission-mode=bypassPermissions"], root)).toThrow("Invalid Goal permission mode")
   expect(() => goalCommand(["Create a report", "--permission-mode=unknown"], root)).toThrow("Invalid Goal permission mode")
