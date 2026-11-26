@@ -42,7 +42,7 @@ export class OpenAIResponsesProvider implements LLMProvider {
   setVisionSupported(supported: boolean): void { this.formatter.setVisionSupported(supported); }
   getImageTokenContext(options?: LLMCallOptions) { return this.formatter.getImageTokenContext(options); }
 
-  private async requestClient(request: ProviderRequest, sessionId?: string): Promise<OpenAI> {
+  private async requestClient(request: ProviderRequest, sessionAffinity?: string): Promise<OpenAI> {
     const codex = this.options.codex;
     if (!codex) return this.client;
     const credentials = await request.wait(codex.getCredentials(request.signal));
@@ -50,8 +50,7 @@ export class OpenAIResponsesProvider implements LLMProvider {
     // OAuth tokens are never sent to a user-configurable endpoint/client.
     return new OpenAI({ baseURL: CODEX_RESPONSES_BASE_URL, apiKey: credentials.accessToken, maxRetries: 0,
       fetch: codex.fetch, defaultHeaders: { originator: "zap",
-        // ChatGPT uses session-id for cache affinity. SDK session IDs can contain arbitrary text.
-        ...(sessionId ? { "session-id": createHash("sha256").update(sessionId).digest("hex") } : {}),
+        ...(sessionAffinity ? { "session-id": sessionAffinity } : {}),
         ...(credentials.accountId ? { "ChatGPT-Account-ID": credentials.accountId } : {}) } });
   }
 
@@ -192,12 +191,18 @@ export class OpenAIResponsesProvider implements LLMProvider {
     }
     const usage = response.usage;
     const cached = usage?.input_tokens_details?.cached_tokens;
+    const written = usage?.input_tokens_details?.cache_write_tokens;
     return {
       type: toolCalls.length ? "tool_call" : "text", text,
       toolCalls: toolCalls.length ? toolCalls : undefined,
       finishReason: truncated ? "length" : toolCalls.length ? "tool_calls" : "stop",
-      usage: { inputTokens: Math.max(0, (usage?.input_tokens ?? 0) - (cached ?? 0)), outputTokens: usage?.output_tokens ?? 0,
-        providerUsageReported: !!usage, ...(cached !== undefined ? { cacheReadInputTokens: cached } : {}) },
+      usage: {
+        inputTokens: Math.max(0, (usage?.input_tokens ?? 0) - (cached ?? 0) - (written ?? 0)),
+        outputTokens: usage?.output_tokens ?? 0,
+        providerUsageReported: !!usage,
+        ...(cached !== undefined ? { cacheReadInputTokens: cached } : {}),
+        ...(written !== undefined ? { cacheCreationInputTokens: written } : {}),
+      },
       raw: layout.length ? { openaiResponses: { items: layout } } : undefined,
     };
   }
@@ -246,8 +251,12 @@ export class OpenAIResponsesProvider implements LLMProvider {
 
   private async *streamResponse(messages: Message[], tools: ToolDefinition[] | undefined, opts: LLMCallOptions | undefined, request: ProviderRequest): AsyncIterable<LLMChunk> {
     const body = this.body(messages, tools, opts, true);
+    // Derive both routing fields from the same header-safe conversation identity.
+    const sessionAffinity = this.options.codex && opts?.sessionId
+      ? createHash("sha256").update(opts.sessionId).digest("hex") : undefined;
+    if (sessionAffinity && body.prompt_cache_key === undefined) body.prompt_cache_key = sessionAffinity;
     request.measureBody(body, this.options.maxRequestBytes, `responses:${this.options.codex ? CODEX_RESPONSES_BASE_URL : this.options.baseURL ?? this.options.client?.baseURL ?? "default"}`);
-    const client = await this.requestClient(request, opts?.sessionId);
+    const client = await this.requestClient(request, sessionAffinity);
     const stream = await request.wait(client.responses.create({ ...body, stream: true }, { signal: request.signal, maxRetries: 0 }));
     request.responseReceived();
     let emittedText = "";
