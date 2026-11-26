@@ -27,7 +27,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
-          go-version-file: zapvm/go.mod
+          go-version: stable
           cache: false
       - name: Scan Git history (redacted)
         run: go run github.com/zricethezav/gitleaks/v8@v8.24.3 git --log-opts="--all" --redact --no-banner .

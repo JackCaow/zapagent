@@ -1,6 +1,0 @@
-/bin/
-/.cache/
-/.build/
-/dist/
-*.log
-*.sock

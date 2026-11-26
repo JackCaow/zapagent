@@ -1,10 +1,8 @@
 # Third-party notices
 
-The root CLI and SDK use MIT; `zapvm/` retains Apache-2.0 and its
-[NOTICE](zapvm/NOTICE). Dependencies retain their respective licenses.
+The CLI and SDK use MIT. Dependencies retain their respective licenses.
 
-The exact JavaScript dependency versions are recorded in `bun.lock`; Go
-dependencies are recorded in `zapvm/go.mod` and `zapvm/go.sum`. These manifests
+The exact JavaScript dependency versions are recorded in `bun.lock`. This manifest
 are inventories, not substitutes for license texts. Standalone binaries bundle
 Bun and JavaScript dependencies, including native components. Release maintainers
 must inventory the actual shipped components and include required attribution,
@@ -17,10 +15,8 @@ versions, declared licenses, and hashes of the included notices. The upstream
 the original [v3.2.1 license](https://github.com/facebook/yoga/blob/v3.2.1/LICENSE)
 from [the retained notice](third_party/yoga-layout/LICENSE).
 
-VM image distributions additionally follow
-[zapvm/THIRD_PARTY_NOTICES.md](zapvm/THIRD_PARTY_NOTICES.md): inspect the image's
-SPDX SBOM and satisfy corresponding-source requirements. Do not publish an image
-with unknown licenses or missing required notices/source.
+zapVM and its images are distributed from [their own repository](https://github.com/JackCaow/zapVM) with
+their own Apache-2.0 license and notices.
 
 ## Modified Ink component
 

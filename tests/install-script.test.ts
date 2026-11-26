@@ -98,55 +98,39 @@ describe("install.sh", () => {
     }
   })
 
-  it("installs a verified runtime archive into the Zap data directory", () => {
-    const tmp = mkdtempSync(join(tmpdir(), "zap-runtime-install-test-"))
+  it("installs only the CLI and leaves an existing zapVM runtime untouched", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "zap-runtime-skip-test-"))
     const fakeBin = join(tmp, "fake-bin")
     const installDir = join(tmp, "install", "bin")
     const dataDir = join(tmp, "data")
-    const packageRoot = join(tmp, "package")
-    const archive = join(tmp, "zap-linux-x64.runtime.tar.gz")
-    const daemonStopped = join(tmp, "daemon-stopped")
+    const runtimeFetched = join(tmp, "runtime-fetched")
+    const daemonTouched = join(tmp, "daemon-touched")
     try {
-      mkdirSync(join(packageRoot, "zapvm-runtime", "bin"), { recursive: true })
-      mkdirSync(join(packageRoot, "zapvm-runtime", "images"), { recursive: true })
-      writeFileSync(join(packageRoot, "zap"), "runtime zap binary\n")
-      writeFileSync(join(packageRoot, "zapvm-runtime", "bin", "zapvm"), "zapvm host\n")
-      writeFileSync(join(packageRoot, "zapvm-runtime", "image-public.pem"), "trusted public key\n")
-      writeFileSync(join(packageRoot, "zapvm-runtime", "images", "active.json"), "{}\n")
-      expect(spawnSync("tar", ["-czf", archive, "-C", packageRoot, "."]).status).toBe(0)
-
       mkdirSync(fakeBin, { recursive: true })
       writeExecutable(join(fakeBin, "uname"), [
         "#!/bin/sh",
         'if [ "$1" = "-s" ]; then echo Linux; else echo x86_64; fi',
       ].join("\n"))
-      writeFakeRuntimeCurl(join(fakeBin, "curl"), archive)
+      // An older release still lists a runtime archive; it must not be fetched.
+      writeFakeCurlWithRuntimeAssets(join(fakeBin, "curl"), "cli zap binary\n", runtimeFetched)
       mkdirSync(join(dataDir, "runtime", "zapvm", "bin"), { recursive: true })
+      writeFileSync(join(dataDir, "runtime", "zapvm", "image-public.pem"), "existing key\n")
       writeExecutable(join(dataDir, "runtime", "zapvm", "bin", "zapvm"), [
         "#!/bin/sh",
-        `marker='${daemonStopped.replace(/'/g, "'\\''")}'`,
-        'if [ "$1 $2" = "daemon status" ]; then [ ! -f "$marker" ]; exit $?; fi',
-        'if [ "$1 $2" = "daemon stop" ]; then : > "$marker"; exit 1; fi',
-        "exit 2",
+        `: > '${daemonTouched.replace(/'/g, "'\\''")}'`,
+        "exit 0",
       ].join("\n"))
 
       const proc = spawnSync("sh", [installScript], {
-        env: {
-          ...process.env,
-          PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
-          ZAP_INSTALL_DIR: installDir,
-          ZAPCODE_DATA_DIR: dataDir,
-        },
+        env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH ?? ""}`, ZAP_INSTALL_DIR: installDir, ZAPCODE_DATA_DIR: dataDir },
         encoding: "utf-8",
       })
 
       expect(proc.status).toBe(0)
-      expect(proc.stdout).toContain("Stopping the existing zapVM daemon")
-      expect(existsSync(daemonStopped)).toBe(true)
-      expect(readFileSync(join(installDir, "zap"), "utf-8")).toBe("runtime zap binary\n")
-      expect(readFileSync(join(dataDir, "runtime", "zapvm", "image-public.pem"), "utf-8"))
-        .toBe("trusted public key\n")
-      expect(existsSync(join(dataDir, "runtime", "zapvm", "images", "active.json"))).toBe(true)
+      expect(readFileSync(join(installDir, "zap"), "utf-8")).toBe("cli zap binary\n")
+      expect(existsSync(runtimeFetched)).toBe(false)
+      expect(existsSync(daemonTouched)).toBe(false)
+      expect(readFileSync(join(dataDir, "runtime", "zapvm", "image-public.pem"), "utf-8")).toBe("existing key\n")
     } finally {
       rmSync(tmp, { recursive: true, force: true })
     }
@@ -183,8 +167,8 @@ function writeFakeCurl(path: string, binary: string, checksumOverride?: string):
   ].join("\n"))
 }
 
-function writeFakeRuntimeCurl(path: string, archive: string): void {
-  const archiveChecksum = createHash("sha256").update(readFileSync(archive)).digest("hex")
+function writeFakeCurlWithRuntimeAssets(path: string, binary: string, runtimeMarker: string): void {
+  const checksum = createHash("sha256").update(binary).digest("hex")
   writeExecutable(path, [
     "#!/bin/sh",
     'out=""',
@@ -198,11 +182,12 @@ function writeFakeRuntimeCurl(path: string, archive: string): void {
     "done",
     'if [ -z "$out" ]; then',
     '  printf \'{"tag_name":"v9.9.9","assets":[{"url":"https://api.github.com/repos/test/repo/releases/assets/1","name":"zap-linux-x64"},{"url":"https://api.github.com/repos/test/repo/releases/assets/2","name":"zap-linux-x64.sha256"},{"url":"https://api.github.com/repos/test/repo/releases/assets/3","name":"zap-linux-x64.runtime.tar.gz"},{"url":"https://api.github.com/repos/test/repo/releases/assets/4","name":"zap-linux-x64.runtime.tar.gz.sha256"}]}\\n\'',
-    'elif echo "$url" | grep -q "/assets/4$"; then',
-    `  printf '${archiveChecksum}  zap-linux-x64.runtime.tar.gz\\n' > "$out"`,
-    'elif echo "$url" | grep -q "/assets/3$"; then',
-    `  cp '${archive.replace(/'/g, "'\\''")}' "$out"`,
+    'elif echo "$url" | grep -q "/assets/2$"; then',
+    `  printf '${checksum}  zap-linux-x64\\n' > "$out"`,
+    'elif echo "$url" | grep -q "/assets/1$"; then',
+    `  printf '${binary.replace(/'/g, "'\\''")}' > "$out"`,
     "else",
+    `  : > '${runtimeMarker.replace(/'/g, "'\\''")}'`,
     "  exit 22",
     "fi",
   ].join("\n"))
