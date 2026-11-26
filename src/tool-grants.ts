@@ -1,6 +1,6 @@
 import { dirname, isAbsolute, join, relative, resolve } from "node:path"
 import { homedir } from "node:os"
-import { WORKSPACE_EDIT_TOOLS, type PermissionRule } from "./permissions.js"
+import { WORKSPACE_EDIT_TOOLS, isScopedAgentTool, type PermissionRule } from "./permissions.js"
 import { canonicalizeWithNearestExistingAncestorSync } from "../zapsdk/builtin-tools/filesystem.js"
 
 export interface ToolGrantRequest {
@@ -43,7 +43,7 @@ function expandToolGrantRules(request: ToolGrantRequest, availableTools: readonl
   if (!tools.length) throw new Error("Select at least one tool")
   for (const tool of tools) {
     if (!availableTools.includes(tool) || !/^[\w.-]+$/.test(tool)) throw new Error(`Tool is not available: ${tool}`)
-    if (tool === "delegate_agent") throw new Error("delegate_agent requires a provider/cwd-scoped approval")
+    if (isScopedAgentTool(tool)) throw new Error(`${tool} requires an agent/cwd-scoped approval`)
   }
   if (request.resource.kind === "all") return tools.map(tool => ({ pattern: tool, type: "allow" }))
   const filesOnly = tools.every(tool => FILE_GRANT_TOOLS.includes(tool))

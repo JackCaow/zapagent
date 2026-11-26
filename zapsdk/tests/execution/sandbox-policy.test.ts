@@ -129,8 +129,10 @@ describe("sandbox policy construction", () => {
       effects,
       grant: createCapabilityGrant("call", effects, Date.now() + 60_000),
     });
-    const prepared = context.prepareShell("true", { cwd: root });
+    const prepared = context.prepareCommand("git", ["status"], { cwd: root });
     try {
+      expect(prepared.args.slice(-2)).toEqual(["git", "status"]);
+      expect(prepared.args).not.toContain(".");
       const gitIndex = prepared.args.findIndex((arg, index) => (
         arg === "--ro-bind" && prepared.args[index + 1] === context.protectedPaths[0]
       ));

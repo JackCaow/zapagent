@@ -15,7 +15,8 @@ import {
 import { TokenCounter } from "../../zapsdk/context/token-counter.js"
 import { resolveActiveContextLimits } from "../context-budget.js"
 import type { CheckpointManager } from "../../zapsdk/checkpoint/index.js"
-import { conversation, autoMemory } from "../singletons.js"
+import { acpAgents, conversation, autoMemory } from "../singletons.js"
+import { remoteAgents } from "../agent/remote-agent.js"
 import { dispatchMCPCommand } from "./mcp.js"
 import { executeGoalCommand } from "../goal-session.js"
 import {
@@ -324,6 +325,12 @@ export function dispatchSlashCommand(
   const displayCommand = meta.displayText ? parseCommand(meta.displayText) : null
 
   const dispatchAgentTurn = (...args: Parameters<DispatchSlashCommandDeps["dispatchUserTurn"]>): boolean | Promise<boolean> => {
+    // /review, /commit, /init and skills carry zap prompts written for zap's
+    // own tools; an external agent would silently ignore them.
+    if (deps.configRef.current.activeAgent) {
+      deps.addLog("error", `${displayCommand?.type ?? cmd.type} runs on zap's own model, not ${deps.configRef.current.activeAgent}. /agent zap switches back.`)
+      return true
+    }
     meta.onInputRequired?.()
     if (!precheckProvider(deps)) return true
     return deps.dispatchUserTurn(...args).then(result => {
@@ -346,8 +353,9 @@ export function dispatchSlashCommand(
 
   switch (cmd.type) {
     case "exit":
-      deps.exit()
-      return true
+      // Close an external agent gracefully (bounded) before leaving.
+      return Promise.race([remoteAgents.reset(), new Promise(resolve => setTimeout(resolve, 3_500))])
+        .then(() => { deps.exit(); return true })
 
     case "clear": {
       // Wipe everything to a fresh-boot state. Sequence matters: write the
@@ -357,6 +365,7 @@ export function dispatchSlashCommand(
       // top-left those erases just no-op against blank rows.
       wipeTerminalScrollback()
       resetConversationState()
+      void remoteAgents.reset()
       deps.bumpTranscript()
       return true
     }
@@ -377,6 +386,8 @@ export function dispatchSlashCommand(
       }
       wipeTerminalScrollback()
       resetConversationState()
+      // The external agent's own context belongs to the old session.
+      void remoteAgents.reset()
       deps.checkpointRef.current.setSessionId(getCurrentSessionId())
       deps.bumpTranscript()
       return true
@@ -415,6 +426,39 @@ export function dispatchSlashCommand(
       }
       deps.updateConfig(next)
       deps.addToast(`model → ${cmd.value}`)
+      return true
+    }
+
+    case "set_agent": {
+      const value = cmd.value ?? ""
+      const current = deps.configRef.current.activeAgent
+      if (!value) {
+        const lines = acpAgents.length
+          ? acpAgents.map(agent => `  ${agent.id === current ? "›" : " "} ${agent.id.padEnd(10)} ${agent.name ?? ""}${agent.selfGoverned ? " · edits files itself (no zap checkpoints)" : ""}`)
+          : ["  (no ACP agents found on PATH or in acpAgents)"]
+        deps.addLog("system", [`Conversation agent: ${current ?? "zap"}`, `  ${current ? " " : "›"} zap        zap's own model`, ...lines,
+          "Switch with /agent <id>; /agent zap switches back."].join("\n"))
+        return true
+      }
+      if (value === "zap" || value === "off") {
+        void remoteAgents.reset()
+        if (current) {
+          deps.updateConfig({ ...deps.configRef.current, activeAgent: undefined })
+          deps.addToast("agent → zap")
+        }
+        return true
+      }
+      const spec = acpAgents.find(agent => agent.id === value)
+      if (!spec) {
+        deps.addLog("error", `Unknown ACP agent: ${value}. Available: ${["zap", ...acpAgents.map(agent => agent.id)].join(", ")}`)
+        return true
+      }
+      if (value !== current) {
+        void remoteAgents.reset()
+        deps.updateConfig({ ...deps.configRef.current, activeAgent: value })
+        deps.addToast(`agent → ${value}`)
+        deps.addLog("system", `Messages now go to ${spec.name ?? spec.id} over ACP. Its file reads/writes and permission requests use zap's approvals${spec.selfGoverned ? "; it also edits files itself, which zap checkpoints do not cover" : ""}. /agent zap switches back.`)
+      }
       return true
     }
 

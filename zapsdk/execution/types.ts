@@ -47,6 +47,9 @@ export interface SandboxCommandOptions {
   temporaryDirectoryEnvironment?: string[];
   /** Trusted adapter endpoints, scoped to this command; explicit host denials still win. */
   networkDomains?: string[];
+  /** "pipe" keeps the child's stdin writable for stdio protocols (ACP).
+   * Default closes it right after launch so commands observe EOF. */
+  stdin?: "close" | "pipe";
 }
 
 export interface SandboxExecutionContext {

@@ -23,7 +23,7 @@ import { buildCustomSystemPrompt, buildSystemPrompt, deriveCompaction, getActive
 import { appendUsage, saveLastOutput, getCurrentSessionId } from "../session.js"
 import type { AppConfig } from "../config.js"
 import type { LogType, ToolCallInfo, UserImageRef } from "../ui/types.js"
-import { appLogger, permissionManager, delegateEventBridge, mdStore, globalMdStore, globalMemoryDir, memorySemanticRetriever, tokenAccounting } from "../singletons.js"
+import { acpAgents, appLogger, permissionManager, delegateEventBridge, mdStore, globalMdStore, globalMemoryDir, memorySemanticRetriever, tokenAccounting } from "../singletons.js"
 import { createStreamingPreview } from "../agent/streamingPreview.js"
 import {
   buildMemoryQueryHistoryFromLogs,
@@ -43,6 +43,7 @@ import { watchSession } from "../watch/integration.js"
 import { registerHostRuntime } from "../agent/hostProtocol.js"
 import { createProjectRuntimeEventStore, recoverProjectRuntimeOutcome } from "../agent/runtimeEventStore.js"
 import { contextTokensFromRunUsage, createRunHandlers } from "../agent/wireRunHandlers.js"
+import { runRemoteTurn } from "../agent/remote-turn.js"
 import { appendCacheableSystemSection, buildRuntimePromptToolInputs } from "../agent/systemPrompt.js"
 import { createPromptSectionDiagnostics, buildPromptCacheDiagnostics, type PromptCacheDiagnostics } from "../agent/promptDiagnostics.js"
 import { persistRunUsage } from "../agent/usagePersistence.js"
@@ -588,6 +589,54 @@ export function useAgentRunner({
     let goalMeter: ReturnType<typeof goalTurnMeter> | undefined
     let preview: ReturnType<typeof createStreamingPreview> | null = null
     let handlers: ReturnType<typeof createRunHandlers> | null = null
+
+    // Session mode: an external ACP agent answers this turn instead of zap's loop.
+    const remoteSpec = config.activeAgent ? acpAgents.find(agent => agent.id === config.activeAgent) : undefined
+    if (config.activeAgent) {
+      try {
+        if (!remoteSpec) throw new Error(`ACP agent ${config.activeAgent} is not available; /agent zap switches back`)
+        if (invocation?.goalTurn) throw new Error("/goal runs on zap's own model; /agent zap switches back")
+        if (systemPrompt) throw new Error("This command runs on zap's own model; /agent zap switches back")
+        completedResult = await runRemoteTurn({
+          spec: remoteSpec, cwd, conversation, currentConfig: config, controller,
+          createPreview: () => {
+            const next = createStreamingPreview({ addLog, setStreamingText, setIsStreaming, setThinkingText, setIsThinking, getIsFrozen: getIsFrozen ?? (() => false) })
+            registerStaticFlushCallback?.(() => next.onStaticFlushed())
+            return next
+          },
+          saveLastOutput,
+          onInputAccepted: invocation?.onInputAccepted,
+          checkpointTurn: checkpoint ? (() => {
+            const turnStartIndex = conversation.getAllMessages().length
+            const position = () => ({ journalLogIndex: turnStartLogIndexRef.current, uiLogIndex: turnStartUiLogIndexRef.current })
+            return {
+              begin: () => checkpoint.beginTurn(turnStartIndex, position(), task),
+              end: () => checkpoint.makeSnapshot(turnStartIndex, position()),
+            }
+          })() : undefined,
+          setStatus, setStep, setActiveTool, setActiveToolBytes, setProviderRequest, setOutputThroughput,
+          addLog, replaceLog, peekNextLogId, compactLogs,
+          onAgentRunState: (run) => { agentRunStore.apply(run) },
+        }, task, images)
+      } catch (err) {
+        caughtError = err
+        if (!remoteSpec || invocation?.goalTurn || systemPrompt) addLog("error", err instanceof Error ? err.message : String(err))
+      } finally {
+        if (controller.signal.aborted) {
+          setOutputThroughput(undefined)
+          addLog("system", "(interrupted)")
+        }
+        running.current = false
+        abortRef.current = null
+        setActiveTool("")
+        setStatus("ready")
+        setProviderRequest(undefined)
+        setStep(0)
+        externalSignal?.removeEventListener("abort", forwardExternalAbort)
+      }
+      if (invocation?.propagateErrors && caughtError) throw caughtError
+      return completedResult
+    }
 
     try {
       const objects = agentRef.current

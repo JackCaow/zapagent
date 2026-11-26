@@ -198,6 +198,7 @@ also skip CI, headless output and ACP; explicit `zap update` still checks.
 | `/connect` | Set up provider & API key |
 | `/model` | Search and switch models across all configured connections |
 | `/effort` | Set reasoning effort (`off`, `cycle`, or a provider value) |
+| `/agent` | List external ACP agents (`agy`, `codex`); `/agent <id>` sends messages to that agent, `/agent zap` switches back |
 | `/mode` | Set permission mode (`default`, `acceptEdits`, `plan`, `bypass`) or a preset: `strict`, `balanced`, `autonomous` |
 | `/permissions` | Manage active permission rules |
 | `/sessions` | Browse saved sessions |

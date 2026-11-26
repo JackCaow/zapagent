@@ -94,7 +94,7 @@ export function scopeGoalEvent(event: AgentEvent, scope: string): AgentEvent {
   const value = { ...event } as unknown as Record<string, any>
   for (const key of ["id", "subagentId", "requestId"]) if (typeof value[key] === "string") value[key] = `${scope}:${value[key]}`
   if (value.path) value.path = value.path.map((id: string) => `${scope}:${id}`)
-  if (value.type === "content_final" && value.kind === "tool_result" && ["agent", "delegate_agent"].includes(value.toolName)
+  if (value.type === "content_final" && value.kind === "tool_result" && ["agent", "delegate_agent", "acp_agent"].includes(value.toolName)
     && typeof value.result?.meta?.subagentId === "string") {
     value.result = { ...value.result, meta: { ...value.result.meta, subagentId: `${scope}:${value.result.meta.subagentId}` } }
   }

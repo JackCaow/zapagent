@@ -88,7 +88,7 @@ export class DefaultExecutionProcessBroker implements ExecutionProcessBroker {
         detached: process.platform !== "win32",
         shell: false,
       });
-      child.stdin?.end();
+      if (options.stdin !== "pipe") child.stdin?.end();
     } catch (error) {
       release?.();
       throw error;

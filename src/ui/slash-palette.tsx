@@ -22,6 +22,7 @@ export const BUILTIN_COMMANDS: SlashEntry[] = [
   { name: "/connect",     desc: "Set up provider & API key" },
   { name: "/model",       desc: "Show or switch model" },
   { name: "/effort",      desc: "Set reasoning effort (off | cycle | <value>)" },
+  { name: "/agent",       desc: "Talk to an external ACP agent (agy | codex) · /agent zap" },
   { name: "/mode",        desc: "Permission mode (default | acceptEdits | plan | bypass)" },
   { name: "/permissions", desc: "Manage active permission rules" },
   { name: "/sessions",    desc: "Browse saved sessions" },

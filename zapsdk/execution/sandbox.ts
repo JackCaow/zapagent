@@ -1,7 +1,7 @@
 import { prepareRootGit } from "./root-git.js";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, rmdirSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { delimiter, dirname, join, resolve } from "node:path";
+import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import type {
   OsSandbox,
   SandboxCommandOptions,
@@ -132,7 +132,6 @@ abstract class CommandWrappingSandbox implements OsSandbox {
     ): SandboxedCommand => {
       mkdirSync(this.tempRoot, { recursive: true, mode: 0o700 });
       const tempDir = mkdtempSync(join(this.tempRoot, "run-"));
-      const canonicalExecutable = canonicalPath(executable);
       let proxy: NetworkProxy | undefined;
       let wrapped: { executable: string; args: string[]; release?: () => void } | undefined;
       try {
@@ -150,7 +149,9 @@ abstract class CommandWrappingSandbox implements OsSandbox {
           cwd: canonicalPath(resolve(options.cwd)),
           readablePaths: [...new Set([
             ...readablePaths,
-            dirname(canonicalExecutable),
+            // Bare commands resolve on the sandbox PATH. Only an explicit
+            // absolute executable needs an additional host directory mount.
+            ...(isAbsolute(executable) ? [dirname(canonicalPath(executable))] : []),
             canonicalPath(tempDir),
           ])],
           writablePaths,
@@ -376,9 +377,10 @@ function pathIsWithin(path: string, root: string): boolean {
 }
 
 function missingMountParents(path: string, systemRoots: string[]): string[] {
+  if (!isAbsolute(path)) throw new Error("Sandbox mount paths must be absolute");
   const parents: string[] = [];
   let current = dirname(path);
-  while (current !== "/" && !systemRoots.some((root) => pathIsWithin(current, root))) {
+  while (dirname(current) !== current && !systemRoots.some((root) => pathIsWithin(current, root))) {
     parents.push(current);
     current = dirname(current);
   }

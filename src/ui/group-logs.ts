@@ -87,7 +87,7 @@ export function groupLogs(logs: LogEntry[]): RenderItem[] {
   const groupKeyByParent = new Map<LogEntry, { key: string; started: boolean }>()
   for (const log of logs) {
     if (log.agentPath?.length) continue
-    if (log.tool?.name !== "agent" && log.tool?.name !== "delegate_agent") continue
+    if (log.tool?.name !== "agent" && log.tool?.name !== "delegate_agent" && log.tool?.name !== "acp_agent") continue
     const sid = (log.tool.meta as { subagentId?: string } | undefined)?.subagentId
     if (sid && !parentBySubagent.has(sid)) {
       parentBySubagent.set(sid, log)

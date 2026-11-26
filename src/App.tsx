@@ -73,6 +73,7 @@ import { useAskUser } from "./hooks/useAskUser.js"
 import { usePalettes } from "./hooks/usePalettes.js"
 import { VM_EXECUTION_DISABLED_NOTICE, vmExecutionRequestedButDisabled } from "./execution-environment.js"
 import { useAgentObjects } from "./hooks/useAgentObjects.js"
+import { remoteAgents } from "./agent/remote-agent.js"
 import { useMCPSubsystem } from "./hooks/useMCPSubsystem.js"
 import { useSamplingHandler } from "./hooks/useSamplingHandler.js"
 import { setMCPManager } from "./singletons.js"
@@ -751,7 +752,8 @@ export function App() {
   )
 
   const precheckProvider = useCallback(
-    () => isProviderReady(configRef, addLog),
+    // An external ACP agent brings its own model and credentials.
+    () => !!configRef.current.activeAgent || isProviderReady(configRef, addLog),
     [addLog],
   )
 
@@ -875,6 +877,8 @@ export function App() {
       process.stdout.write("\x1b[H\x1b[2J\x1b[3J")
     }
     conversation.clear()
+    // The external agent's own context goes with the conversation.
+    void remoteAgents.reset()
     restoreMemoryQueryHistoryFromLogs([])
     setLogs([])
     todosRef.current = []
@@ -926,7 +930,7 @@ export function App() {
 
   // ── Render ──
   const providerDisplayName = getProviderDisplayName(config)
-  const hasKey = configHasApiKey(config)
+  const hasKey = !!config.activeAgent || configHasApiKey(config)
   const welcomeHeader = useMemo(() => <Welcome hasApiKey={hasKey} />, [hasKey])
   const mcpFooterSummary = useMemo(
     () => summariseMCPStatuses(mcp.snapshots),
@@ -975,6 +979,8 @@ export function App() {
 
   const restoreSession = (loaded: DialogSessionRestore) => {
     const { logs: restored, messages, loadedSessionId, metadata } = loaded
+    // A restored session never continues the current agent's context.
+    void remoteAgents.reset()
     appLogger.info("session_restore_begin", {
       sessionId: loadedSessionId,
       restoredLogs: restored.length,
@@ -1151,7 +1157,7 @@ export function App() {
       {!inModal && !pendingApproval && !pendingPlan && !pendingQuestions && (
         <Prompt
           config={config}
-          providerLabel={`${providerDisplayName}/${config.active.model}`}
+          providerLabel={config.activeAgent ? `ACP/${config.activeAgent}` : `${providerDisplayName}/${config.active.model}`}
           hasActiveKey={hasKey}
           inputValue={inputValue}
           onInput={paste.handleInput}
@@ -1254,6 +1260,8 @@ export function App() {
               addToast(`Restored ${result.succeeded.length} tracked files${result.skipped?.length ? `; skipped ${result.skipped.length}` : ""}`);
               closeDialog(); return;
             }
+            // The agent cannot rewind its own context; start it fresh.
+            void remoteAgents.reset();
             const draft = rewindDraft(snap, logs);
             setInputValue(draft.text);
             setPendingImages([]);
@@ -1331,13 +1339,14 @@ export function App() {
         <Footer
           outputThroughput={outputThroughput}
           cwd={cwdShort}
-          provider={providerDisplayName}
-          model={config.active.model}
-          effort={config.active.providerId ? getEffort(config, config.active.providerId) : undefined}
+          provider={config.activeAgent ? "ACP" : providerDisplayName}
+          model={config.activeAgent ?? config.active.model}
+          effort={!config.activeAgent && config.active.providerId ? getEffort(config, config.active.providerId) : undefined}
           isRunning={isRunning}
           step={step}
           maxSteps={config.maxSteps}
           contextBudget={contextBudget}
+          hideContext={!!config.activeAgent}
           hasApiKey={hasKey}
           showWelcome={logs.length === 0 && !isRunning && !isStreaming}
           shellMode={isShellMode()}

@@ -39,7 +39,7 @@ describe("GoalBudgetLedger", () => {
     expect(snapshot.totals).toMatchObject({ modelCalls: 181, providerAttempts: 181, toolCalls: 1201, tokensUsed: 181 * 10011 });
     expect(ledger.reserve("unlimited", 1, request("verifier", { role: "verifier" })).ok).toBe(true);
     ledger.close();
-  });
+  }, 30_000); // More than 1,700 durable SQLite transactions on the runner's filesystem.
 
   it("survives reopen, counts fresh and cached tokens once, and rejects a duplicate or conflicting settlement", () => {
     const file = fixture();

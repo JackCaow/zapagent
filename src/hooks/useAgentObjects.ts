@@ -6,6 +6,7 @@ import type { ApprovalCallback } from "../../zapsdk/tools/executor.js"
 import type { SkillDefinition } from "../../zapsdk/skills/types.js"
 import { buildAgentObjects } from "../agent-factory.js"
 import { delegateProvidersReady, mdStore, permissionManager } from "../singletons.js"
+import { remoteAgents } from "../agent/remote-agent.js"
 import type { AgentObjects } from "../agent/types.js"
 import { REQUEST_CAPABILITIES_TOOL } from "../capabilities.js"
 import { requestCapabilitiesTool } from "../request-capabilities-tool.js"
@@ -56,6 +57,13 @@ export function useAgentObjects(opts: UseAgentObjectsOptions & {
 
   const build = () => {
     const objs = buildAgentObjects(config, onApproval, todoStore, planCallbacks, checkpoint, skillsRef.current, undefined, undefined, undefined, undefined, askUserCallbacks)
+    // The live ACP session (session mode) asks through the current gates.
+    remoteAgents.host.approve = onApproval
+    remoteAgents.host.trackEdit = checkpoint?.createEditTracker()
+    // Agents run on the host, outside zap's OS sandbox.
+    remoteAgents.host.blocked = config.allowUnsandboxedCommands === false
+      ? "External agents run outside zap's OS sandbox, which allowUnsandboxedCommands: false forbids. /agent zap switches back."
+      : undefined
     permissionManager.setSandboxConfined(objs.sandboxConfined, config.autoAllowSandboxedCommands !== false)
     permissionManager.setSandboxNetworkPolicy(objs.sandboxNetworkPolicy)
     permissionManager.setSandboxExcludedCommands(config.allowUnsandboxedCommands !== false ? config.sandboxExcludedCommands : undefined)

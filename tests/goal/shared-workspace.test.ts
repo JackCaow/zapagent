@@ -72,10 +72,10 @@ for (const mode of ["pass", "output", "reject", "machine", "repair", "failed-nee
         const priorVerdict = body.messages.find((m: any) => m.role === "assistant" && typeof m.content === "string" && m.content.includes('"status":'))
         const needsRepair = mode === "repair" && verificationCalls++ === 0
         if (mode.startsWith("verifier-shell") && reviewTools.includes("bash") && !reviewed.length) {
-          delta = call("independent-check", "bash", mode === "verifier-shell-steps" ? { check_steps: ["pwd", "cat report.txt"] } : { command: mode === "verifier-shell-denied" ? "touch forbidden.txt" : mode === "verifier-shell-abbrev-denied" ? "sort --out=forbidden.txt report.txt" : "find . -maxdepth 1 -type d | wc -l" })
+          delta = call("independent-check", "bash", mode === "verifier-shell-steps" ? { check_steps: ["pwd", "cat report.txt"] } : { command: mode === "verifier-shell-denied" ? "touch forbidden.txt" : mode === "verifier-shell-abbrev-denied" ? "sort --out=forbidden.txt report.txt" : "find . -mindepth 1 -maxdepth 1 -type d ! -name '.*' | wc -l" })
         } else if (mode.startsWith("verifier-shell") && priorVerdict) delta = { content: priorVerdict.content }
         else {
-        if (mode === "verifier-shell" && reviewTools.includes("bash")) expect(String(reviewed[0]?.content).trim()).toContain("3")
+        if (mode === "verifier-shell" && reviewTools.includes("bash")) expect(String(reviewed[0]?.content).trim().split("\n").at(-1)?.trim()).toBe("2")
         if (mode === "verifier-shell-steps" && reviewTools.includes("bash")) expect(String(reviewed[0]?.content)).toContain("two")
         if (mode === "verifier-shell-abbrev-denied" && reviewTools.includes("bash")) expect(String(reviewed[0]?.content)).toContain("bash blocked in read-only mode")
         delta = { content: JSON.stringify({ status: mode === "contradictory-verdict" ? "passed" : mode === "failed-needs-input" ? "failed" : reject || needsRepair ? "unverified" : "passed", detail: mode === "output" ? "PRIVATE_VERIFIER_RECEIPT" : reject ? "Need external user input" : needsRepair ? "Read the actual report to supply the missing evidence" : "Observed report and two project directories verified", ...(reject || needsRepair ? { nextAction: needsRepair || mode === "contradictory-verdict" ? "repair" : "needs_input" } : {}) }) + (mode === "output" ? "</｜｜DSML｜｜ parameter>" : "") }

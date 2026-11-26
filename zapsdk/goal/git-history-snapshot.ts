@@ -199,7 +199,9 @@ export async function materializePrivateGitMetadata(repository: string, workspac
     await validate(repo);
     await mkdir(directory, { mode: 0o700 }); // exclusive: never replace a user's .git
     try {
-      await cp(repo, directory, { recursive: true, force: false, errorOnExist: true, verbatimSymlinks: true });
+      for (const name of await readdir(repo)) {
+        await cp(join(repo, name), join(directory, name), { recursive: true, force: false, errorOnExist: true, verbatimSymlinks: true });
+      }
       await validate(directory);
       await writeFile(join(directory, "config"), "[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n\tlogallrefupdates = true\n", { mode: 0o600 });
       await execute(git, directory, [`--git-dir=${directory}`, "read-tree", "HEAD"], deadline, undefined, undefined, undefined, directory);

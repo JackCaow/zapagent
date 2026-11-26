@@ -59,7 +59,7 @@ function formatToolLabel(name: string, args: Record<string, unknown> | undefined
 
 export function formatPendingToolsLabel(pendingTools: LogEntry[]): string {
   const agentTools = pendingTools.filter(log => (
-    log.tool?.name === "agent" || log.tool?.name === "delegate_agent"
+    log.tool?.name === "agent" || log.tool?.name === "delegate_agent" || log.tool?.name === "acp_agent"
   ))
   if (agentTools.length > 1) {
     const otherCount = pendingTools.length - agentTools.length
