@@ -93,7 +93,7 @@ export function ConnectDialog({ config, onSave, onCommit, onCancel }: Props) {
     <Box flexDirection="column" marginTop={1}>
       {config.providers.map((provider, i) => <Box key={provider.id} flexDirection="column">
         <Text color={i === index ? c.accent : c.text.primary}>{`${i === index ? "›" : " "} ${provider.name || "Unnamed connection"}`}</Text>
-        <Text color={c.text.faint}>{`  ${provider.authMode === "codex-oauth" ? "Codex Responses · ChatGPT OAuth" : `${provider.protocol ?? "openai"} · ${provider.apiKey ? "API key stored" : "no key"}`} · ${provider.models.length} saved models`}</Text>
+        <Text color={c.text.faint}>{`  ${provider.authMode === "codex-oauth" ? "Official Codex agent · local CLI login" : `${provider.protocol ?? "openai"} · ${provider.apiKey ? "API key stored" : "no key"}`} · ${provider.models.length} saved models`}</Text>
         <Text color={c.text.faint}>{`  ${provider.baseURL}`}</Text>
       </Box>)}
       <Text color={index === config.providers.length ? c.accent : c.text.primary}>{`${index === config.providers.length ? "›" : " "} + New connection`}</Text>
@@ -107,7 +107,7 @@ export function ConnectDialog({ config, onSave, onCommit, onCancel }: Props) {
     setModelTarget({ id: result.provider.id, setup: true })
   }} />
 
-  if (step === "preset") return <ProviderDirectory onCodex={() => setStep("codex")}
+  if (step === "preset") return <ProviderDirectory onCodex={() => setStep("codex")} onClaude={() => onCommit({ ...config, activeAgent: undefined, subscriptionAgent: "claude-code" })}
     onCancel={() => setStep("connections")} onSelect={provider => {
       setDraft({ catalogProviderId: provider?.id, name: provider?.name ?? "", baseURL: provider?.api ?? "", apiKey: "",
         protocol: provider?.protocol ?? "openai", authMode: "api-key" })

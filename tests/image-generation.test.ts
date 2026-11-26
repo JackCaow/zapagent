@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, expect, it } from "bun:test"
-import { mkdtempSync, realpathSync, readFileSync, rmSync, writeFileSync } from "node:fs"
-import { spawnSync } from "node:child_process"
-import { join, resolve } from "node:path"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { createElement } from "react"
 import { renderToString } from "ink"
@@ -12,27 +11,25 @@ import { createFormatter } from "../src/headless/formatter.js"
 import { GeneratedImageResult } from "../src/ui/generated-image.js"
 import { buildAgentObjects } from "../src/agent-factory.js"
 import { connectCodexProvider } from "../src/codex-provider.js"
-import { saveCodexCredentials } from "../src/codex-auth.js"
 import { selectCatalogModel } from "../src/provider-catalog.js"
-import { getDefaultConfig, saveAppConfig } from "../src/config.js"
+import { getDefaultConfig } from "../src/config.js"
 import { generateImageTool } from "../zapsdk/builtin-tools/generate-image.js"
 import { ToolExecutor } from "../zapsdk/tools/executor.js"
 import { ToolRegistry } from "../zapsdk/tools/registry.js"
 import { PermissionManager } from "../src/permissions.js"
 import { evaluateApprovalPolicy } from "../src/permission-policy.js"
-import { imagePreload } from "./fixtures/codex-image.js"
 const png = new Resvg('<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="white"/><circle cx="32" cy="32" r="24" fill="blue"/></svg>', { font: { loadSystemFonts: false } }).render().asPng()
 let root: string, previous: string | undefined
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), "zap-image-integration-")); previous = process.env.ZAPCODE_DATA_DIR; process.env.ZAPCODE_DATA_DIR = root })
 afterEach(() => { if (previous === undefined) delete process.env.ZAPCODE_DATA_DIR; else process.env.ZAPCODE_DATA_DIR = previous; rmSync(root, { recursive: true, force: true }) })
 
-it("only registers the image capability for Codex OAuth and rebinds child output paths", () => {
+it("leaves subscription image generation to the native runtime in parent and child registries", () => {
   const connected = connectCodexProvider(getDefaultConfig())
   const config = selectCatalogModel(connected.config, connected.provider.id, { id: "account-model", source: "manual" })
   const objects = buildAgentObjects(config, undefined, undefined, undefined, undefined, undefined, root, "disabled")
-  expect(objects.registry.has("generate_image")).toBe(true)
+  expect(objects.registry.has("generate_image")).toBe(false)
   const child = objects.createRegistryForCwd!(join(root, "child"))
-  expect(child.get("generate_image")!.definition.writesPath!({ output_path: "result.png" })).toEqual([join(root, "child/result.png")])
+  expect(child.has("generate_image")).toBe(false)
   config.providers[0].authMode = "none"
   expect(buildAgentObjects(config, undefined, undefined, undefined, undefined, undefined, root, "disabled").registry.has("generate_image")).toBe(false)
 })
@@ -71,27 +68,6 @@ it("renders a persisted thumbnail and exposes bounded artifact metadata in headl
   expect(event.generatedImage.thumbnail).toBeUndefined()
   expect(captured).not.toContain(png.toString("base64"))
 })
-
-it("runs the real headless host through model tool selection, image generation, persistence and final image result", async () => {
-  await saveCodexCredentials({ accessToken: "fixture-image-access", refreshToken: "fixture-image-refresh", expiresAt: Date.now() + 3600000 })
-  const connected = connectCodexProvider(getDefaultConfig())
-  saveAppConfig(join(root, "config.json"), selectCatalogModel(connected.config, connected.provider.id, { id: "account-model", source: "manual" }))
-  const preload = join(root, "preload.ts")
-  writeFileSync(preload, imagePreload(png.toString("base64")))
-  const run = spawnSync(process.execPath, ["--preload", preload, resolve("src/index.tsx"), "--print", "Generate an image", "--permission-mode", "bypassPermissions",
-    "--output-format", "stream-json", "--max-turns", "2", "--no-devtools"], { cwd: root, encoding: "utf8", timeout: 30000,
-    env: { ...process.env, ZAPCODE_DATA_DIR: root, ZAPCODE_VM: "0", ZAPCODE_EXECUTION: "local" } })
-  if (run.status !== 0) throw new Error(run.stdout + run.stderr)
-  const events = run.stdout.trim().split("\n").filter(line => line.startsWith("{")).map(line => JSON.parse(line))
-  const result = events.find(event => event.type === "tool_result" && event.name === "generate_image")
-  expect(result?.ok).toBe(true)
-  expect(result?.generatedImage).toMatchObject({ width: 64, height: 64, filePath: join(realpathSync(root), "generated/circle.png") })
-  expect(readFileSync(join(root, "generated/circle.png"))).toEqual(png)
-  expect(run.stdout + run.stderr).not.toContain("fixture-image-access")
-  expect(events.some(event => event.type === "text_delta" || event.type === "result")).toBe(true)
-}, 30000)
-
-
 
 it("keeps paid image generation subject to approval in acceptEdits and denies it in plan mode", async () => {
   const manager = new PermissionManager(root), registry = new ToolRegistry()

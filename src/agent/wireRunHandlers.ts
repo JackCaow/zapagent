@@ -24,7 +24,7 @@ import {
   type ContextUsageSource,
 } from "../context-budget.js"
 import { sanitizeContextDiagnostics } from "./diagnosticSanitizers.js"
-import { makePromptCacheScope } from "./cacheScope.js"
+import { conversationCacheScope } from "./cacheScope.js"
 import { CacheMemoryAuditTracker, type CacheMemoryAuditEntry } from "./cacheMemoryAudit.js"
 import type { MemoryUtilityCandidate, MemoryUtilityFingerprint } from "./memoryUtility.js"
 import type { AgentRunSnapshot } from "../../zapsdk/agent/run-state.js"
@@ -188,10 +188,7 @@ export interface RunHandlers {
 const SUBAGENT_TOOLS = new Set(["agent", "delegate_agent", "acp_agent"])
 
 export function createRunHandlers(deps: RunHandlersDeps): RunHandlers {
-  const cacheScope = makePromptCacheScope(
-    deps.currentConfig.active.providerId,
-    deps.currentConfig.active.model,
-  )
+  const cacheScope = conversationCacheScope(deps.currentConfig)
   const throughput = new OutputThroughput()
   const pendingToolLogById = new Map<string, PendingTool>()
   const pendingSubagentToolLogById = new Map<string, PendingSubagentTool>()

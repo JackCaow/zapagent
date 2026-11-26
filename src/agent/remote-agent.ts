@@ -43,6 +43,8 @@ export class RemoteAgentManager {
 
   constructor(private readonly transportFor: (spec: AcpAgentSpec, cwd: string) => AcpTransport = spawnTransport) {}
 
+  get epoch(): number { return this.generation }
+
   get current(): { spec: AcpAgentSpec; session: AcpAgentSession } | undefined {
     return this.live ? { spec: this.live.spec, session: this.live.session } : undefined
   }
@@ -95,7 +97,7 @@ export class RemoteAgentManager {
 
   private async ensure(spec: AcpAgentSpec, cwd: string, signal: AbortSignal, onStarted?: (session: AcpAgentSession) => void): Promise<LiveSession> {
     if (this.host.blocked) throw new Error(this.host.blocked)
-    const key = JSON.stringify([spec.id, spec.command, spec.args ?? [], spec.mode, spec.model, spec.config, cwd])
+    const key = JSON.stringify([spec.id, spec.command, spec.args ?? [], spec.requireSettings, spec.mode, spec.model, spec.config, cwd])
     // Let a start for another agent settle (and be replaced) first.
     while (this.starting && this.starting.key !== key) await this.starting.promise.catch(() => {})
     if (this.live?.key === key) return this.live

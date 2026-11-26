@@ -27,8 +27,8 @@ Options:
   --watch-linger <s> Keep the headless viewer available after a run (0..300)
   --help-headless   Show non-interactive (headless) mode flags
   auth login codex Sign in to Codex with ChatGPT (--device-code for SSH)
-  auth logout codex Remove Zap's Codex credentials
-  auth status codex Show Zap's Codex login status
+  auth logout codex Sign out of the official Codex CLI and clear legacy Zap credentials
+  auth status codex Show the official Codex CLI login status
   update [--yes]   Check, confirm and install the latest version
   acp              Serve Agent Client Protocol v1 over stdio (no TUI)
   workflow         Inspect, wait for or cancel a persisted workflow (--db required)

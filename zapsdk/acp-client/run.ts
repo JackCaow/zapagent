@@ -84,6 +84,7 @@ export class AcpAgentSession {
       }
       const mode = options.mode ?? spec.mode;
       if (mode) await session.attempt(`mode ${mode}`, () => connection.setMode(session.sessionId, mode));
+      if (spec.requireSettings && session.warnings.length) throw new Error(session.warnings.join("; "));
       return session;
     } catch (error) {
       await connection.close();

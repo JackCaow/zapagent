@@ -1,3 +1,4 @@
+import { conversationAgentId, type AppConfig } from "../config.js"
 import { countCodePoints, sliceHeadCodePoints } from "../utils/logicalLines.js"
 
 export interface PromptCacheScope {
@@ -16,6 +17,16 @@ export function makePromptCacheScope(
   const safeModel = boundedText(model, MAX_MODEL_ID_CHARS)
   if (!safeProviderId || !safeModel) return undefined
   return { providerId: safeProviderId, model: safeModel }
+}
+
+export function conversationCacheScope(config: AppConfig): PromptCacheScope | undefined {
+  const agent = conversationAgentId(config)
+  if (agent) {
+    const model = agent === "codex" && config.providers.some(p => p.id === config.active.providerId && p.authMode === "codex-oauth")
+      ? config.active.model : undefined
+    return makePromptCacheScope(`agent:${agent}`, model || "default")
+  }
+  return makePromptCacheScope(config.active.providerId, config.active.model)
 }
 
 export function sanitizePromptCacheScope(value: unknown): PromptCacheScope | undefined {

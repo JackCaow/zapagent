@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { tmpdir } from "node:os"
 import { setTimeout as sleep } from "node:timers/promises"
-import { saveCodexCredentials } from "../../src/codex-auth.js"
+import { installCodexFixture } from "../fixtures/native-codex.js"
 import { connectCodexProvider } from "../../src/codex-provider.js"
 import { getDefaultConfig, saveAppConfig } from "../../src/config.js"
 import { selectCatalogModel } from "../../src/provider-catalog.js"
@@ -39,19 +39,15 @@ ptyTest("real App adapts effort options, restores per-model choices and persists
   const config = () => JSON.parse(readFileSync(join(root, "config.json"), "utf8"))
   const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
   try {
-    await saveCodexCredentials({ accessToken: "fixture", refreshToken: "fixture", expiresAt: Date.now() + 3600000 })
+    installCodexFixture(root)
     const connected = connectCodexProvider(getDefaultConfig())
     saveAppConfig(join(root, "config.json"), selectCatalogModel(connected.config, connected.provider.id, { id: "full", source: "manual" }))
-    writeFileSync(join(root, "preload.ts"), `globalThis.fetch = async (url) => {
-      if (!String(url).startsWith("https://chatgpt.com/backend-api/codex/models?")) throw new Error("Offline fixture");
-      if (await Bun.file(${JSON.stringify(join(root, "offline"))}).exists()) throw new Error("Offline");
-      return Response.json({models:[
+    writeFileSync(join(root, "models"), JSON.stringify({ models: [
         {slug:"full", supported_reasoning_levels:["low","medium","high","xhigh","max","ultra"].map(effort=>({effort,description:effort+" depth"})), default_reasoning_level:"low"},
         {slug:"small", supported_reasoning_levels:[{effort:"low",description:"Quick"}], default_reasoning_level:"low"}
-      ]});
-    };`)
+      ] }))
     const launch = () => tmux("new-session", "-d", "-s", "effort", "-x", "145", "-y", "38", "-c", root,
-      `exec env ZAPCODE_DATA_DIR=${quote(root)} ZAPCODE_VM=0 ${quote(process.execPath)} --preload ${quote(join(root, "preload.ts"))} ${quote(resolve("src/index.tsx"))}`)
+      `exec env ZAPCODE_DATA_DIR=${quote(root)} PATH=${quote(root + ":" + process.env.PATH)} ZAPCODE_VM=0 ${quote(process.execPath)} ${quote(resolve("src/index.tsx"))}`)
     launch()
     await visible("full")
     await sleep(800)

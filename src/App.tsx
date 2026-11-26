@@ -24,7 +24,7 @@ import { initHighlighter } from "./ui/highlight.js"
 initHighlighter() // fire-and-forget; harmless when shiki isn't used yet
 
 import {
-  loadAppConfig,
+  conversationAgentId, getActiveProvider, loadAppConfig,
   saveAppConfig,
   hasApiKey as configHasApiKey,
   getActiveContextWindow,
@@ -139,7 +139,7 @@ import { ProjectRecoveryCenter } from "../zapsdk/index.js"
 import { createProjectRuntimeStateStore } from "./agent/runtimeEventStore.js"
 import type { StatusUsageDetail } from "./commands/status.js"
 import {
-  makePromptCacheScope,
+  conversationCacheScope,
   samePromptCacheScope,
   type PromptCacheScope,
 } from "./agent/cacheScope.js"
@@ -265,6 +265,7 @@ export function App() {
   useEffect(() => { configRef.current = config }, [config])
 
   const updateConfig = useCallback((next: AppConfig) => {
+    if (conversationAgentId(configRef.current) !== conversationAgentId(next)) void remoteAgents.reset()
     configRef.current = next
     setConfig(next)
     saveAppConfig(configPath, next)
@@ -753,7 +754,7 @@ export function App() {
 
   const precheckProvider = useCallback(
     // An external ACP agent brings its own model and credentials.
-    () => !!configRef.current.activeAgent || isProviderReady(configRef, addLog),
+    () => !!conversationAgentId(configRef.current) || isProviderReady(configRef, addLog),
     [addLog],
   )
 
@@ -930,7 +931,10 @@ export function App() {
 
   // ── Render ──
   const providerDisplayName = getProviderDisplayName(config)
-  const hasKey = !!config.activeAgent || configHasApiKey(config)
+  const agentId = conversationAgentId(config)
+  const subscriptionCodex = agentId === "codex" && getActiveProvider(config)?.authMode === "codex-oauth"
+  const agentLabel = agentId === "claude-code" ? "Claude Code" : agentId === "codex" ? "Codex" : agentId ? `ACP/${agentId}` : undefined
+  const hasKey = !!agentId || configHasApiKey(config)
   const welcomeHeader = useMemo(() => <Welcome hasApiKey={hasKey} />, [hasKey])
   const mcpFooterSummary = useMemo(
     () => summariseMCPStatuses(mcp.snapshots),
@@ -998,10 +1002,7 @@ export function App() {
     // a number 10-30k below what the API would receive next.
     const persistedHistory = metadata.usages
     const persisted = persistedHistory.at(-1) ?? null
-    const activeCacheScope = makePromptCacheScope(
-      config.active.providerId,
-      config.active.model,
-    )
+    const activeCacheScope = conversationCacheScope(config)
     const persistedMatchesActiveModel = !!persisted && (
       !persisted.cacheScope || samePromptCacheScope(persisted.cacheScope, activeCacheScope)
     )
@@ -1075,6 +1076,7 @@ export function App() {
     } catch (err) {
       addLog("error", `todo restore failed: ${err instanceof Error ? err.message : String(err)}`)
     }
+    if (conversationAgentId(config)) addLog("system", "Transcript restored. The local agent will start a new conversation on your next message.")
     bumpTranscript()
     appLogger.info("session_restore_end", { sessionId: loadedSessionId })
     closeDialog()
@@ -1157,7 +1159,7 @@ export function App() {
       {!inModal && !pendingApproval && !pendingPlan && !pendingQuestions && (
         <Prompt
           config={config}
-          providerLabel={config.activeAgent ? `ACP/${config.activeAgent}` : `${providerDisplayName}/${config.active.model}`}
+          providerLabel={agentLabel ?? `${providerDisplayName}/${config.active.model}`}
           hasActiveKey={hasKey}
           inputValue={inputValue}
           onInput={paste.handleInput}
@@ -1339,14 +1341,14 @@ export function App() {
         <Footer
           outputThroughput={outputThroughput}
           cwd={cwdShort}
-          provider={config.activeAgent ? "ACP" : providerDisplayName}
-          model={config.activeAgent ?? config.active.model}
-          effort={!config.activeAgent && config.active.providerId ? getEffort(config, config.active.providerId) : undefined}
+          provider={agentLabel ?? providerDisplayName}
+          model={agentId === "claude-code" ? "local CLI" : subscriptionCodex ? config.active.model || "default" : agentId ? "agent default" : config.active.model}
+          effort={(!agentId || subscriptionCodex) && config.active.providerId ? getEffort(config, config.active.providerId) : undefined}
           isRunning={isRunning}
           step={step}
           maxSteps={config.maxSteps}
           contextBudget={contextBudget}
-          hideContext={!!config.activeAgent}
+          hideContext={!!agentId}
           hasApiKey={hasKey}
           showWelcome={logs.length === 0 && !isRunning && !isStreaming}
           shellMode={isShellMode()}

@@ -1,8 +1,5 @@
 import { VERSION } from "./version.js"
-import { getAppDataDir } from "../zapsdk/utils/platform.js"
-import { generateCodexImage } from "../zapsdk/core/providers/codex-image-generation.js"
 import { modelCanonicalIds } from "./provider-metadata.js"
-import { getCodexCredentials } from "./codex-auth.js"
 import { serviceTools } from "../zapsdk/services/tools.js"
 // Builds the per-turn agent objects (provider, registry, executor) from
 // the app config. Split out of App.tsx — pure factory, no React state.
@@ -25,7 +22,7 @@ import {
   type SandboxMode,
 } from "../zapsdk/index.js"
 import type { AppConfig } from "./config.js"
-import { getActiveMaxOutputTokens, getActiveProvider, resolveVisionSupport } from "./config.js"
+import { conversationAgentId, getActiveMaxOutputTokens, getActiveProvider, resolveVisionSupport } from "./config.js"
 import type { CheckpointManager } from "../zapsdk/checkpoint/index.js"
 import { loadAllSkills } from "../zapsdk/skills/loader.js"
 import type { SkillDefinition } from "../zapsdk/skills/types.js"
@@ -87,11 +84,6 @@ export function buildAgentObjects(
   const apiKey = rawApiKey || "unconfigured"
   const model = config.active.model
   const maxOutputTokens = getActiveMaxOutputTokens(config)
-  const imageCapability = active?.authMode === "codex-oauth" ? {
-    generate: (request: import("../zapsdk/core/providers/codex-image-generation.js").ImageGenerationRequest, signal?: AbortSignal) =>
-      generateCodexImage({ model: typeof active.extraRequestParams?.model === "string" ? active.extraRequestParams.model : model, getCredentials: getCodexCredentials }, request, signal),
-    artifactDirectory: join(getAppDataDir(), "generated-images"),
-  } : undefined
   // Protocol selection: explicit `protocol` field on the provider wins;
   // fall back to host substring detection so legacy configs (saved before
   // the field existed) still route the official Anthropic endpoint to
@@ -127,10 +119,8 @@ export function buildAgentObjects(
         "x-stainless-runtime-version": null,
       } as unknown as Record<string, string>
     : undefined
-  const rawProvider = active?.authMode === "codex-oauth"
-      ? new OpenAIResponsesProvider({ model, codex: { getCredentials: getCodexCredentials, reasoningByModel: active.reasoningByModel, effortByModel: active.effortByModel },
-          canonicalModelIds: modelCanonicalIds(active), supportsVision: resolveVisionSupport(active, model),
-          extraRequestParams: active.extraRequestParams, maxRequestBytes: active.maxRequestBytes })
+  const rawProvider = active?.authMode === "codex-oauth" || conversationAgentId(config) === "claude-code"
+      ? { async call(): Promise<never> { throw new Error("Subscription conversations run in their native agent. Select an API provider for the Zap runtime.") } }
       : isAnthropic
       ? new AnthropicProvider({
           maxRequestBytes: active?.maxRequestBytes,
@@ -181,7 +171,6 @@ export function buildAgentObjects(
     globFiles: { allowedPaths, useExecutionGrants: true },
     documentRead: { allowedPaths, useExecutionGrants: true },
     browserScreenshot: { allowedPaths },
-    generateImage: imageCapability ? { ...imageCapability, allowedPaths, protectedPaths, useExecutionGrants: true, defaultCwd: effectiveCwd } : undefined,
     executeCommand: {
       timeoutMs: 60000,
       defaultCwd: effectiveCwd,
@@ -256,7 +245,6 @@ export function buildAgentObjects(
       globFiles: { allowedPaths, useExecutionGrants: true },
       documentRead: { allowedPaths, useExecutionGrants: true },
       browserScreenshot: { allowedPaths },
-      generateImage: imageCapability ? { ...imageCapability, allowedPaths, protectedPaths, useExecutionGrants: true, defaultCwd: workspaceCwd } : undefined,
       executeCommand: {
         timeoutMs: 60000,
         defaultCwd: workspaceCwd,

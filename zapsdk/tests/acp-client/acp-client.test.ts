@@ -7,7 +7,7 @@ import { spawn } from "node:child_process";
 import type { RequestPermissionResponse } from "@agentclientprotocol/sdk";
 import type { AgentEvent } from "../../agent/events.js";
 import type { ApprovalCallback } from "../../tools/executor.js";
-import { AcpEventMapper } from "../../acp-client/event-mapper.js";
+import { acpUsage, AcpEventMapper } from "../../acp-client/event-mapper.js";
 import { inProcessTransport, stdioTransport } from "../../acp-client/connection.js";
 import { createAcpHostHandlers } from "../../acp-client/host-handlers.js";
 import { runAcpTask } from "../../acp-client/run.js";
@@ -31,6 +31,12 @@ function approver(decide: (name: string, args: Record<string, unknown>) => boole
 }
 
 describe("AcpEventMapper", () => {
+  it("preserves both disjoint and inclusive ACP cache counters", () => {
+    const counts = { totalTokens: 104, outputTokens: 4, cachedReadTokens: 88, cachedWriteTokens: 9 };
+    for (const inputTokens of [3, 100]) expect(acpUsage({ ...counts, inputTokens })).toMatchObject({
+      inputTokens: 3, outputTokens: 4, cacheReadInputTokens: 88, cacheCreationInputTokens: 9,
+    });
+  });
   it("streams thinking and text, seals in order, and pairs tool calls", () => {
     const mapper = new AcpEventMapper(["sub"]);
     const events = [

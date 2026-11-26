@@ -1,13 +1,14 @@
-import { CODEX_BASE_URL, getCodexCredentials } from "./codex-auth.js"
+import { nativeCommand } from "./agent/official-agents.js"
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
 import { normalizeModelReasoning, type ModelReasoning } from "../zapsdk/core/reasoning-effort.js"
-import { VERSION } from "./version.js"
 import { setActive, upsertProvider, type AppConfig, type Provider, type ProviderModelMetadata } from "./config.js"
 
-/** One explicit account binding; secrets live only in codex-oauth.json. */
+/** Compatibility marker for an official Codex runtime connection. */
 export function connectCodexProvider(config: AppConfig): { config: AppConfig; provider: Provider } {
   const existing = config.providers.find(p => p.authMode === "codex-oauth")
   const provider: Provider = { ...existing, id: existing?.id ?? "sp_codex_oauth", name: existing?.name ?? "OpenAI Codex (ChatGPT)",
-    baseURL: CODEX_BASE_URL, apiKey: "", authMode: "codex-oauth", protocol: "openai-responses",
+    baseURL: "codex://local", apiKey: "", authMode: "codex-oauth", protocol: "openai-responses",
     contextWindow: existing?.contextWindow ?? 128000, contextWindowMode: existing?.contextWindowMode ?? "auto",
     models: existing?.models ?? [] }
   let next = upsertProvider(config, provider)
@@ -16,14 +17,11 @@ export function connectCodexProvider(config: AppConfig): { config: AppConfig; pr
 }
 
 export async function discoverCodexModels(signal: AbortSignal): Promise<Array<{ id: string; metadata: ProviderModelMetadata; reasoning?: ModelReasoning }>> {
-  const credentials = await getCodexCredentials(signal)
-  const response = await fetch(`${CODEX_BASE_URL}/models?client_version=${encodeURIComponent(VERSION)}`, {
-    headers: { Authorization: `Bearer ${credentials.accessToken}`, originator: "zap",
-      ...(credentials.accountId ? { "ChatGPT-Account-ID": credentials.accountId } : {}) },
-    signal: AbortSignal.any([signal, AbortSignal.timeout(6000)]), redirect: "error",
+  const cli = await nativeCommand("codex")
+  const { stdout } = await promisify(execFile)(cli.command, [...cli.args, "debug", "models"], {
+    signal, timeout: 6500, maxBuffer: 8 * 1024 * 1024, encoding: "utf8",
   })
-  if (!response.ok) throw new Error(`Codex model discovery failed (HTTP ${response.status}).`)
-  const data = await response.json() as { models?: Array<Record<string, unknown>> }
+  const data = JSON.parse(stdout) as { models?: Array<Record<string, unknown>> }
   if (!Array.isArray(data.models)) throw new Error("Invalid Codex models response.")
   return data.models.flatMap(model => {
     // supported_in_api only gates API-key accounts; Codex OAuth can use backend-only models.

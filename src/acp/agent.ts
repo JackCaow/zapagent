@@ -235,11 +235,12 @@ export class ZapAcpAgent {
       if (!config.providers.some(provider => provider.id === state.providerId)) throw RequestError.authRequired(null, "Session provider is no longer configured")
       config = setActive(config, state.providerId, state.model)
     }
+    if (config.subscriptionAgent || getActiveProvider(config)?.authMode === "codex-oauth") throw RequestError.authRequired(null, "Choose an API provider for the Zap ACP server. Local subscriptions run in the Zap UI.")
     if (!getActiveProvider(config) || !hasApiKey(config) || !config.active.model) throw RequestError.authRequired(null, "Configure a provider and model with zap /connect")
     return config
   }
   private modelChoices(config: AppConfig) {
-    return config.providers.flatMap(provider => [...new Set([...provider.models,
+    return config.providers.filter(provider => provider.authMode !== "codex-oauth").flatMap(provider => [...new Set([...provider.models,
       ...(provider.id === config.active.providerId ? [config.active.model] : [])])].filter(Boolean)
       .map(model => ({ value: JSON.stringify([provider.id, model]), name: `${provider.name || provider.id} / ${model}` })))
   }

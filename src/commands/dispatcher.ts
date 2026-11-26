@@ -1,3 +1,4 @@
+import { agentInstallHint } from "../agent/official-agents.js"
 import { AgentBudget } from "../../zapsdk/agent/budget.js"
 import { RequestMeter } from "../../zapsdk/agent/request-meter.js"
 import { recordMaintenanceUsage } from "../agent/maintenanceUsage.js"
@@ -6,7 +7,7 @@ import { spawnSync } from "node:child_process"
 import { parsePermissionMode, type AppConfig, type PermissionMode } from "../config.js"
 import {
   cycleEffort,
-  getActiveProvider,
+  conversationAgentId, getActiveProvider,
   resolveEffortInput,
   setEffort,
   validateConfig,
@@ -327,8 +328,8 @@ export function dispatchSlashCommand(
   const dispatchAgentTurn = (...args: Parameters<DispatchSlashCommandDeps["dispatchUserTurn"]>): boolean | Promise<boolean> => {
     // /review, /commit, /init and skills carry zap prompts written for zap's
     // own tools; an external agent would silently ignore them.
-    if (deps.configRef.current.activeAgent) {
-      deps.addLog("error", `${displayCommand?.type ?? cmd.type} runs on zap's own model, not ${deps.configRef.current.activeAgent}. /agent zap switches back.`)
+    if (conversationAgentId(deps.configRef.current)) {
+      deps.addLog("error", `${displayCommand?.type ?? cmd.type} runs on zap's own model, not ${conversationAgentId(deps.configRef.current)}. /agent zap switches back.`)
       return true
     }
     meta.onInputRequired?.()
@@ -422,6 +423,7 @@ export function dispatchSlashCommand(
     case "set_model": {
       const next = {
         ...deps.configRef.current,
+        subscriptionAgent: undefined, activeAgent: undefined,
         active: { ...deps.configRef.current.active, model: cmd.value ?? "" },
       }
       deps.updateConfig(next)
@@ -431,33 +433,38 @@ export function dispatchSlashCommand(
 
     case "set_agent": {
       const value = cmd.value ?? ""
-      const current = deps.configRef.current.activeAgent
+      const current = conversationAgentId(deps.configRef.current)
       if (!value) {
         const lines = acpAgents.length
           ? acpAgents.map(agent => `  ${agent.id === current ? "›" : " "} ${agent.id.padEnd(10)} ${agent.name ?? ""}${agent.selfGoverned ? " · edits files itself (no zap checkpoints)" : ""}`)
           : ["  (no ACP agents found on PATH or in acpAgents)"]
-        deps.addLog("system", [`Conversation agent: ${current ?? "zap"}`, `  ${current ? " " : "›"} zap        zap's own model`, ...lines,
+        deps.addLog("system", [`Conversation agent: ${current ?? "zap"}`, `  ${current ? " " : "›"} zap        zap's own model`, "    claude-code  Local Claude Code CLI", ...lines,
           "Switch with /agent <id>; /agent zap switches back."].join("\n"))
         return true
       }
       if (value === "zap" || value === "off") {
+        if (getActiveProvider(deps.configRef.current)?.authMode === "codex-oauth") {
+          deps.setDialog("model")
+          deps.addLog("system", "Choose an API provider for Zap's own runtime. Use /connect to add one.")
+          return true
+        }
         void remoteAgents.reset()
         if (current) {
-          deps.updateConfig({ ...deps.configRef.current, activeAgent: undefined })
+          deps.updateConfig({ ...deps.configRef.current, activeAgent: undefined, subscriptionAgent: undefined })
           deps.addToast("agent → zap")
         }
         return true
       }
-      const spec = acpAgents.find(agent => agent.id === value)
+      const spec = value === "claude-code" ? { id: value, name: "Claude Code", selfGoverned: true } : acpAgents.find(agent => agent.id === value)
       if (!spec) {
-        deps.addLog("error", `Unknown ACP agent: ${value}. Available: ${["zap", ...acpAgents.map(agent => agent.id)].join(", ")}`)
+        deps.addLog("error", `Unknown ACP agent: ${value}. ${agentInstallHint(value)} Available: ${["zap", ...acpAgents.map(agent => agent.id)].join(", ")}`)
         return true
       }
       if (value !== current) {
         void remoteAgents.reset()
         deps.updateConfig({ ...deps.configRef.current, activeAgent: value })
         deps.addToast(`agent → ${value}`)
-        deps.addLog("system", `Messages now go to ${spec.name ?? spec.id} over ACP. Its file reads/writes and permission requests use zap's approvals${spec.selfGoverned ? "; it also edits files itself, which zap checkpoints do not cover" : ""}. /agent zap switches back.`)
+        deps.addLog("system", `Messages now go to ${spec.name ?? spec.id} locally. Its file reads/writes and permission requests use zap's approvals${spec.selfGoverned ? "; it also edits files itself, which zap checkpoints do not cover" : ""}. /agent zap switches back.`)
       }
       return true
     }
