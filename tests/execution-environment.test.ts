@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createExecutionEnvironment, resolveExecutionBackend } from "../src/execution-environment.js"
+import { createExecutionEnvironment, requestedExecutionBackend, resolveExecutionBackend, VM_EXECUTION_ENABLED, vmExecutionRequestedButDisabled } from "../src/execution-environment.js"
 import { buildAgentObjects } from "../src/agent-factory.js"
 import { buildSystemPrompt, getDefaultConfig } from "../src/config.js"
 import type { ExecutionEnvironmentFacts } from "../zapsdk/execution/types.js"
@@ -180,15 +180,26 @@ describe("Agent / execution environment boundary", () => {
     expect(resident.commandOptions.sandboxNetwork).toBeUndefined()
   })
 
-  it("lets ZAPCODE_EXECUTION override the configured backend", () => {
-    expect(resolveExecutionBackend()).toBe("local")
-    expect(resolveExecutionBackend("vm")).toBe("vm")
+  it("lets ZAPCODE_EXECUTION override the requested backend", () => {
+    expect(requestedExecutionBackend()).toBe("local")
+    expect(requestedExecutionBackend("vm")).toBe("vm")
     process.env.ZAPCODE_EXECUTION = "local"
-    expect(resolveExecutionBackend("vm")).toBe("local")
+    expect(requestedExecutionBackend("vm")).toBe("local")
     process.env.ZAPCODE_EXECUTION = "VM"
-    expect(resolveExecutionBackend("local")).toBe("vm")
+    expect(requestedExecutionBackend("local")).toBe("vm")
     process.env.ZAPCODE_EXECUTION = "bogus"
-    expect(resolveExecutionBackend("vm")).toBe("vm")
+    expect(requestedExecutionBackend("vm")).toBe("vm")
+  })
+
+  it("runs locally while zapVM execution is disabled, even when the VM is requested", () => {
+    expect(VM_EXECUTION_ENABLED).toBe(false)
+    expect(resolveExecutionBackend("vm")).toBe("local")
+    process.env.ZAPCODE_EXECUTION = "vm"
+    expect(resolveExecutionBackend("local")).toBe("local")
+    expect(vmExecutionRequestedButDisabled("local")).toBe(true)
+    delete process.env.ZAPCODE_EXECUTION
+    expect(vmExecutionRequestedButDisabled("local")).toBe(false)
+    expect(vmExecutionRequestedButDisabled("vm")).toBe(true)
   })
 
   it("accepts another backend without consulting VM installation or altering model/tool policy", () => {

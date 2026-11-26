@@ -11,7 +11,7 @@ import { loadAppConfig } from "./config.js"
 import { createExecutionEnvironment, resolveExecutionBackend } from "./execution-environment.js"
 
 /** zapVM is optional and installed separately; only these Goal options need it. */
-const VM_SETUP_HINT = "Install zapVM (https://github.com/JackCaow/zapVM) and set executionBackend to \"vm\"; zap runs locally without it."
+const VM_SETUP_HINT = "zapVM execution is disabled in this version of zap, so this Goal option is unavailable."
 
 function machineCheckSupported(cwd: string): boolean {
   const config = loadAppConfig(join(getAppDataDir(), "config.json"))
