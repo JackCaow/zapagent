@@ -16,6 +16,8 @@ import {
 } from "../zapsdk/index.js"
 import { getAppDataDir } from "../zapsdk/utils/platform.js"
 import { detectProviders, type DetectedProvider } from "../zapsdk/builtin-tools/index.js"
+import { detectAcpAgents } from "../zapsdk/acp-client/detect.js"
+import type { AcpAgentSpec } from "../zapsdk/acp-client/types.js"
 import { TaskStore } from "../zapsdk/tasks/store.js"
 import { buildTaskNotificationXml, classifyTaskExit } from "../zapsdk/tasks/notification.js"
 import { pushSystemEvent } from "./queue/systemInbox.js"
@@ -170,9 +172,25 @@ export function stopRuntimeForRestart(): void {
 // 30–200ms), leaving `delegate_agent` unregistered until the user
 // independently changes config and triggers a rebuild.
 export let delegateProviders: DetectedProvider[] = []
-export const delegateProvidersReady: Promise<DetectedProvider[]> = detectProviders(2000)
-  .then((found) => { delegateProviders = found; return found })
-  .catch(() => [] as DetectedProvider[])
+/** ACP agents for `acp_agent`: configured entries plus known agents on PATH. */
+export let acpAgents: AcpAgentSpec[] = []
+const acpAgentsReady: Promise<AcpAgentSpec[]> = (async () => {
+  let configured: AcpAgentSpec[] = []
+  try { configured = validAcpAgentSpecs(loadAppConfig(configPath).acpAgents) } catch { /* invalid config is reported elsewhere */ }
+  acpAgents = await detectAcpAgents(configured)
+  return acpAgents
+})().catch(() => [] as AcpAgentSpec[])
+export const delegateProvidersReady: Promise<DetectedProvider[]> = Promise.all([
+  detectProviders(2000).then((found) => { delegateProviders = found; return found }).catch(() => [] as DetectedProvider[]),
+  acpAgentsReady,
+]).then(([found]) => found)
+
+function validAcpAgentSpecs(value: unknown): AcpAgentSpec[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((entry): entry is AcpAgentSpec => !!entry && typeof entry === "object"
+    && typeof entry.id === "string" && /^[\w.-]+$/.test(entry.id) && typeof entry.command === "string"
+    && (entry.args === undefined || (Array.isArray(entry.args) && entry.args.every((arg: unknown) => typeof arg === "string"))))
+}
 
 export const delegateEventBridge: { handler: AgentEventHandler | null } = { handler: null }
 

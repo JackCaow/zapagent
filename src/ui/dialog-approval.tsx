@@ -75,7 +75,7 @@ export function ApprovalBar({ toolName, args, onChoose, rulePreview, unsandboxed
     : `${getToolAlias(toolName)} commands`)
   const unsandboxed = escape ?? isUnsandboxedBash(toolName, args)
   const request = toolName === REQUEST_CAPABILITIES_TOOL
-  const canCustomize = allowScope && !unsandboxed && !request && toolName !== "delegate_agent" && availableTools.includes(toolName) && !!onGrant
+  const canCustomize = allowScope && !unsandboxed && !request && toolName !== "delegate_agent" && toolName !== "acp_agent" && availableTools.includes(toolName) && !!onGrant
   const directory = canCustomize ? suggestToolGrantDirectory(toolName, args, cwd) : undefined
   // A capability request is only worth something when it is remembered.
   const options: Option[] = request && allowScope ? [

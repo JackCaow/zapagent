@@ -1,3 +1,4 @@
+import type { AcpAgentSpec } from "../zapsdk/acp-client/types.js"
 import { modelReasoningFor, normalizeReasoningMap, resolveModelEffort, effortName, type ModelReasoning } from "../zapsdk/core/reasoning-effort.js"
 import { deriveCompactionThresholds } from "../zapsdk/context/compact-budget.js"
 import { canonicalModelId } from "../zapsdk/core/model-identity.js"
@@ -222,6 +223,10 @@ export interface AppConfig {
   promptProfile?: PromptProfile
   compaction: CompactionConfig
   mcpServers: MCPServerConfig[]
+  /** External ACP agents for the `acp_agent` tool. Known agents on PATH
+   *  (agy, codex-acp) are added automatically;
+   *  entries here override them by id. */
+  acpAgents?: AcpAgentSpec[]
   permissionMode: PermissionMode
   followUpMode?: "queue" | "steer"
   /** Where project shell commands run. "local" (default) uses the host OS

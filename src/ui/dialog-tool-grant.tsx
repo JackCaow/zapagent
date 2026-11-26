@@ -21,7 +21,7 @@ interface Props {
 export function ToolGrantDialog({ availableTools, initialTools = [], initialPattern = "", initialDirectory = "", directoryShortcut = false, cwd = process.cwd(), onSave, onCancel }: Props) {
   useHideNativeCursor()
   // Freeze the reviewed registry snapshot: later MCP registrations cannot join it.
-  const [tools] = useState(() => [...new Set(availableTools)].filter(name => name !== "delegate_agent").sort())
+  const [tools] = useState(() => [...new Set(availableTools)].filter(name => name !== "delegate_agent" && name !== "acp_agent").sort())
   const [selected, setSelected] = useState(() => initialTools.filter(name => tools.includes(name)))
   const [step, setStep] = useState(0)
   const [index, setIndex] = useState(0)
@@ -94,7 +94,7 @@ export function ToolGrantDialog({ availableTools, initialTools = [], initialPatt
   return <Box flexDirection="column" paddingX={1} marginTop={1}>
     <Text bold color={c.text.primary}>Tool authorization — {["select tools", "resource scope", "resource filter", "lifetime", "review authorization"][step]}</Text>
     {step === 0 && <>
-      <Text color={c.text.muted}>{selected.length} selected · {tools.length} available · delegate_agent requires scoped approval</Text>
+      <Text color={c.text.muted}>{selected.length} selected · {tools.length} available · agent delegation requires scoped approval</Text>
       {tools.slice(start, start + 8).map((tool, offset) => <Text key={tool} color={index === start + offset ? c.accent : c.text.primary}>{index === start + offset ? "›" : " "} [{selected.includes(tool) ? "x" : " "}] {tool}</Text>)}
       <Text color={c.text.muted}>↑↓ navigate · space select · r read · w edit · a all · n none · Enter next · Esc cancel</Text>
     </>}

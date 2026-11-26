@@ -1,3 +1,4 @@
+import { VERSION } from "./version.js"
 import { getAppDataDir } from "../zapsdk/utils/platform.js"
 import { generateCodexImage } from "../zapsdk/core/providers/codex-image-generation.js"
 import { modelCanonicalIds } from "./provider-metadata.js"
@@ -29,7 +30,7 @@ import type { CheckpointManager } from "../zapsdk/checkpoint/index.js"
 import { loadAllSkills } from "../zapsdk/skills/loader.js"
 import type { SkillDefinition } from "../zapsdk/skills/types.js"
 import type { AgentEventHandler } from "../zapsdk/agent/events.js"
-import { autoMemory, taskStore, mdStore, globalMdStore, globalMemoryDir, delegateProviders, delegateEventBridge } from "./singletons.js"
+import { autoMemory, taskStore, mdStore, globalMdStore, globalMemoryDir, delegateProviders, delegateEventBridge, acpAgents } from "./singletons.js"
 import { memorySaveTool } from "../zapsdk/builtin-tools/memory.js"
 import type { AgentObjects } from "./agent/types.js"
 import type { LLMProvider } from "../zapsdk/core/llm.js"
@@ -39,7 +40,7 @@ import { createExecutionEnvironment, resolveExecutionBackend, type ExecutionEnvi
 const CWD_SENSITIVE_TOOLS = new Set([
   "read_file", "write_file", "edit_file", "multi_edit",
   "delete_file", "list_tree", "bash",
-  "search_files", "glob_files", "read_document", "browser_screenshot", "delegate_agent", "generate_image",
+  "search_files", "glob_files", "read_document", "browser_screenshot", "delegate_agent", "acp_agent", "generate_image",
 ])
 
 function safeHost(url: string): string {
@@ -213,6 +214,17 @@ export function buildAgentObjects(
       ? {
           providers: delegateProviders,
           onEvent: delegateOnEvent ?? ((ev) => delegateEventBridge.handler?.(ev)),
+        }
+      : undefined,
+    // External ACP agents: their permission and fs requests reuse zap's
+    // approval gate and checkpoint tracker, like zap's own tools.
+    acpAgent: acpAgents.length > 0
+      ? {
+          agents: acpAgents,
+          onEvent: delegateOnEvent ?? ((ev) => delegateEventBridge.handler?.(ev)),
+          approve: onApproval,
+          trackEdit: checkpoint?.createEditTracker(),
+          clientVersion: VERSION,
         }
       : undefined,
     exclude: [],

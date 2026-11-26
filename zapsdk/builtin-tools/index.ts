@@ -26,6 +26,7 @@ import type { CronToolsHandle } from "./cron.js";
 import type { MonitorToolHandle } from "./monitor.js";
 import { taskStatusTool, taskStopTool, type TaskToolsOptions } from "./task.js";
 import { delegateAgentTool } from "./delegate.js";
+import { acpAgentTool, type AcpAgentToolOptions } from "./acp-agent.js";
 import type { DetectedProvider } from "./delegate-detect.js";
 import type { AgentEventHandler } from "../agent/events.js";
 
@@ -78,6 +79,7 @@ export { taskStatusTool, taskStopTool, type TaskToolsOptions } from "./task.js";
 export { subagentTool, type SubagentToolOptions } from "./subagent.js";
 
 export { delegateAgentTool, type DelegateAgentOptions } from "./delegate.js";
+export { acpAgentTool, ACP_AGENT_TOOL, type AcpAgentToolOptions } from "./acp-agent.js";
 export { detectProviders, type DetectedProvider } from "./delegate-detect.js";
 export { memoryMergeTool, memoryReviewTool, memorySaveTool, type MemoryMergeToolOptions, type MemoryReviewToolOptions, type MemorySaveToolOptions } from "./memory.js";
 
@@ -134,6 +136,8 @@ export interface BuiltinToolsOptions {
     timeoutMs?: number;
     stateDir?: string;
   };
+  /** External ACP agents. Absent or empty → `acp_agent` is not registered. */
+  acpAgent?: Omit<AcpAgentToolOptions, "defaultCwd">;
   exclude?: string[];
 }
 
@@ -192,6 +196,11 @@ export function createBuiltinRegistry(options: BuiltinToolsOptions = {}): ToolRe
       timeoutMs: options.delegateAgent.timeoutMs,
       stateDir: options.delegateAgent.stateDir,
     });
+    if (tool) registry.register(tool);
+  }
+
+  if (options.acpAgent && !exclude.has("acp_agent")) {
+    const tool = acpAgentTool({ ...options.acpAgent, defaultCwd: options.executeCommand?.defaultCwd });
     if (tool) registry.register(tool);
   }
 

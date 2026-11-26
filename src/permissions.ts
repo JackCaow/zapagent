@@ -321,8 +321,13 @@ function normalizeDelegateCwd(value: unknown, cwd: string): string {
   return rel
 }
 
-function delegateAgentSubject(args: Record<string, unknown>, cwd: string): string | null {
-  const provider = typeof args.provider === "string" ? args.provider.trim() : ""
+/** External-agent tools whose grants are scoped to one agent and cwd. */
+const SCOPED_AGENT_TOOLS: Record<string, string> = { delegate_agent: "provider", acp_agent: "agent" }
+export function isScopedAgentTool(name: string): boolean { return Object.hasOwn(SCOPED_AGENT_TOOLS, name) }
+
+function delegateAgentSubject(toolName: string, args: Record<string, unknown>, cwd: string): string | null {
+  const key = SCOPED_AGENT_TOOLS[toolName] ?? "provider"
+  const provider = typeof args[key] === "string" ? (args[key] as string).trim() : ""
   if (!provider) return null
   const delegateCwd = normalizeDelegateCwd(args.cwd, cwd)
   return `${encodeURIComponent(provider)}@${encodeURIComponent(delegateCwd)}`
@@ -343,8 +348,8 @@ function normalizeFileArgs(
   context?: Readonly<ApprovalContext>,
   canonical: boolean | "entry" = true,
 ): Record<string, unknown> {
-  if (toolName === "delegate_agent") {
-    const subject = delegateAgentSubject(args, cwd)
+  if (isScopedAgentTool(toolName)) {
+    const subject = delegateAgentSubject(toolName, args, cwd)
     return subject ? { ...args, [DELEGATE_AGENT_SUBJECT_ARG]: subject } : args
   }
   if (!FILE_TOOLS.has(toolName)) return args
@@ -396,7 +401,7 @@ function extractArgString(toolName: string, args: Record<string, unknown>): stri
   if (FILE_TOOLS.has(toolName)) {
     return String(args.path ?? args.source ?? "")
   }
-  if (toolName === "delegate_agent") {
+  if (isScopedAgentTool(toolName)) {
     return typeof args[DELEGATE_AGENT_SUBJECT_ARG] === "string"
       ? args[DELEGATE_AGENT_SUBJECT_ARG]
       : ""
@@ -441,7 +446,7 @@ export function ruleMatchesTool(
 ): boolean {
   const { toolNames, argPattern } = parsePattern(rule.pattern)
   if (!toolNames.some(n => n === toolName)) return false
-  if (toolName === "delegate_agent" && argPattern === null) return rule.type === "deny"
+  if (isScopedAgentTool(toolName) && argPattern === null) return rule.type === "deny"
   if (argPattern === null) return true
   if (toolName === "move_file") {
     const paths = [args.source, args.destination].filter((value): value is string => typeof value === "string" && !!value)
@@ -449,7 +454,7 @@ export function ruleMatchesTool(
   }
   const subject = extractArgString(toolName, args)
   if (toolName === "bash") return matchCommandGlob(subject, argPattern)
-  if (toolName === "delegate_agent") return subject === argPattern
+  if (isScopedAgentTool(toolName)) return subject === argPattern
   return FILE_TOOLS.has(toolName) ? matchFilePattern(subject, argPattern, rule.type === "allow" && rule.canonicalPath) : matchGlob(subject, argPattern)
 }
 
@@ -459,7 +464,7 @@ export function ruleMatchesTool(
  * tools from the adapter's effects. Shells and delegation keep their own rules. */
 function callCapabilities(name: string, args: Record<string, unknown>, context?: Readonly<ApprovalContext>): readonly ToolCapability[] | undefined {
   if (FILE_TOOLS.has(name)) return fileToolCapabilities(name, args)
-  if (name === "delegate_agent") return undefined
+  if (isScopedAgentTool(name)) return undefined
   // A capability request needs exactly what it asks for.
   if (name === REQUEST_CAPABILITIES_TOOL) {
     const requested = parseCapabilityRequest(args)
@@ -646,9 +651,9 @@ export function inferPattern(toolName: string, args: Record<string, unknown>, cw
     const prefix = extractCommandPrefix(shellCommandDisplay(args), 2)
     return prefix ? `Bash(${prefix}:*)` : null
   }
-  if (toolName === "delegate_agent") {
-    const subject = delegateAgentSubject(args, cwd)
-    return subject ? `delegate_agent(${subject})` : null
+  if (isScopedAgentTool(toolName)) {
+    const subject = delegateAgentSubject(toolName, args, cwd)
+    return subject ? `${toolName}(${subject})` : null
   }
   const aliases: Record<string, string> = {
     write_file: "Write", create_file: "Write",

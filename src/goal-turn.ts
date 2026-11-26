@@ -29,7 +29,7 @@ export function goalTurnMeter(input: Pick<GoalTurnInput, "goalId" | "epoch" | "r
   return {
     providerAdapter: (provider: LLMProvider) => meterGoalProvider(provider, ledger, input),
     admitToolExecution: (name: string) => {
-      const admission = ledger.admit(input.goalId, input.epoch, { operationId: randomUUID(), role: input.role, kind: "tool", opaque: ["delegate_agent", "cron_create", "monitor"].includes(name) })
+      const admission = ledger.admit(input.goalId, input.epoch, { operationId: randomUUID(), role: input.role, kind: "tool", opaque: ["delegate_agent", "acp_agent", "cron_create", "monitor"].includes(name) })
       if (!admission.ok) throw new Error(`Goal tool admission denied: ${admission.reason}`)
       if (name === "agent") {
         const spawn = ledger.admit(input.goalId, input.epoch, { operationId: randomUUID(), role: input.role, kind: "spawn" })

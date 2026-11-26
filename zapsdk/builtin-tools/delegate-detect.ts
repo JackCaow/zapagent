@@ -12,7 +12,7 @@ export interface DetectProvidersOptions {
   pathEnv?: string;
 }
 
-async function which(name: string, pathEnv = process.env.PATH ?? ""): Promise<string | null> {
+export async function which(name: string, pathEnv = process.env.PATH ?? ""): Promise<string | null> {
   if (isAbsolute(name)) {
     return await isExecutable(name) ? name : null;
   }

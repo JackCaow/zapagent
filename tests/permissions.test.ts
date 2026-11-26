@@ -258,6 +258,13 @@ describe("inferPattern", () => {
     }, cwd)).toBe("delegate_agent(codex@packages%2Fcli)")
   })
 
+  it("acp_agent: scopes allow rules to agent and cwd, and bare allow never grants delegation", () => {
+    expect(inferPattern("acp_agent", { agent: "agy", task: "refactor" }, cwd)).toBe("acp_agent(agy@.)")
+    expect(inferPattern("acp_agent", { task: "refactor" }, cwd)).toBeNull()
+    expect(ruleMatchesTool({ pattern: "acp_agent", type: "allow" }, "acp_agent", { agent: "agy", task: "x" })).toBe(false)
+    expect(ruleMatchesTool({ pattern: "acp_agent", type: "deny" }, "acp_agent", { agent: "agy", task: "x" })).toBe(true)
+  })
+
   it("delegate_agent: refuses unbounded rules when provider is missing", () => {
     expect(inferPattern("delegate_agent", { task: "refactor" }, cwd)).toBeNull()
   })

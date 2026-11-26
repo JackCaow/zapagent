@@ -4,7 +4,7 @@ import { shellExecutionCommands, requiresShellReview } from "../zapsdk/utils/she
 
 // Compatibility for pre-effects adapters and direct onApproval embedders.
 // New tools declare effects/resolveShellCommands; do not extend these lists.
-const legacyWrites = new Set(["write_file", "create_file", "edit_file", "multi_edit", "delete_file", "move_file", "bash", "execute_command", "memory_save", "memory_review", "memory_merge", "cron_create", "cron_delete", "monitor", "service_start", "service_stop", "task_stop", "http_request", "delegate_agent"])
+const legacyWrites = new Set(["write_file", "create_file", "edit_file", "multi_edit", "delete_file", "move_file", "bash", "execute_command", "memory_save", "memory_review", "memory_merge", "cron_create", "cron_delete", "monitor", "service_start", "service_stop", "task_stop", "http_request", "delegate_agent", "acp_agent"])
 const legacyEdits = new Set(["write_file", "create_file", "edit_file", "multi_edit"])
 const legacyShells = new Set(["bash", "execute_command", "service_start", "monitor"])
 

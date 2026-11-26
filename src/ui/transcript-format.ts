@@ -84,7 +84,7 @@ const TOOL_ALIASES: Record<string, string> = {
   bash: "Bash", execute_command: "Bash",
   glob_files: "Glob", search_files: "Search",
   web_search: "WebSearch", http_fetch: "Fetch",
-  agent: "Agent", skill: "Skill", delegate_agent: "Delegate",
+  agent: "Agent", skill: "Skill", delegate_agent: "Delegate", acp_agent: "ACP Agent",
   todo_write: "TodoWrite",
   enter_plan_mode: "EnterPlanMode", exit_plan_mode: "ExitPlanMode",
   read_document: "ReadDocument", read_pdf: "ReadPdf", read_docx: "ReadDocx",
