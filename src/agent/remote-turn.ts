@@ -17,6 +17,9 @@ export interface RemoteTurnDeps extends Omit<RunHandlersDeps, "preview" | "setCo
   saveLastOutput: (text: string) => void
   /** Tells the host queue the agent took the message. */
   onInputAccepted?: () => void
+  /** Opens/closes the checkpoint turn, as zap's runtime does around a run,
+   * so /rewind attributes the agent's fs writes to this turn. */
+  checkpointTurn?: { begin: () => Promise<unknown>; end: () => Promise<unknown> }
 }
 
 /** One user turn handled by an external ACP agent instead of zap's loop.
@@ -29,6 +32,7 @@ export async function runRemoteTurn(deps: RemoteTurnDeps, task: string, images?:
   const emitter = new AgentEventEmitter()
   handlers.wire(emitter)
   const { spec, controller } = deps
+  await deps.checkpointTurn?.begin().catch(() => {})
   try {
     const turn = await remoteAgents.prompt(spec, deps.cwd, task, images, {
       signal: controller.signal,
@@ -56,6 +60,7 @@ export async function runRemoteTurn(deps: RemoteTurnDeps, task: string, images?:
     if (!controller.signal.aborted) emitter.emit({ type: "error", step: 0, error: `${spec.id}: ${message}` })
     throw error
   } finally {
+    await deps.checkpointTurn?.end().catch(() => {})
     preview.drainOnAbort()
     handlers.settlePending(controller.signal.aborted ? "aborted" : `${spec.id} ended the turn`)
   }

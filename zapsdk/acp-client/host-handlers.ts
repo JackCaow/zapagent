@@ -13,8 +13,9 @@ export interface AcpHostPolicy {
   approve?: ApprovalCallback;
   /** Checkpoint hook; called with the canonical path before every write. */
   trackEdit?: (paths: string[]) => Promise<unknown>;
-  /** Cancels outstanding approval prompts when the tool call ends. */
-  signal?: AbortSignal;
+  /** Cancels outstanding approval prompts when the call or turn ends. A
+   * function is read per request (session mode: the current turn's signal). */
+  signal?: AbortSignal | (() => AbortSignal | undefined);
 }
 
 export interface AcpHostHandlers extends AcpClientHandlers {
@@ -32,13 +33,16 @@ const READ_MAX_BYTES = 10 * 1024 * 1024;
 export function createAcpHostHandlers(policy: AcpHostPolicy): AcpHostHandlers {
   const written = new Set<string>();
   const decisions: AcpHostHandlers["decisions"] = [];
-  const signalFor = (request: AbortSignal) => policy.signal ? AbortSignal.any([request, policy.signal]) : request;
+  const signalFor = (request: AbortSignal) => {
+    const outer = typeof policy.signal === "function" ? policy.signal() : policy.signal;
+    return outer ? AbortSignal.any([request, outer]) : request;
+  };
 
   const approve = async (name: string, args: Record<string, unknown>, signal: AbortSignal): Promise<ApprovalResponse> => {
     if (!policy.approve) return { approved: false, source: "policy", reason: "no approval handler" };
     const pre = policy.approve.precheck?.(name, args);
     if (pre !== undefined) return pre;
-    return policy.approve(name, args, signalFor(signal));
+    return policy.approve(name, args, signal);
   };
 
   const resolvePath = (path: string): string => {
@@ -54,7 +58,12 @@ export function createAcpHostHandlers(policy: AcpHostPolicy): AcpHostHandlers {
       const tool = request.toolCall;
       const title = tool.title ?? "tool call";
       const { name, args } = permissionTarget(policy.agentId, request);
-      const response = await approve(name, args, signal);
+      // ACP: once the client cancels the turn, pending permission requests
+      // must be answered "cancelled", not rejected.
+      const live = signalFor(signal);
+      if (live.aborted) return { outcome: { outcome: "cancelled" } };
+      const response = await approve(name, args, live);
+      if (live.aborted) return { outcome: { outcome: "cancelled" } };
       const allowed = response === true;
       decisions.push({ title, kind: tool.kind ?? undefined, allowed });
       const option = pickOption(request.options, allowed);
@@ -63,7 +72,7 @@ export function createAcpHostHandlers(policy: AcpHostPolicy): AcpHostHandlers {
 
     async readTextFile(request, signal) {
       const path = resolvePath(request.path);
-      const allowed = await approve("read_file", { path }, signal);
+      const allowed = await approve("read_file", { path }, signalFor(signal));
       if (allowed !== true) throw RequestError.internalError(undefined, denialText(allowed));
       const buffer = await readFile(path);
       if (buffer.byteLength > READ_MAX_BYTES) throw RequestError.invalidParams(undefined, `file exceeds ${READ_MAX_BYTES} bytes`);
@@ -78,7 +87,7 @@ export function createAcpHostHandlers(policy: AcpHostPolicy): AcpHostHandlers {
 
     async writeTextFile(request, signal) {
       const path = resolvePath(request.path);
-      const allowed = await approve("write_file", { path, content: request.content }, signal);
+      const allowed = await approve("write_file", { path, content: request.content }, signalFor(signal));
       if (allowed !== true) throw RequestError.internalError(undefined, denialText(allowed));
       if (policy.trackEdit) {
         try { await policy.trackEdit([path]); } catch { /* checkpoint coverage is best-effort, as for write_file */ }
@@ -90,10 +99,14 @@ export function createAcpHostHandlers(policy: AcpHostPolicy): AcpHostHandlers {
   };
 }
 
-/** ACP permission requests carry a tool kind and free-form input. Commands
- * map to zap's `bash` so dangerous-command rules apply; everything else is a
- * namespaced call the user approves on its title. */
-function permissionTarget(agentId: string, request: RequestPermissionRequest): { name: string; args: Record<string, unknown> } {
+/** ACP permission requests carry a tool kind and free-form input. Where the
+ * request names concrete effects, it maps onto zap's own tool so the same
+ * policy applies: commands → `bash` (dangerous-command rules), a single-file
+ * write with known content → `write_file` (edit preview, acceptEdits,
+ * workspace scope), a single-file delete/read → `delete_file`/`read_file`.
+ * Anything else is `acp_<agent>_<kind>`; only read/search/think kinds of
+ * those count as read-only, so plan mode refuses the rest. */
+export function permissionTarget(agentId: string, request: RequestPermissionRequest): { name: string; args: Record<string, unknown> } {
   const tool = request.toolCall;
   const input = tool.rawInput && typeof tool.rawInput === "object" ? tool.rawInput as Record<string, unknown> : {};
   // codex-acp: `command` (string or argv); agy: `CommandLine`.
@@ -102,11 +115,27 @@ function permissionTarget(agentId: string, request: RequestPermissionRequest): {
     : Array.isArray(raw) && raw.every(part => typeof part === "string") ? (raw as string[]).join(" ")
     : undefined;
   if (tool.kind === "execute" && command) return { name: "bash", args: { command, description: tool.title ?? undefined } };
+
+  const paths = [...new Set([
+    ...(tool.locations ?? []).map(location => location.path),
+    ...(tool.content ?? []).flatMap(item => item.type === "diff" ? [item.path] : []),
+  ])].filter(path => isAbsolute(path));
+  if (paths.length === 1) {
+    const path = paths[0]!;
+    if (tool.kind === "edit") {
+      const diff = tool.content?.find(item => item.type === "diff" && item.path === path);
+      // agy: { Content, Path }; others: content / new_content.
+      const content = diff?.type === "diff" ? diff.newText : [input.Content, input.content, input.new_content].find(value => typeof value === "string");
+      if (typeof content === "string") return { name: "write_file", args: { path, content } };
+    }
+    if (tool.kind === "delete") return { name: "delete_file", args: { path } };
+    if (tool.kind === "read") return { name: "read_file", args: { path } };
+  }
   return {
     name: `acp_${sanitize(agentId)}_${tool.kind ?? "other"}`,
     args: {
       title: tool.title ?? "tool call",
-      ...(tool.locations?.length ? { paths: tool.locations.map(location => location.path) } : {}),
+      ...(paths.length ? { paths } : {}),
       ...(tool.rawInput !== undefined ? { input: tool.rawInput } : {}),
     },
   };

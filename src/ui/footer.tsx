@@ -45,6 +45,8 @@ interface FooterProps {
   step: number
   maxSteps: number
   contextBudget: ContextBudgetSnapshot
+  /** Hide zap's context gauge (an external ACP agent owns its own context). */
+  hideContext?: boolean
   hasApiKey: boolean
   showWelcome?: boolean
   shellMode?: boolean
@@ -66,6 +68,7 @@ export const Footer = memo(function Footer({
   effort,
   isRunning,
   contextBudget,
+  hideContext,
   hasApiKey,
   showWelcome,
   shellMode,
@@ -105,7 +108,7 @@ export const Footer = memo(function Footer({
   if (!hasApiKey && !showWelcome) rightSegments.push({ text: "! /connect", fg: c.warning, key: "connect" })
   if (showWelcome && !hasApiKey) rightSegments.push({ text: "/connect", fg: c.accent, key: "connect" })
   if (tpsText) rightSegments.push({ text: tpsText, fg: c.text.muted, key: "tps" })
-  if (ctxText) rightSegments.push({ text: ctxText, fg: ctxColor, key: "ctx" })
+  if (ctxText && !hideContext) rightSegments.push({ text: ctxText, fg: ctxColor, key: "ctx" })
   if (mcp && mcp.total > 0) {
     const hasError = mcp.error > 0 || mcp.needsAuth > 0
     const hasDegraded = mcp.degraded > 0 || mcp.ready < mcp.total - mcp.error - mcp.needsAuth

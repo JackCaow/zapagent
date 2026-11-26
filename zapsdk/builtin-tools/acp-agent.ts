@@ -144,7 +144,10 @@ export function acpAgentTool(opts: AcpAgentToolOptions): Tool | null {
       const aborted = !!signal?.aborted;
       const after = await gitStatusSnapshot(cwd, processBroker);
       const changes = diffSnapshots(before, after);
-      const success = !!result && !failure && result.stopReason !== "refusal";
+      // A timeout or abort the agent honoured still returns a result with
+      // stopReason "cancelled"; that is not a completed task.
+      const success = !!result && !failure && !aborted && !timedOut
+        && result.stopReason !== "refusal" && result.stopReason !== "cancelled";
       observe(aborted ? "cancelled" : success ? "exited" : "failed");
       opts.onEvent?.({ type: "sub_agent_finished", subagentId, agentType: spec.id, success,
         usage: result?.usage, steps: result?.toolCalls, path: [] });
@@ -174,7 +177,11 @@ export function acpAgentTool(opts: AcpAgentToolOptions): Tool | null {
       if (changeText) sections.push(`---\n${changeText}`);
       if (notes.length) sections.push(notes.map(note => `_${note}_`).join("\n"));
       if (result.resumable) sections.push(`_Session: pass \`session_id="${result.sessionId}"\` with agent="${spec.id}" to continue._`);
-      return { success, output: sections.join("\n\n"), error: success ? undefined : `stop reason: ${result.stopReason}`, meta };
+      const error = success ? undefined
+        : timedOut ? `${spec.id} timed out after ${Math.round(timeoutMs / 1000)}s; partial report above.`
+        : aborted ? "aborted"
+        : `stop reason: ${result.stopReason}`;
+      return { success, output: sections.join("\n\n"), error, meta };
     },
   };
 }

@@ -92,8 +92,13 @@ unchanged (`zapsdk/acp-client/host-handlers.ts`):
 |---|---|---|
 | `fs/read_text_file` | `read_file {path}` | Absolute paths only; `line`/`limit` honoured; 10 MiB cap. |
 | `fs/write_text_file` | `write_file {path, content}` | Checkpoint (`createEditTracker`) runs **before** the write, so `/rewind` covers it. |
-| `session/request_permission`, kind `execute` with a command in `rawInput` (`command`, or agy's `CommandLine`) | `bash {command}` | Dangerous-command rules apply. |
-| `session/request_permission`, other | `acp_<agent>_<kind> {title, paths, input}` | Plan mode denies (not read-only); rules can target the name. |
+| permission, kind `execute` with a command (`command`, or agy's `CommandLine`) | `bash {command}` | Dangerous-command rules apply. |
+| permission, kind `edit`, one file, content known (diff `newText`, or `Content`/`content`) | `write_file {path, content}` | Edit preview, acceptEdits and workspace scope apply (agy and codex both qualify). |
+| permission, kind `delete` / `read`, one file | `delete_file` / `read_file {path}` | |
+| permission, anything else | `acp_<agent>_<kind> {title, paths, input}` | Treated as a write unless kind is read/search/think (`approvalFacts`), so plan mode refuses it. |
+
+When the turn is cancelled, pending permission requests are answered
+`cancelled` (ACP requirement) and the zap approval prompt is dismissed.
 
 Zap only ever selects `allow_once`/`reject_once`: an "always" grant lives in
 zap's rules, never inside the external agent. `terminal/*` is not advertised
@@ -166,6 +171,11 @@ zap's own turns (thinking, text, tool rows, diffs, errors, run divider).
 - The provider check is skipped while an agent is active (the agent brings
   its own model); the prompt label and footer show `ACP/<id>`.
 - `/goal` stays on zap's own model and is refused in agent mode.
+- Each remote turn opens and closes a checkpoint turn (`beginTurn` /
+  `makeSnapshot`), so it appears in `/rewind` and fs writes are attributed
+  to it. zap's context gauge is hidden while an agent is active.
+- A failed turn (including an agent that ignores cancellation) closes the
+  agent process; the next message starts a fresh agent session.
 
 Not yet: agent slash commands (`available_commands_update`) in the palette,
 an agent mode picker, image prompts beyond pass-through, steering mid-turn,
@@ -204,7 +214,10 @@ an adapter from a real agent.
   would allow its own tools.
 - `acp_agent` itself is `permission: "confirm"`. Session/project grants are
   scoped to `agent@cwd` exactly like `delegate_agent(provider@cwd)`; a bare
-  `acp_agent` allow rule never grants delegation.
+  `acp_agent` allow rule never grants delegation. Although its process effect
+  is `unsandboxed`, `approvalFacts` does not treat it as a sandbox escape: the
+  agent-scoped approval is the consent, and it neither uses nor grants bash's
+  outside-sandbox authorization.
 - The agent process runs **outside the OS sandbox** (`unsandboxed: true`
   process effect): external agents need their own state directories,
   credentials and model endpoints, which zap cannot enumerate per agent. It

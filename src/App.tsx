@@ -1335,6 +1335,7 @@ export function App() {
           step={step}
           maxSteps={config.maxSteps}
           contextBudget={contextBudget}
+          hideContext={!!config.activeAgent}
           hasApiKey={hasKey}
           showWelcome={logs.length === 0 && !isRunning && !isStreaming}
           shellMode={isShellMode()}

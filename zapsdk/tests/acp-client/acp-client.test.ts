@@ -206,6 +206,31 @@ describe("runAcpTask (in-process agent)", () => {
     } finally { await rm(cwd, { recursive: true, force: true }); }
   });
 
+  it("answers a pending permission request 'cancelled' when the turn is cancelled", async () => {
+    const cwd = await tempDir();
+    try {
+      const controller = new AbortController();
+      let outcome: unknown;
+      const { app } = fakeAgent({ async script(turn) {
+        const pending = turn.client.request<RequestPermissionResponse>("session/request_permission", { sessionId: turn.sessionId,
+          toolCall: { toolCallId: "t", title: "Fetch", kind: "fetch" },
+          options: [{ optionId: "y", name: "Yes", kind: "allow_once" }, { optionId: "n", name: "No", kind: "reject_once" }] });
+        controller.abort();
+        outcome = (await pending).outcome;
+        await turn.cancelled;
+        return "cancelled";
+      } });
+      // An approval that only settles when its signal aborts, like the TUI prompt.
+      const approve = ((_name: string, _args: Record<string, unknown>, signal?: AbortSignal) => new Promise<boolean>((resolve) => {
+        signal?.addEventListener("abort", () => resolve(false), { once: true });
+      })) as unknown as ApprovalCallback;
+      const result = await runAcpTask({ spec, task: "x", cwd, transport: inProcessTransport(app), signal: controller.signal,
+        handlers: createAcpHostHandlers({ agentId: "fake", cwd, approve, signal: () => controller.signal }) });
+      expect(outcome).toEqual({ outcome: "cancelled" });
+      expect(result.stopReason).toBe("cancelled");
+    } finally { await rm(cwd, { recursive: true, force: true }); }
+  });
+
   it("resumes with session/load only when the agent supports it", async () => {
     const cwd = await tempDir();
     try {
@@ -291,6 +316,22 @@ describe("acp_agent tool", () => {
       expect(finished).toMatchObject({ agentType: "fake", success: true });
       const subagentId = started && "subagentId" in started ? started.subagentId : "";
       expect(events.filter(event => event.type === "content_final").every(event => event.path?.[0] === subagentId)).toBe(true);
+    } finally { await rm(cwd, { recursive: true, force: true }); }
+  });
+
+  it("reports a timeout as a failure even when the agent cancels cooperatively", async () => {
+    const cwd = await tempDir();
+    try {
+      const { app } = fakeAgent({ async script(turn) {
+        await turn.update(text("partial work"));
+        await turn.cancelled;
+        return "cancelled";
+      } });
+      const tool = acpAgentTool({ agents: [spec], defaultCwd: cwd, timeoutMs: 150, transportFactory: () => inProcessTransport(app) })!;
+      const result = await tool.handler({ agent: "fake", task: "slow" });
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("timed out");
+      expect(result.output).toContain("partial work");
     } finally { await rm(cwd, { recursive: true, force: true }); }
   });
 

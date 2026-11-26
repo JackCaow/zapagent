@@ -605,6 +605,14 @@ export function useAgentRunner({
           },
           saveLastOutput,
           onInputAccepted: invocation?.onInputAccepted,
+          checkpointTurn: checkpoint ? (() => {
+            const turnStartIndex = conversation.getAllMessages().length
+            const position = () => ({ journalLogIndex: turnStartLogIndexRef.current, uiLogIndex: turnStartUiLogIndexRef.current })
+            return {
+              begin: () => checkpoint.beginTurn(turnStartIndex, position(), task),
+              end: () => checkpoint.makeSnapshot(turnStartIndex, position()),
+            }
+          })() : undefined,
           setStatus, setStep, setActiveTool, setActiveToolBytes, setProviderRequest, setOutputThroughput,
           addLog, replaceLog, peekNextLogId, compactLogs,
           onAgentRunState: (run) => { agentRunStore.apply(run) },

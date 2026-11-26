@@ -30,6 +30,8 @@ interface LiveSession {
 export class RemoteAgentManager {
   private live?: LiveSession
   private starting?: Promise<LiveSession>
+  /** Signal of the turn in flight; approval prompts close when it aborts. */
+  private turnSignal?: AbortSignal
   readonly host: RemoteAgentHost = {}
 
   constructor(private readonly transportFor: (spec: AcpAgentSpec, cwd: string) => AcpTransport = spawnTransport) {}
@@ -55,13 +57,18 @@ export class RemoteAgentManager {
       }
     }
     options.onAccepted?.()
+    this.turnSignal = options.signal
     try {
       const result = await live.session.prompt(content, { signal: options.signal, onEvent: options.onEvent })
       return { ...result, session: live.session }
     } catch (error) {
-      // A dead or wedged agent must not be reused for the next turn.
-      if (!options.signal.aborted) await this.reset()
+      // A cooperative cancel resolves with stopReason "cancelled"; a throw
+      // means the agent died, failed, or ignored cancellation and may still
+      // be working. Never reuse it for the next turn.
+      await this.reset()
       throw error
+    } finally {
+      this.turnSignal = undefined
     }
   }
 
@@ -86,6 +93,7 @@ export class RemoteAgentManager {
           { precheck: (name: string, args: Record<string, unknown>) => this.host.approve?.precheck?.(name, args) },
         ),
         trackEdit: paths => this.host.trackEdit?.(paths) ?? Promise.resolve(),
+        signal: () => this.turnSignal,
       })
       const session = await AcpAgentSession.start({
         spec, cwd, transport: this.transportFor(spec, cwd), handlers, signal, clientVersion: VERSION,
