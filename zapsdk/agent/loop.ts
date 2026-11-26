@@ -516,6 +516,7 @@ export class LoopAgent {
   private storageSessionId: string;
   private storageProjectCwd: string;
   private sessionId: string;
+  private readonly providerSessionId: string;
   private onRunStart?: LoopAgentOptions["onRunStart"];
   private onRunEnd?: (ctx: { turnStartIndex: number; sessionId: string }) => Promise<void>;
   // onRetry surfaces a system log via the observation event bus so the
@@ -601,6 +602,7 @@ export class LoopAgent {
     this.storageSessionId = options.storageSessionId ?? randomUUID();
     this.storageProjectCwd = options.storageProjectCwd ?? process.cwd();
     this.sessionId = options.sessionId ?? "default";
+    this.providerSessionId = options.sessionId ?? this.storageSessionId;
     this.onRunStart = options.onRunStart;
     this.onRunEnd = options.onRunEnd;
     this.contextWindow = nonNegativeInteger(options.contextWindow);
@@ -2270,7 +2272,7 @@ export class LoopAgent {
   private providerCallOptions(step: number, maxOutputTokens: number | undefined, signal?: AbortSignal): LLMCallOptions {
     const requestId = nextContentId("request");
     let observedAttempt: number | undefined;
-    const options: LLMCallOptions = { maxOutputTokens, signal,
+    const options: LLMCallOptions = { maxOutputTokens, signal, sessionId: this.providerSessionId,
       deadline: signal ? this.providerDeadlines.get(signal) : undefined, onRequestEvent: request => {
       if (request.cacheShape && observedAttempt !== request.attempt) {
         observedAttempt = request.attempt;

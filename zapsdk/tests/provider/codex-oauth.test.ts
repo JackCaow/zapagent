@@ -2,6 +2,9 @@ import { expect, test } from "bun:test";
 import { z } from "zod";
 import { OpenAIResponsesProvider } from "../../core/providers/openai-responses.js";
 import { OpenAICompatibleProvider } from "../../core/providers/openai-compatible.js";
+import { LoopAgent } from "../../agent/loop.js";
+import { ToolExecutor } from "../../tools/executor.js";
+import { ToolRegistry } from "../../tools/registry.js";
 import type { LLMChunk, Message } from "../../core/types.js";
 
 const text = (value: string, phase = "final_answer") => ({ type: "message", role: "assistant", phase,
@@ -30,17 +33,44 @@ test("pins Codex credentials to its backend, strips unsupported controls and res
   const first = await provider.call(messages);
   expect(first.text).toBe("Hello");
   expect(first.usage).toMatchObject({ inputTokens: 60, outputTokens: 12, cacheReadInputTokens: 40 });
-  expect(bodies[0]).toMatchObject({ instructions: "Project rules", input: [{ role: "user", content: "hello" }], store: false, stream: true,
+  expect(bodies[0]).toMatchObject({ instructions: "", input: [{ role: "developer", content: "Project rules" },
+    { role: "user", content: "hello" }], store: false, stream: true,
     reasoning: { effort: "high" } });
   for (const key of ["max_output_tokens", "temperature", "top_p"]) expect(bodies[0][key]).toBeUndefined();
   const history = [...messages, { role: "assistant" as const, content: first.text, raw: first.raw }, { role: "user" as const, content: "continue" }];
   await provider.call(history, undefined, { model: "override" });
   expect(calls).toBe(2);
   expect(bodies[1].model).toBe("override");
+  expect(bodies[1].input.slice(0, 2)).toEqual(bodies[0].input);
   expect(bodies[1].input.find((item: any) => item.type === "reasoning")).toEqual(reasoning);
   expect(bodies[1].input.find((item: any) => item.role === "assistant").phase).toBe("final_answer");
   const chat = new OpenAICompatibleProvider({ model: "other", apiKey: "fixture" }).serializeMessages(history);
   expect(JSON.stringify(chat)).not.toContain("encrypted-state");
+});
+
+test("Codex cache routing follows the agent conversation across turns and runtime rebuilds", async () => {
+  const ids: (string | null)[] = [];
+  const provider = new OpenAIResponsesProvider({ model: "test", codex: {
+    getCredentials: async () => ({ accessToken: "fixture" }),
+    fetch: (async (_url, init) => {
+      ids.push(new Headers(init?.headers).get("session-id"));
+      return reply([terminal([text("ok")])]);
+    }) as typeof fetch,
+  } });
+  const registry = new ToolRegistry();
+  const agent = (sessionId?: string) => new LoopAgent({ provider, registry, executor: new ToolExecutor(registry), sessionId });
+  const first = agent("saved conversation");
+  await first.run("First");
+  await first.run("Append");
+  await agent("saved conversation").run("Resume");
+  await agent("another conversation").run("Start");
+  await agent().run("Anonymous one");
+  await agent().run("Anonymous two");
+  expect(ids).toHaveLength(6);
+  expect(ids[0]).toMatch(/^[0-9a-f]{64}$/);
+  expect(ids.slice(1, 3)).toEqual([ids[0], ids[0]]);
+  expect(new Set([ids[0], ...ids.slice(3)]).size).toBe(4);
+  expect(ids).not.toContain(null);
 });
 
 test("Codex withholds complete tool arguments until terminal success and preserves parallel calls", async () => {

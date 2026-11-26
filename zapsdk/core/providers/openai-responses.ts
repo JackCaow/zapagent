@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import OpenAI from "openai";
 import type { Response as APIResponse, ResponseInputItem, ResponseCreateParams } from "openai/resources/responses/responses";
 import type { LLMProvider, LLMCallOptions } from "../llm.js";
@@ -41,7 +42,7 @@ export class OpenAIResponsesProvider implements LLMProvider {
   setVisionSupported(supported: boolean): void { this.formatter.setVisionSupported(supported); }
   getImageTokenContext(options?: LLMCallOptions) { return this.formatter.getImageTokenContext(options); }
 
-  private async requestClient(request: ProviderRequest): Promise<OpenAI> {
+  private async requestClient(request: ProviderRequest, sessionId?: string): Promise<OpenAI> {
     const codex = this.options.codex;
     if (!codex) return this.client;
     const credentials = await request.wait(codex.getCredentials(request.signal));
@@ -49,6 +50,8 @@ export class OpenAIResponsesProvider implements LLMProvider {
     // OAuth tokens are never sent to a user-configurable endpoint/client.
     return new OpenAI({ baseURL: CODEX_RESPONSES_BASE_URL, apiKey: credentials.accessToken, maxRetries: 0,
       fetch: codex.fetch, defaultHeaders: { originator: "zap",
+        // ChatGPT uses session-id for cache affinity. SDK session IDs can contain arbitrary text.
+        ...(sessionId ? { "session-id": createHash("sha256").update(sessionId).digest("hex") } : {}),
         ...(credentials.accountId ? { "ChatGPT-Account-ID": credentials.accountId } : {}) } });
   }
 
@@ -121,7 +124,7 @@ export class OpenAIResponsesProvider implements LLMProvider {
       model: opts?.model ?? this.options.model,
       max_output_tokens: opts?.maxOutputTokens ?? this.options.maxTokens ?? 4096,
       ...extra,
-      input: this.serializeMessages(messages),
+      input: [],
       tools: tools?.length ? [...tools].sort((a, b) => a.name.localeCompare(b.name)).map(tool => ({
         type: "function", name: tool.name, description: tool.description, strict: false,
         parameters: canonicalizeJsonSchema(tool.rawSchema ?? zodToJsonSchema(tool.parameters)),
@@ -142,13 +145,19 @@ export class OpenAIResponsesProvider implements LLMProvider {
       else delete body.reasoning;
       let leadingSystemEnd = 0;
       while (messages[leadingSystemEnd]?.role === "system") leadingSystemEnd++;
-      body.instructions = messages.slice(0, leadingSystemEnd).map(message => stripBoundary(message.content)).join("\n\n");
-      body.input = this.serializeMessages(messages.slice(leadingSystemEnd));
+      // GPT-6.2 renders top-level instructions after the cacheable input.
+      const instructions = messages.slice(0, leadingSystemEnd).map(message => stripBoundary(message.content)).join("\n\n");
+      const input = this.serializeMessages(messages.slice(leadingSystemEnd));
+      if (instructions) input.unshift({ role: "developer", content: instructions });
+      body.input = input;
+      body.instructions = "";
       // Codex requires SSE and rejects generation controls accepted by the API.
       delete body.max_output_tokens;
       delete body.temperature;
       delete body.top_p;
       body.stream = true;
+    } else {
+      body.input = this.serializeMessages(messages);
     }
     return body;
   }
@@ -238,7 +247,7 @@ export class OpenAIResponsesProvider implements LLMProvider {
   private async *streamResponse(messages: Message[], tools: ToolDefinition[] | undefined, opts: LLMCallOptions | undefined, request: ProviderRequest): AsyncIterable<LLMChunk> {
     const body = this.body(messages, tools, opts, true);
     request.measureBody(body, this.options.maxRequestBytes, `responses:${this.options.codex ? CODEX_RESPONSES_BASE_URL : this.options.baseURL ?? this.options.client?.baseURL ?? "default"}`);
-    const client = await this.requestClient(request);
+    const client = await this.requestClient(request, opts?.sessionId);
     const stream = await request.wait(client.responses.create({ ...body, stream: true }, { signal: request.signal, maxRetries: 0 }));
     request.responseReceived();
     let emittedText = "";
