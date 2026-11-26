@@ -59,7 +59,8 @@ function agentLabel(log: LogEntry): string {
   const path = log.agentPath
   if (!path?.length) return ""
   const short = path.map(seg => {
-    const m = seg.match(/^da_([^_]+)/)
+    // delegate_agent ids are da_<provider>_…, acp_agent ids acp_<agent>_<time>_<rand>.
+    const m = seg.match(/^da_([^_]+)/) ?? seg.match(/^acp_(.+)_[a-z0-9]+_[a-z0-9]{4}$/)
     return m ? m[1] : seg
   }).join("/")
   return `[${short}]`
