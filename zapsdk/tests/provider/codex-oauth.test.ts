@@ -2,14 +2,17 @@ import { expect, test } from "bun:test";
 import { z } from "zod";
 import { OpenAIResponsesProvider } from "../../core/providers/openai-responses.js";
 import { OpenAICompatibleProvider } from "../../core/providers/openai-compatible.js";
+import { LoopAgent } from "../../agent/loop.js";
+import { ToolExecutor } from "../../tools/executor.js";
+import { ToolRegistry } from "../../tools/registry.js";
 import type { LLMChunk, Message } from "../../core/types.js";
 
 const text = (value: string, phase = "final_answer") => ({ type: "message", role: "assistant", phase,
   content: [{ type: "output_text", text: value }] });
 const reasoning = { type: "reasoning", id: "rs_1", summary: [], encrypted_content: "encrypted-state" };
 const fn = (id: string, args = '{"value":"ok"}') => ({ type: "function_call", call_id: id, name: "echo", arguments: args });
-const terminal = (output: unknown[]) => ({ type: "response.completed", response: { status: "completed", output,
-  usage: { input_tokens: 100, output_tokens: 12, input_tokens_details: { cached_tokens: 40 } } } });
+const terminal = (output: unknown[], details: { cached_tokens: number; cache_write_tokens?: number } = { cached_tokens: 40 }) => ({ type: "response.completed", response: { status: "completed", output,
+  usage: { input_tokens: 100, output_tokens: 12, input_tokens_details: details } } });
 const reply = (events: unknown[]) => new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(""),
   { headers: { "Content-Type": "text/event-stream" } });
 const messages: Message[] = [{ role: "system", content: "Project rules" }, { role: "user", content: "hello" }];
@@ -30,17 +33,76 @@ test("pins Codex credentials to its backend, strips unsupported controls and res
   const first = await provider.call(messages);
   expect(first.text).toBe("Hello");
   expect(first.usage).toMatchObject({ inputTokens: 60, outputTokens: 12, cacheReadInputTokens: 40 });
-  expect(bodies[0]).toMatchObject({ instructions: "Project rules", input: [{ role: "user", content: "hello" }], store: false, stream: true,
+  expect(first.usage.cacheCreationInputTokens).toBeUndefined();
+  expect(bodies[0].prompt_cache_key).toBeUndefined();
+  expect(bodies[0]).toMatchObject({ instructions: "", input: [{ role: "developer", content: "Project rules" },
+    { role: "user", content: "hello" }], store: false, stream: true,
     reasoning: { effort: "high" } });
   for (const key of ["max_output_tokens", "temperature", "top_p"]) expect(bodies[0][key]).toBeUndefined();
   const history = [...messages, { role: "assistant" as const, content: first.text, raw: first.raw }, { role: "user" as const, content: "continue" }];
   await provider.call(history, undefined, { model: "override" });
   expect(calls).toBe(2);
   expect(bodies[1].model).toBe("override");
+  expect(bodies[1].input.slice(0, 2)).toEqual(bodies[0].input);
   expect(bodies[1].input.find((item: any) => item.type === "reasoning")).toEqual(reasoning);
   expect(bodies[1].input.find((item: any) => item.role === "assistant").phase).toBe("final_answer");
   const chat = new OpenAICompatibleProvider({ model: "other", apiKey: "fixture" }).serializeMessages(history);
   expect(JSON.stringify(chat)).not.toContain("encrypted-state");
+});
+
+test("Codex cache routing follows the agent conversation across turns and runtime rebuilds", async () => {
+  const ids: (string | null)[] = [];
+  const provider = new OpenAIResponsesProvider({ model: "test", codex: {
+    getCredentials: async () => ({ accessToken: "fixture" }),
+    fetch: (async (_url, init) => {
+      const sessionId = new Headers(init?.headers).get("session-id");
+      ids.push(sessionId);
+      expect(JSON.parse(String(init?.body)).prompt_cache_key).toBe(sessionId);
+      return reply([terminal([text("ok")])]);
+    }) as typeof fetch,
+  } });
+  const registry = new ToolRegistry();
+  const agent = (sessionId?: string) => new LoopAgent({ provider, registry, executor: new ToolExecutor(registry), sessionId });
+  const first = agent("saved conversation");
+  await first.run("First");
+  await first.run("Append");
+  await agent("saved conversation").run("Resume");
+  await agent("another conversation").run("Start");
+  await agent().run("Anonymous one");
+  await agent().run("Anonymous two");
+  expect(ids).toHaveLength(6);
+  expect(ids[0]).toMatch(/^[0-9a-f]{64}$/);
+  expect(ids.slice(1, 3)).toEqual([ids[0], ids[0]]);
+  expect(new Set([ids[0], ...ids.slice(3)]).size).toBe(4);
+  expect(ids).not.toContain(null);
+});
+
+test("an explicit Codex cache key preserves session routing", async () => {
+  const sessionIds: (string | null)[] = [];
+  for (const key of ["workspace-cache", null]) {
+    const provider = new OpenAIResponsesProvider({ model: "test", extraRequestParams: { prompt_cache_key: key }, codex: {
+      getCredentials: async () => ({ accessToken: "fixture" }),
+      fetch: (async (_url, init) => {
+        sessionIds.push(new Headers(init?.headers).get("session-id"));
+        expect(JSON.parse(String(init?.body)).prompt_cache_key).toBe(key);
+        return reply([terminal([text("ok")])]);
+      }) as typeof fetch,
+    } });
+    await provider.call(messages, undefined, { sessionId: "saved conversation" });
+  }
+  expect(sessionIds[0]).toMatch(/^[0-9a-f]{64}$/);
+  expect(sessionIds[1]).toBe(sessionIds[0]);
+});
+
+test("Codex cache writes are counted separately from fresh and cached input", async () => {
+  for (const written of [0, 25]) {
+    const provider = new OpenAIResponsesProvider({ model: "test", codex: {
+      getCredentials: async () => ({ accessToken: "fixture" }),
+      fetch: (async () => reply([terminal([text("ok")], { cached_tokens: 40, cache_write_tokens: written })])) as typeof fetch,
+    } });
+    const result = await provider.call(messages);
+    expect(result.usage).toMatchObject({ inputTokens: 60 - written, cacheReadInputTokens: 40, cacheCreationInputTokens: written });
+  }
 });
 
 test("Codex withholds complete tool arguments until terminal success and preserves parallel calls", async () => {

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { LLMProvider } from "../core/llm.js";
 import type { Message, TokenUsage } from "../core/types.js";
 import {
@@ -52,7 +53,8 @@ export class SingleCallAgent {
 
     // First LLM call
     const tools = this.registry.definitions();
-    const response = await this.provider.call(messages, tools);
+    const options = { sessionId: this.sessionId ?? randomUUID() };
+    const response = await this.provider.call(messages, tools, options);
     accumulateTokenUsage(totalUsage, response.usage);
 
     // If no tool calls, return directly
@@ -82,7 +84,7 @@ export class SingleCallAgent {
     }
 
     // Second LLM call with tool results
-    const finalResponse = await this.provider.call(messages, tools);
+    const finalResponse = await this.provider.call(messages, tools, options);
     accumulateTokenUsage(totalUsage, finalResponse.usage);
 
     return { text: finalResponse.text, toolResults, totalUsage };
