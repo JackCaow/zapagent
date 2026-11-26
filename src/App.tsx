@@ -747,7 +747,8 @@ export function App() {
   )
 
   const precheckProvider = useCallback(
-    () => isProviderReady(configRef, addLog),
+    // An external ACP agent brings its own model and credentials.
+    () => !!configRef.current.activeAgent || isProviderReady(configRef, addLog),
     [addLog],
   )
 
@@ -922,7 +923,7 @@ export function App() {
 
   // ── Render ──
   const providerDisplayName = getProviderDisplayName(config)
-  const hasKey = configHasApiKey(config)
+  const hasKey = !!config.activeAgent || configHasApiKey(config)
   const welcomeHeader = useMemo(() => <Welcome hasApiKey={hasKey} />, [hasKey])
   const mcpFooterSummary = useMemo(
     () => summariseMCPStatuses(mcp.snapshots),
@@ -1147,7 +1148,7 @@ export function App() {
       {!inModal && !pendingApproval && !pendingPlan && !pendingQuestions && (
         <Prompt
           config={config}
-          providerLabel={`${providerDisplayName}/${config.active.model}`}
+          providerLabel={config.activeAgent ? `ACP/${config.activeAgent}` : `${providerDisplayName}/${config.active.model}`}
           hasActiveKey={hasKey}
           inputValue={inputValue}
           onInput={paste.handleInput}
@@ -1327,9 +1328,9 @@ export function App() {
         <Footer
           outputThroughput={outputThroughput}
           cwd={cwdShort}
-          provider={providerDisplayName}
-          model={config.active.model}
-          effort={config.active.providerId ? getEffort(config, config.active.providerId) : undefined}
+          provider={config.activeAgent ? "ACP" : providerDisplayName}
+          model={config.activeAgent ?? config.active.model}
+          effort={!config.activeAgent && config.active.providerId ? getEffort(config, config.active.providerId) : undefined}
           isRunning={isRunning}
           step={step}
           maxSteps={config.maxSteps}

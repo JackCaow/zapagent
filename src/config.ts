@@ -227,6 +227,9 @@ export interface AppConfig {
    *  (agy, codex-acp) are added automatically;
    *  entries here override them by id. */
   acpAgents?: AcpAgentSpec[]
+  /** Session-scoped: id of the external ACP agent driving the conversation
+   *  (`/agent <id>`). Undefined means zap's own model. Never persisted. */
+  activeAgent?: string
   permissionMode: PermissionMode
   followUpMode?: "queue" | "steer"
   /** Where project shell commands run. "local" (default) uses the host OS
@@ -603,6 +606,7 @@ export function loadAppConfig(configPath: string): AppConfig {
       active: parsed.active ?? defaults.active,
       mcpServers: Array.isArray(parsed.mcpServers) ? parsed.mcpServers : [],
       permissionMode: "default",   // session-scoped
+      activeAgent: undefined,      // session-scoped
     }
     if (process.env.ZAP_DISABLE_FILE_CHECKPOINTING === "1") {
       merged.fileCheckpointingEnabled = false
@@ -661,7 +665,8 @@ function mergeProjectMCPJson(base: AppConfig): AppConfig {
 }
 
 export function saveAppConfig(configPath: string, config: AppConfig): void {
-  writeFileAtomic(configPath, JSON.stringify(config, null, 2) + "\n", { mode: 0o600 })
+  const { activeAgent: _sessionOnly, ...persisted } = config
+  writeFileAtomic(configPath, JSON.stringify(persisted, null, 2) + "\n", { mode: 0o600 })
 }
 
 // ── Vision capability detection ─────────────────────────────────────────────

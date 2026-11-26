@@ -15,7 +15,8 @@ import {
 import { TokenCounter } from "../../zapsdk/context/token-counter.js"
 import { resolveActiveContextLimits } from "../context-budget.js"
 import type { CheckpointManager } from "../../zapsdk/checkpoint/index.js"
-import { conversation, autoMemory } from "../singletons.js"
+import { acpAgents, conversation, autoMemory } from "../singletons.js"
+import { remoteAgents } from "../agent/remote-agent.js"
 import { dispatchMCPCommand } from "./mcp.js"
 import { executeGoalCommand } from "../goal-session.js"
 import {
@@ -377,6 +378,8 @@ export function dispatchSlashCommand(
       }
       wipeTerminalScrollback()
       resetConversationState()
+      // The external agent's own context belongs to the old session.
+      void remoteAgents.reset()
       deps.checkpointRef.current.setSessionId(getCurrentSessionId())
       deps.bumpTranscript()
       return true
@@ -415,6 +418,39 @@ export function dispatchSlashCommand(
       }
       deps.updateConfig(next)
       deps.addToast(`model → ${cmd.value}`)
+      return true
+    }
+
+    case "set_agent": {
+      const value = cmd.value ?? ""
+      const current = deps.configRef.current.activeAgent
+      if (!value) {
+        const lines = acpAgents.length
+          ? acpAgents.map(agent => `  ${agent.id === current ? "›" : " "} ${agent.id.padEnd(10)} ${agent.name ?? ""}${agent.selfGoverned ? " · edits files itself (no zap checkpoints)" : ""}`)
+          : ["  (no ACP agents found on PATH or in acpAgents)"]
+        deps.addLog("system", [`Conversation agent: ${current ?? "zap"}`, `  ${current ? " " : "›"} zap        zap's own model`, ...lines,
+          "Switch with /agent <id>; /agent zap switches back."].join("\n"))
+        return true
+      }
+      if (value === "zap" || value === "off") {
+        void remoteAgents.reset()
+        if (current) {
+          deps.updateConfig({ ...deps.configRef.current, activeAgent: undefined })
+          deps.addToast("agent → zap")
+        }
+        return true
+      }
+      const spec = acpAgents.find(agent => agent.id === value)
+      if (!spec) {
+        deps.addLog("error", `Unknown ACP agent: ${value}. Available: ${["zap", ...acpAgents.map(agent => agent.id)].join(", ")}`)
+        return true
+      }
+      if (value !== current) {
+        void remoteAgents.reset()
+        deps.updateConfig({ ...deps.configRef.current, activeAgent: value })
+        deps.addToast(`agent → ${value}`)
+        deps.addLog("system", `Messages now go to ${spec.name ?? spec.id} over ACP. Its file reads/writes and permission requests use zap's approvals${spec.selfGoverned ? "; it also edits files itself, which zap checkpoints do not cover" : ""}. /agent zap switches back.`)
+      }
       return true
     }
 

@@ -140,21 +140,36 @@ acp_agent({ agent: "agy", task: "...", cwd?, sessionId?, mode? })
 
 ## Mode B: session backend
 
-- `RemoteAgent` (in `src/agent/`) implements the subset of the LoopAgent
-  surface the TUI uses: `on`, `run`, `runWithOutcome`, `toolDefinitions`
-  (empty), `effectiveSystemPrompt`/`protocolPrompt` (agent info),
-  `registry` (an empty registry). `useAgentObjects` builds it instead of a
-  LoopAgent when the active target is an ACP agent.
-- Selection: `/agent <id>` switches the session backend, and `/agent zap`
-  switches back. `active` in config becomes
-  `{ kind: "acp", agentId, model? }`, alongside the existing provider form.
-- Zap-owned features that do not apply remotely are hidden or disabled while
-  remote: compaction, memory injection, skills, model picker (replaced by the
-  agent's `config_option` models), and cost estimates (the agent's usage is
-  shown when reported).
-- Session persistence: zap records the remote sessionId with the transcript.
-  Resume uses `session/load` when supported, otherwise it starts fresh and
-  shows a notice.
+Implemented without a second agent class: `runAgent` (`useAgentRunner`)
+branches to `runRemoteTurn` (`src/agent/remote-turn.ts`) when
+`config.activeAgent` is set. That path reuses `createStreamingPreview` and
+`createRunHandlers().wire(emitter)`; `wire()` only needs an
+`AgentEventSource`, so ACP updates mapped to `AgentEvent`s render exactly like
+zap's own turns (thinking, text, tool rows, diffs, errors, run divider).
+
+- `/agent` lists agents, `/agent <id>` switches, `/agent zap` (or `off`)
+  switches back. `activeAgent` is session-scoped like `permissionMode`:
+  cleared on load and stripped on save.
+- `RemoteAgentManager` (`src/agent/remote-agent.ts`) keeps one agent process
+  and ACP session alive across turns, so the agent keeps its own context. It
+  is replaced on agent or cwd change, dropped after a failed turn, and
+  closed on `/new`, on switching, and at exit.
+- Approval and checkpoint hooks are read from `remoteAgents.host` at request
+  time; `useAgentObjects` updates them on every rebuild, so permission-mode
+  changes apply mid-session without reconnecting.
+- Each exchange is appended to zap's conversation
+  (`user` + `assistant: "[<id> via ACP] …"`), so `/agent zap` continues with
+  the context. The agent's plan, if any, is logged after the turn.
+- The turn returns a `LoopAgentResult` (`stopped` from the ACP stop reason),
+  and calls `onInputAccepted` when the prompt is sent, so the follow-up queue
+  treats remote turns like local ones.
+- The provider check is skipped while an agent is active (the agent brings
+  its own model); the prompt label and footer show `ACP/<id>`.
+- `/goal` stays on zap's own model and is refused in agent mode.
+
+Not yet: agent slash commands (`available_commands_update`) in the palette,
+an agent mode picker, image prompts beyond pass-through, steering mid-turn,
+and resuming the remote session after a zap restart (`session/load`).
 
 ## Extensions
 
@@ -212,8 +227,10 @@ an adapter from a real agent.
    its default "agent" mode: "read-only" routes every edit to zap but stalls
    ~3 minutes upstream before each permission request (reproduced with a bare
    client, so not zap). Zap's plan mode already denies `acp_agent` itself.
-2. **Session mode**: `RemoteAgent`, `/agent` switching, TUI rendering of
-   plan, mode and commands, session persistence.
+2. **Session mode** (done): `/agent` switching, `runRemoteTurn`,
+   `RemoteAgentManager`. Tests: `tests/agent/remote-agent.test.ts`. Verified
+   in the real TUI with no zap provider configured: agy two-turn session
+   (approval dialog, diff rendering, context kept), codex turn, switch back.
 3. **Extensions + zap↔zap**: `_meta.zap` negotiation on both sides,
    `_zap/event` lossless stream.
 4. **Adapters**: move claude and codex to adapters, then retire the

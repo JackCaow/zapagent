@@ -38,6 +38,7 @@ export interface CommandResult {
     | "set_effort"
     | "open_mem"
     | "show_status"
+    | "set_agent"
   text?: string
   value?: string
   skill?: string
@@ -201,6 +202,9 @@ export function parseCommand(input: string): CommandResult | null {
     // ─── Permissions ───
     case "permissions":
       return { type: "show_permissions", value: rest.trim() }
+
+    case "agent":
+      return { type: "set_agent", value: rest.trim() }
 
     case "mode":
       if (!rest.trim()) return { type: "open_mode_picker" }

@@ -44,6 +44,7 @@ function formatArgs(name: string, args: Record<string, unknown> | undefined): st
   if (!args) return ""
   if (name === "agent") return shortAgentLabel(args.task as string | undefined)
   if (name === "skill") return oneLine(args.name)
+  if (name === "acp_agent") return oneLine(`${String(args.agent ?? "")}: ${String(args.task ?? "")}`)
   // exit_plan_mode carries the markdown plan as `plan`. Show the first
   // non-empty line as the in-parens preview so the row reads as
   // `ExitPlanMode("install foo + wire it through bar…")` instead of an
@@ -74,6 +75,9 @@ function formatArgs(name: string, args: Record<string, unknown> | undefined): st
   if (args.query) return oneLine(args.query)
   if (args.url) return oneLine(args.url)
   if (args.task ?? args.description) return oneLine(args.task ?? args.description)
+  // External ACP agents' permission requests carry locations and a title.
+  if (Array.isArray(args.paths) && args.paths.length) return oneLine(args.paths.map(p => normalizePath(String(p))).join(", "))
+  if (args.title) return oneLine(args.title)
   return ""
 }
 

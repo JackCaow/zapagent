@@ -1,0 +1,67 @@
+import type { PlanEntry } from "@agentclientprotocol/sdk"
+import { AgentEventEmitter } from "../../zapsdk/agent/events.js"
+import type { LoopAgentResult } from "../../zapsdk/agent/loop.js"
+import type { ImageContent } from "../../zapsdk/core/types.js"
+import type { ConversationManager } from "../../zapsdk/memory/conversation.js"
+import type { AcpAgentSpec } from "../../zapsdk/acp-client/types.js"
+import type { StreamingPreview } from "./streamingPreview.js"
+import { createRunHandlers, type RunHandlersDeps } from "./wireRunHandlers.js"
+import { remoteAgents } from "./remote-agent.js"
+
+export interface RemoteTurnDeps extends Omit<RunHandlersDeps, "preview" | "setContextTokens" | "setContextPending" | "currentConfig"> {
+  currentConfig: RunHandlersDeps["currentConfig"]
+  spec: AcpAgentSpec
+  cwd: string
+  conversation: ConversationManager
+  createPreview: () => StreamingPreview
+  saveLastOutput: (text: string) => void
+  /** Tells the host queue the agent took the message. */
+  onInputAccepted?: () => void
+}
+
+/** One user turn handled by an external ACP agent instead of zap's loop.
+ * Rendering reuses the regular run handlers, so the transcript looks the
+ * same; zap's conversation records the exchange so switching back to zap
+ * keeps the context. Throws after reporting when the turn fails. */
+export async function runRemoteTurn(deps: RemoteTurnDeps, task: string, images?: ImageContent[]): Promise<LoopAgentResult> {
+  const preview = deps.createPreview()
+  const handlers = createRunHandlers({ ...deps, preview, setContextTokens() {}, setContextPending() {} })
+  const emitter = new AgentEventEmitter()
+  handlers.wire(emitter)
+  const { spec, controller } = deps
+  try {
+    const turn = await remoteAgents.prompt(spec, deps.cwd, task, images, {
+      signal: controller.signal,
+      onEvent: event => emitter.emit(event),
+      onAccepted: deps.onInputAccepted,
+      onStarted: session => {
+        deps.addLog("system", `Connected to ${session.agentName} (${spec.id}) over ACP${session.warnings.length ? ` · ${session.warnings.join("; ")}` : ""}`)
+      },
+    })
+    deps.conversation.add({ role: "user", content: task })
+    deps.conversation.add({ role: "assistant", content: `[${spec.id} via ACP] ${turn.report || "(no message)"}` })
+    if (turn.plan.length) deps.addLog("system", formatPlan(spec.id, turn.plan))
+    if (turn.stopReason !== "end_turn" && turn.stopReason !== "cancelled") deps.addLog("system", `${spec.id} stopped: ${turn.stopReason}`)
+    if (turn.report) deps.saveLastOutput(turn.report)
+    const usage = turn.usage ?? { inputTokens: 0, outputTokens: 0, providerUsageReported: false }
+    if (!controller.signal.aborted) emitter.emit({ type: "run_ended", steps: turn.toolCalls, stopped: turn.stopReason, usage })
+    // The host queue reads this like a LoopAgent result: a non-end_turn stop
+    // pauses follow-ups for review.
+    const stopped = turn.stopReason === "max_tokens" ? "max_tokens" as const
+      : turn.stopReason === "max_turn_requests" ? "max_steps" as const : undefined
+    return { text: turn.report, steps: turn.toolCalls, toolResults: [], totalUsage: usage, stopped }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    // Aborts are silent here; the runner adds the "(interrupted)" marker.
+    if (!controller.signal.aborted) emitter.emit({ type: "error", step: 0, error: `${spec.id}: ${message}` })
+    throw error
+  } finally {
+    preview.drainOnAbort()
+    handlers.settlePending(controller.signal.aborted ? "aborted" : `${spec.id} ended the turn`)
+  }
+}
+
+export function formatPlan(agentId: string, plan: PlanEntry[]): string {
+  const mark = { completed: "✓", in_progress: "▸", pending: "○" } as const
+  return [`${agentId} plan:`, ...plan.map(entry => `  ${mark[entry.status] ?? "○"} ${entry.content}`)].join("\n")
+}
