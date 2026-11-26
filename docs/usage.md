@@ -359,6 +359,12 @@ Headless, explicit **deny wins over ask, and ask wins over allow**, including
 
 ## Optional VM runtime
 
+> **Currently disabled.** zapVM moved to [its own repository](https://github.com/JackCaow/zapVM)
+> and VM execution is switched off in zap (`VM_EXECUTION_ENABLED` in
+> `src/execution-environment.ts`). Commands always run on the local backend; `executionBackend: "vm"`
+> and `ZAPCODE_EXECUTION=vm` are ignored with a notice, and Goal `--install=npm` / `--check`
+> are unavailable. The rest of this section describes the runtime for when it is re-enabled.
+
 Local OS sandboxing is the default; it does not require a running VM. Set `executionBackend: "vm"` or `ZAPCODE_EXECUTION=vm` to opt in after provisioning a compatible runtime and image.
 
 The optional VM runtime targets macOS (x64 / arm64), Linux (x64), and Windows (x64 via

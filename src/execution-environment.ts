@@ -30,11 +30,29 @@ export interface ExecutionEnvironment {
 
 export type ExecutionBackend = "local" | "vm"
 
-/** ZAPCODE_EXECUTION wins over settings; anything but "vm" means local. */
-export function resolveExecutionBackend(configured?: ExecutionBackend): ExecutionBackend {
+/** zapVM execution is switched off: zapVM now lives in its own repository
+ * and zap runs everything on the local backend. The zapVM integration
+ * (`zapsdk/execution/zapvm*.ts`) is kept so this can be turned back on. */
+export const VM_EXECUTION_ENABLED = false
+
+export const VM_EXECUTION_DISABLED_NOTICE =
+  "zapVM execution is disabled in this version of zap; commands run on the local backend (OS sandbox). The \"vm\" setting and ZAPCODE_EXECUTION=vm are ignored."
+
+/** The backend the user asked for (ZAPCODE_EXECUTION wins over settings). */
+export function requestedExecutionBackend(configured?: ExecutionBackend): ExecutionBackend {
   const env = process.env.ZAPCODE_EXECUTION?.trim().toLowerCase()
   if (env === "vm" || env === "local") return env
   return configured === "vm" ? "vm" : "local"
+}
+
+/** The backend actually used: always local while VM execution is disabled. */
+export function resolveExecutionBackend(configured?: ExecutionBackend): ExecutionBackend {
+  return VM_EXECUTION_ENABLED ? requestedExecutionBackend(configured) : "local"
+}
+
+/** True when the user asked for the VM but it is disabled; hosts show the notice once. */
+export function vmExecutionRequestedButDisabled(configured?: ExecutionBackend): boolean {
+  return !VM_EXECUTION_ENABLED && requestedExecutionBackend(configured) === "vm"
 }
 
 function resolveRuntime(cwd: string, backend: ExecutionBackend) {

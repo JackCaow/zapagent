@@ -1,7 +1,7 @@
 # ACP Agent adapter
 
 Zap exposes Agent Client Protocol v1 over stdio using the official TypeScript SDK.
-This is an Agent-side endpoint, independent of the Go ACP client in `zapvm/`.
+This is an Agent-side endpoint, independent of the Go ACP client in zapVM (now in its own repository).
 
 ## Launch
 

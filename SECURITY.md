@@ -23,8 +23,9 @@ mode, reproduction steps, impact, and redacted diagnostics.
 
 - Local execution is the default. Shell sandbox enforcement is platform-specific;
   check the execution diagnostics rather than assuming a VM is active.
-- VM execution is opt-in. It isolates guest commands, not the entire host Agent
-  process. See [the VM threat model](zapvm/docs/threat-model.md).
+- VM execution is currently disabled in zap; commands run on the local backend.
+  When enabled, it is opt-in and isolates guest commands, not the entire host Agent
+  process. See the VM threat model in [the zapVM repository](https://github.com/JackCaow/zapVM/blob/main/docs/threat-model.md).
 - Explicitly approved unsandboxed execution runs with the user's host privileges.
   Permission to call a tool is not proof that its OS sandbox is enforced.
 - Provider APIs receive prompts and selected repository/tool content. MCP servers

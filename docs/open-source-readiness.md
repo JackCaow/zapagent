@@ -13,7 +13,7 @@ benchmark manifests, internal research/planning notes and unverified artwork are
 excluded. Existing source attribution remains intact. The original repository
 retains the complete development record.
 
-The CLI/SDK use MIT (prior ISC notices are retained in `THIRD_PARTY_NOTICES.md`); `zapvm/` retains Apache-2.0 and its notices.
+The CLI/SDK use MIT (prior ISC notices are retained in `THIRD_PARTY_NOTICES.md`). zapVM is licensed and released from its own repository.
 A declared license is not evidence of ownership of every imported fragment.
 See [source provenance review](source-provenance-review.md) for unresolved items.
 
@@ -44,8 +44,6 @@ assets, credentials or trust roots into it.
   from KaTeX through Mermaid/Streamdown. Neither audit reports high/critical
   findings. Do not treat the configured severity threshold as risk acceptance.
 - [ ] Repeat dependency audits and inventory the actual bundled license texts.
-- [ ] Review VM image SPDX records and corresponding-source obligations using
-  `zapvm/THIRD_PARTY_NOTICES.md` and `zapvm/docs/release.md`.
 - [ ] Configure repository-specific signing and publishing credentials, review
   workflow permissions, and keep candidates draft until acceptance completes.
 - [ ] Verify clean-machine installation and actual advertised platform behavior.

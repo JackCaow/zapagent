@@ -1,6 +1,6 @@
 import { readOnlyBashTool } from "../../zapsdk/builtin-tools/subagent.js"
 import { connectLocalServiceOwner } from "../../zapsdk/services/local-owner.js"
-import { createExecutionEnvironment, resolveExecutionBackend } from "../execution-environment.js"
+import { createExecutionEnvironment, resolveExecutionBackend, VM_EXECUTION_DISABLED_NOTICE, vmExecutionRequestedButDisabled } from "../execution-environment.js"
 import { executionExitCode, OutcomeProtocolError, type AgentOutcomeV1 } from "../../zapsdk/runtime/outcome.js"
 import type { CompletionEvidenceProvider } from "../../zapsdk/harness/completion.js"
 import type { LLMProvider } from "../../zapsdk/core/llm.js"
@@ -478,6 +478,7 @@ export async function runHeadless(args: HeadlessArgs, host: HeadlessHost = {}): 
   const skills = loadAllSkills(cwd)
   // Detection is asynchronous; a cold worker must not build an empty registry.
   await delegateProvidersReady
+  if (vmExecutionRequestedButDisabled(config.executionBackend)) process.stderr.write(`${VM_EXECUTION_DISABLED_NOTICE}\n`)
   let executionEnvironment: ReturnType<typeof createExecutionEnvironment> | undefined
   if (args.serviceOwner) {
     try {

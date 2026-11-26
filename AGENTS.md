@@ -27,12 +27,10 @@ Recent history uses Conventional Commit-style subjects such as `feat(memory): ..
 
 Do not commit `.env`, API keys, local session data, or generated personal config. Use `ZAPCODE_DATA_DIR` for sandboxed runs, CI isolation, or tests that need disposable state.
 
-## VM Module Boundary
+## VM Boundary
 
-`zapvm/` is an independent Apache-2.0 Go module. Run `bun run test:vm` or
-`bun run check:vm` from the root; `bun run build:all` builds both Host components.
-Keep its protocol and runtime policy independent of the Agent. Do not import Go
-internals into the SDK, inject prompts from the VM, or override Agent permissions.
-VM web-client tests belong to its own npm/Vitest suite, not the root Bun suite.
-Imported workflows in `zapvm/.github/` are historical references; active monorepo
-workflows live in the root `.github/workflows/` directory.
+zapVM lives in its own repository (https://github.com/JackCaow/zapVM) and is installed separately; this
+repository does not build or bundle it. `zapsdk/execution/zapvm*.ts` discovers an
+installed runtime and talks to it only through its daemon protocol. Keep that
+boundary: do not vendor VM code, inject prompts from the VM, or let it override
+Agent permissions.

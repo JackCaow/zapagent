@@ -28,10 +28,8 @@ explicitly requested. Do not submit API keys, personal config, session journals,
 unredacted screenshots, or customer repositories. Live model calls cost money.
 
 `src/` is the CLI/TUI host; `zapsdk/` is the reusable Agent/Harness. Follow
-[AGENTS.md](AGENTS.md) for TypeScript conventions. For `zapvm/`, also follow
-[its contribution guide](zapvm/CONTRIBUTING.md) and run `bun run check:vm`.
-Keep VM policy independent of agent prompts and permissions. Run web-client
-tests in `zapvm/web/client/react`, not through the root Bun suite.
+[AGENTS.md](AGENTS.md) for TypeScript conventions. The VM runtime is developed
+in [its own repository](https://github.com/JackCaow/zapVM).
 
 ## Pull requests
 
@@ -43,7 +41,6 @@ tests in `zapvm/web/client/react`, not through the root Bun suite.
   acceptance. A build or smoke task does not prove a security boundary.
 - Use scoped Conventional Commit subjects, for example `fix(runtime): ...`.
 
-Contributions to the root project use MIT; contributions under `zapvm/` use
-Apache-2.0. Submit only material you have the right to contribute, and preserve
+Contributions use MIT. Submit only material you have the right to contribute, and preserve
 third-party licenses and attribution. Report vulnerabilities privately as
 described in [SECURITY.md](SECURITY.md).

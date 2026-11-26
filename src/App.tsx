@@ -71,6 +71,7 @@ import { usePermissionApproval } from "./hooks/usePermissionApproval.js"
 import { usePlanMode } from "./hooks/usePlanMode.js"
 import { useAskUser } from "./hooks/useAskUser.js"
 import { usePalettes } from "./hooks/usePalettes.js"
+import { VM_EXECUTION_DISABLED_NOTICE, vmExecutionRequestedButDisabled } from "./execution-environment.js"
 import { useAgentObjects } from "./hooks/useAgentObjects.js"
 import { remoteAgents } from "./agent/remote-agent.js"
 import { useMCPSubsystem } from "./hooks/useMCPSubsystem.js"
@@ -478,6 +479,9 @@ export function App() {
     catch (error) { setQueueError(`Queue storage unavailable: ${error instanceof Error ? error.message : String(error)}`) }
   }, [])
   useEffect(() => { if (queueError) addLog("error", queueError) }, [queueError, addLog])
+  // Tell the user once (per change) that a requested zapVM backend is ignored.
+  const vmIgnored = vmExecutionRequestedButDisabled(config.executionBackend)
+  useEffect(() => { if (vmIgnored) addLog("system", VM_EXECUTION_DISABLED_NOTICE) }, [vmIgnored, addLog])
   const systemInboxSize = useSyncExternalStore(subscribeToSystemInbox, getSystemInboxLength, getSystemInboxLength)
 
   // ── Plan-mode state machine ──

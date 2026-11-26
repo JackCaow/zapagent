@@ -1,4 +1,5 @@
 import { expect, it } from "bun:test"
+import { VM_EXECUTION_ENABLED } from "../../src/execution-environment.js"
 import { spawn } from "node:child_process"
 import { createHash } from "node:crypto"
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
@@ -7,7 +8,8 @@ import { join, resolve } from "node:path"
 import { createCustomProvider, getDefaultConfig } from "../../src/config.js"
 import { GoalStore } from "../../zapsdk/goal/store.js"
 
-it("runs a Goal with managed npm dependencies for worker, child and final check", async () => {
+// Exercises the sealed zapVM path with a fake runtime; kept for when VM execution is re-enabled.
+(VM_EXECUTION_ENABLED ? it : it.skip)("runs a Goal with managed npm dependencies for worker, child and final check", async () => {
   const root = await mkdtemp(join(tmpdir(), "goal-npm-cli-")), cwd = join(root, "project"), data = join(root, "data"), runtime = join(root, "runtime"), audit = join(root, "audit")
   await mkdir(cwd); await mkdir(data); await mkdir(join(runtime, "images"), { recursive: true })
   await writeFile(join(cwd, "package.json"), JSON.stringify({ name: "fixture", version: "1.0.0", private: true, scripts: { test: "node -e 'require(\"fixture\")'" } }))
