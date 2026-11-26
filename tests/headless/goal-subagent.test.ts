@@ -6,9 +6,14 @@ import { createCustomProvider, getDefaultConfig } from "../../src/config.js"
 import { runGoalPhase } from "../../src/headless/goalPhase.js"
 import { GoalBudgetLedger } from "../../zapsdk/goal/budget.js"
 import { GoalWorkspace } from "../../zapsdk/goal/workspace.js"
+import { VM_EXECUTION_ENABLED } from "../../src/execution-environment.js"
 import { execFileSync } from "node:child_process"
 
-it("meters and merges a child in a separate Goal workspace", async () => {
+const scenario = VM_EXECUTION_ENABLED
+  ? "meters and merges a child in a separate Goal workspace"
+  : "withholds sealed Goal delegation when VM execution is disabled"
+
+it(scenario, async () => {
   const root = await mkdtemp(join(tmpdir(), "zap-goal-child-"))
   const cwd = join(root, "work"), data = join(root, "data"), runtime = join(root, "runtime")
   await mkdir(cwd); await mkdir(data); await mkdir(join(runtime, "images"), { recursive: true })
@@ -16,13 +21,17 @@ it("meters and merges a child in a separate Goal workspace", async () => {
   await writeFile(join(runtime, "images", "active.json"), "{}")
   await writeFile(join(runtime, "image-public.pem"), "fixture")
   let childSeen = false, mergeSeen = false, outsideAttempt = false
+  let offeredTools: string[] = []
   const model = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(request) {
     const body = await request.json() as { messages: Array<{ role: string; content: unknown }>; tools: Array<{ function: { name: string } }> }
     const tools = body.tools.map(tool => tool.function.name)
     const child = !tools.includes("agent")
     const result = body.messages.filter(message => message.role === "tool").at(-1)
     let delta: object, finish: string
-    if (child) {
+    if (!VM_EXECUTION_ENABLED) {
+      offeredTools = tools
+      delta = { content: "Completed without delegation." }; finish = "stop"
+    } else if (child) {
       childSeen = true
       if (!result) { delta = { tool_calls: [{ index: 0, id: "child-write", type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: outsideAttempt ? join(root, "outside-child") : "child.txt", content: "from child\n" }) } }] }; finish = "tool_calls" }
       else { delta = { content: "Child completed." }; finish = "stop" }
@@ -45,6 +54,14 @@ it("meters and merges a child in a separate Goal workspace", async () => {
     ledger.create("child-test", 1, { maxTokens: 500_000, maxModelCalls: 20, maxToolCalls: 20, maxSpawns: 2 })
     const result = await runGoalPhase({ cwd, prompt: "Delegate this task", goalId: "child-test", epoch: 1, role: "worker", ledgerPath, permissionMode: "bypassPermissions" })
     expect(result.outcome.execution.status).toBe("finished")
+    if (!VM_EXECUTION_ENABLED) {
+      expect(offeredTools).toContain("write_file")
+      expect(offeredTools).not.toContain("agent")
+      expect(offeredTools).not.toContain("merge_agent_artifacts")
+      expect(ledger.snapshot("child-test").totals.spawns).toBe(0)
+      ledger.close()
+      return
+    }
     expect(childSeen).toBe(true); expect(mergeSeen).toBe(true)
     expect(await readFile(join(cwd, "child.txt"), "utf8")).toBe("from child\n")
     const totals = ledger.snapshot("child-test").totals

@@ -114,7 +114,8 @@ it("headless emits a protocol failure on sealing timeout and recovers its disk o
       };
       const parsed = parseHeadlessArgs(process.argv.slice(2));
       if (!parsed.ok) throw new Error(parsed.message);
-      process.exit(await runHeadless(parsed.args, { sealingTimeoutMs: 200 }));
+      // Leave time for the real disk writes before the deliberately blocked terminal append.
+      process.exit(await runHeadless(parsed.args, { sealingTimeoutMs: 2000 }));
     `);
     const child = spawn(process.execPath, [entry, "--print", "Say done.", "--output-format", "stream-json", "--result-schema", "outcome-v1", "--dangerously-disable-os-sandbox", "--cwd", root], {
       stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ZAPCODE_DATA_DIR: data, ZAPCODE_DEVTOOLS_PORT: "", ZAPCODE_DISABLE_BACKGROUND_TASKS: "1" },
