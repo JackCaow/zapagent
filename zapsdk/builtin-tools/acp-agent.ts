@@ -94,7 +94,7 @@ export function acpAgentTool(opts: AcpAgentToolOptions): Tool | null {
       const cwd = resolveToolPathCanonical(resolveToolPath((args.cwd as string | undefined) ?? base, base), base);
       const timeoutMs = spec.timeoutMs ?? defaultTimeout;
 
-      const subagentId = `acp_${spec.id}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+      const subagentId = `acp_${spec.id}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6).padEnd(4, "0")}`;
       const observation = currentRuntimeObservation();
       const observe = (phase: "starting" | "running" | "failed" | "cancelled" | "exited") => {
         if (observation) observeRuntime({ kind: "external_run", scope: observation.scope, childRunId: subagentId,
@@ -122,7 +122,7 @@ export function acpAgentTool(opts: AcpAgentToolOptions): Tool | null {
       const startedAt = Date.now();
       try {
         const transport = opts.transportFactory?.(spec, cwd) ?? stdioTransport(processBroker.spawnCommand(spec.command, spec.args ?? [], {
-          cwd, hostHome: true, environment: spec.env, preserveEnvironment: spec.preserveEnvironment, stdin: "pipe",
+          cwd, hostHome: true, environment: spec.env, stdin: "pipe",
         }));
         observe("running");
         result = await runAcpTask({
@@ -153,7 +153,8 @@ export function acpAgentTool(opts: AcpAgentToolOptions): Tool | null {
         usage: result?.usage, steps: result?.toolCalls, path: [] });
 
       const changeText = changes ? formatChangeSummary(spec.id, cwd, changes) : "";
-      const meta = { agent: spec.id, agentName: result?.agentName, durationMs: Date.now() - startedAt,
+      // subagentId links this row to its nested agent rows in the transcript.
+      const meta = { subagentId, agent: spec.id, agentName: result?.agentName, durationMs: Date.now() - startedAt,
         sessionId: result?.sessionId, resumed: result?.resumed, stopReason: result?.stopReason, usage: result?.usage,
         changes, written: [...handlers.written], permissions: handlers.decisions, warnings: result?.warnings };
 

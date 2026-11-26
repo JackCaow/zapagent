@@ -72,6 +72,7 @@ import { usePlanMode } from "./hooks/usePlanMode.js"
 import { useAskUser } from "./hooks/useAskUser.js"
 import { usePalettes } from "./hooks/usePalettes.js"
 import { useAgentObjects } from "./hooks/useAgentObjects.js"
+import { remoteAgents } from "./agent/remote-agent.js"
 import { useMCPSubsystem } from "./hooks/useMCPSubsystem.js"
 import { useSamplingHandler } from "./hooks/useSamplingHandler.js"
 import { setMCPManager } from "./singletons.js"
@@ -872,6 +873,8 @@ export function App() {
       process.stdout.write("\x1b[H\x1b[2J\x1b[3J")
     }
     conversation.clear()
+    // The external agent's own context goes with the conversation.
+    void remoteAgents.reset()
     restoreMemoryQueryHistoryFromLogs([])
     setLogs([])
     todosRef.current = []
@@ -972,6 +975,8 @@ export function App() {
 
   const restoreSession = (loaded: DialogSessionRestore) => {
     const { logs: restored, messages, loadedSessionId, metadata } = loaded
+    // A restored session never continues the current agent's context.
+    void remoteAgents.reset()
     appLogger.info("session_restore_begin", {
       sessionId: loadedSessionId,
       restoredLogs: restored.length,
@@ -1251,6 +1256,8 @@ export function App() {
               addToast(`Restored ${result.succeeded.length} tracked files${result.skipped?.length ? `; skipped ${result.skipped.length}` : ""}`);
               closeDialog(); return;
             }
+            // The agent cannot rewind its own context; start it fresh.
+            void remoteAgents.reset();
             const draft = rewindDraft(snap, logs);
             setInputValue(draft.text);
             setPendingImages([]);

@@ -90,12 +90,14 @@ unchanged (`zapsdk/acp-client/host-handlers.ts`):
 
 | ACP request | Approval asked as | Notes |
 |---|---|---|
-| `fs/read_text_file` | `read_file {path}` | Absolute paths only; `line`/`limit` honoured; 10 MiB cap. |
-| `fs/write_text_file` | `write_file {path, content}` | Checkpoint (`createEditTracker`) runs **before** the write, so `/rewind` covers it. |
-| permission, kind `execute` with a command (`command`, or agy's `CommandLine`) | `bash {command}` | Dangerous-command rules apply. |
+| `fs/read_text_file` inside the workspace | `read_file {path}` | Absolute paths only; `line`/`limit` clamped; size checked before reading (10 MiB cap). |
+| `fs/read_text_file` outside the workspace | `acp_<agent>_read` | Always a one-time prompt (zap's executor confinement is bypassed here, so the handler enforces it). |
+| `fs/write_text_file` inside the workspace | `write_file {path, content}` | Checkpoint (`createEditTracker`) runs **before** the write, so `/rewind` covers it. |
+| `fs/write_text_file` outside the workspace | `acp_<agent>_edit` | One-time prompt; never auto-allowed by acceptEdits. `.git` / `.zapcode` writes are refused outright. |
+| permission, kind `execute` with a command (`command`, or agy's `CommandLine`; argv is shell-quoted) | `bash {command}` with explicit facts | Dangerous-command and command rules apply; the sandboxed-command auto-allow does not (`workspaceShell: false`), because the agent runs it outside zap's sandbox. |
 | permission, kind `edit`, one file, content known (diff `newText`, or `Content`/`content`) | `write_file {path, content}` | Edit preview, acceptEdits and workspace scope apply (agy and codex both qualify). |
 | permission, kind `delete` / `read`, one file | `delete_file` / `read_file {path}` | |
-| permission, anything else | `acp_<agent>_<kind> {title, paths, input}` | Treated as a write unless kind is read/search/think (`approvalFacts`), so plan mode refuses it. |
+| permission, edit/delete/read on an out-of-workspace or protected path, or anything else | `acp_<agent>_<kind> {title, paths, input}` | One-time only: no session/project scope (`inferPattern` → null) and bare allow rules never match. Treated as a write unless kind is read/search/think, so plan mode refuses it. |
 
 When the turn is cancelled, pending permission requests are answered
 `cancelled` (ACP requirement) and the zap approval prompt is dismissed.
@@ -175,7 +177,12 @@ zap's own turns (thinking, text, tool rows, diffs, errors, run divider).
   `makeSnapshot`), so it appears in `/rewind` and fs writes are attributed
   to it. zap's context gauge is hidden while an agent is active.
 - A failed turn (including an agent that ignores cancellation) closes the
-  agent process; the next message starts a fresh agent session.
+  agent process; the next message starts a fresh agent session. `/clear`,
+  Ctrl+L, `/new`, session restore and a conversation rewind also close it.
+  A start that completes after a reset is discarded; `/exit` closes the
+  agent gracefully and the process-exit hook SIGKILLs anything left.
+- `/review`, `/commit`, `/init` and skills carry zap prompts and are refused
+  while an agent is active.
 
 Not yet: agent slash commands (`available_commands_update`) in the palette,
 an agent mode picker, image prompts beyond pass-through, steering mid-turn,

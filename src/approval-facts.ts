@@ -18,6 +18,10 @@ const SCOPED_AGENT_TOOLS = new Set(["delegate_agent", "acp_agent"])
 const ACP_REQUEST = /^acp_(?!agent$).+_(\w+)$/
 const ACP_READ_KINDS = new Set(["read", "search", "think"])
 
+/** An external ACP agent's own, unmapped permission request. Its free-form
+ * input has no reusable scope, so it is approved one call at a time. */
+export function isAcpAgentRequest(name: string): boolean { return ACP_REQUEST.test(name) }
+
 export function approvalFacts(name: string, args: Record<string, unknown>, context?: Readonly<ApprovalContext>): Readonly<ToolApprovalFacts> {
   const facts = context?.authorization
   if (facts && !(facts.legacy && legacyWrites.has(name))) {

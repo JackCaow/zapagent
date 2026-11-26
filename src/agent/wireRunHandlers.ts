@@ -184,6 +184,9 @@ export interface RunHandlers {
   settlePending(reason: string): void
 }
 
+/** Tools whose child events fold under their row via meta.subagentId. */
+const SUBAGENT_TOOLS = new Set(["agent", "delegate_agent", "acp_agent"])
+
 export function createRunHandlers(deps: RunHandlersDeps): RunHandlers {
   const cacheScope = makePromptCacheScope(
     deps.currentConfig.active.providerId,
@@ -231,7 +234,7 @@ export function createRunHandlers(deps: RunHandlersDeps): RunHandlers {
       const toolCallId = event.run.toolCallId
       if (!toolCallId) return
       const pending = pendingToolLogById.get(toolCallId)
-      if (!pending || (pending.name !== "agent" && pending.name !== "delegate_agent")) return
+      if (!pending || !SUBAGENT_TOOLS.has(pending.name)) return
       claimedAgentToolCallIds.add(toolCallId)
       const updatedTool: ToolCallInfo = {
         id: toolCallId,
@@ -256,7 +259,7 @@ export function createRunHandlers(deps: RunHandlersDeps): RunHandlers {
       if (!task) return
       for (const [tuId, pending] of pendingToolLogById) {
         if (claimedAgentToolCallIds.has(tuId)) continue
-        if (pending.name !== "agent" && pending.name !== "delegate_agent") continue
+        if (!SUBAGENT_TOOLS.has(pending.name)) continue
         if (getStringArg(pending.arguments, "task") !== task) continue
         // Claim-first so a second sub_agent_started with the same task
         // advances to the next pending instead of re-stamping this one.

@@ -10,10 +10,10 @@ export interface AcpAgentSpec {
   /** Executable (absolute or resolved on PATH) that speaks ACP on stdio. */
   command: string;
   args?: string[];
-  /** Extra environment values. Host credentials are not forwarded unless
-   * named in `preserveEnvironment`. */
+  /** Extra environment values. The agent otherwise inherits zap's
+   * environment, like any host process zap starts; zap's provider keys live
+   * in its config file, not the environment, and are never passed. */
   env?: Record<string, string>;
-  preserveEnvironment?: string[];
   /** Human label for tool descriptions and UI. */
   name?: string;
   description?: string;

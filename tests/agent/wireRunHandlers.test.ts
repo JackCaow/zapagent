@@ -926,6 +926,33 @@ describe("createRunHandlers AgentRun correlation", () => {
     expect(runs).toEqual(["sa-b"])
     expect(replacements.at(-1)).toEqual({ id: 2, subagentId: "sa-b" })
   })
+
+  it("links an acp_agent row to its nested agent run when the run starts", () => {
+    const replacements: Array<{ id: number; name?: string; subagentId?: string }> = []
+    let nextLogId = 1
+    const handlers = createRunHandlers({
+      currentConfig: {
+        providers: [], active: { providerId: "", model: "" }, serperKey: "", maxTokens: 100, maxSteps: 10,
+        customSystemPrompt: "", compaction: { auto: true, prune: true, reserved: 0 }, mcpServers: [], permissionMode: "default",
+      },
+      controller: new AbortController(),
+      preview: { interruptPreviews: () => {} } as any,
+      setStatus: () => {}, setStep: () => {}, setActiveTool: () => {}, setActiveToolBytes: () => {},
+      setContextTokens: () => {}, setContextPending: () => {},
+      addLog: () => { nextLogId += 1 },
+      replaceLog: (id, _type, _text, tool) => {
+        replacements.push({ id, name: tool?.name, subagentId: (tool?.meta as { subagentId?: string } | undefined)?.subagentId })
+      },
+      peekNextLogId: () => nextLogId,
+      compactLogs: () => {},
+    })
+    const agent = new FakeAgent()
+    handlers.wire(agent as any)
+    agent.emit({ type: "content_final", kind: "tool_call", id: "call-acp", step: 1, toolName: "acp_agent",
+      arguments: { agent: "agy", task: "write hello.txt" } })
+    handlers.subAgentEventHandler({ type: "sub_agent_started", subagentId: "acp_agy_x_abcd", agentType: "agy", task: "write hello.txt", path: [] })
+    expect(replacements.at(-1)).toEqual({ id: 1, name: "acp_agent", subagentId: "acp_agy_x_abcd" })
+  })
 })
 
 describe("createRunHandlers request lifecycle", () => {

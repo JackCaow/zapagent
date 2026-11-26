@@ -159,6 +159,17 @@ export function buildAgentObjects(
     { maxRetries: 2, initialDelayMs: 1000 }
   )
 
+  // External ACP agents: their permission and fs requests reuse zap's
+  // approval gate and checkpoint tracker, like zap's own tools.
+  const acpAgentOptions = acpAgents.length > 0
+    ? {
+        agents: acpAgents,
+        onEvent: delegateOnEvent ?? ((ev: import("../zapsdk/agent/events.js").AgentEvent) => delegateEventBridge.handler?.(ev)),
+        approve: onApproval,
+        trackEdit: checkpoint?.createEditTracker(),
+        clientVersion: VERSION,
+      }
+    : undefined
   const registry = createBuiltinRegistry({
     readFile: { allowedPaths, useExecutionGrants: true },
     writeFile: { allowedPaths, protectedPaths, useExecutionGrants: true },
@@ -218,15 +229,7 @@ export function buildAgentObjects(
       : undefined,
     // External ACP agents: their permission and fs requests reuse zap's
     // approval gate and checkpoint tracker, like zap's own tools.
-    acpAgent: acpAgents.length > 0
-      ? {
-          agents: acpAgents,
-          onEvent: delegateOnEvent ?? ((ev) => delegateEventBridge.handler?.(ev)),
-          approve: onApproval,
-          trackEdit: checkpoint?.createEditTracker(),
-          clientVersion: VERSION,
-        }
-      : undefined,
+    acpAgent: acpAgentOptions,
     exclude: [],
   })
   // The model can save a durable fact during normal work. Inventory review
@@ -265,6 +268,8 @@ export function buildAgentObjects(
         // is enforced separately by the child's execution grant.
       },
       webSearch: config.serperKey ? { searchFn: createSerperSearch(config.serperKey) } : undefined,
+      // An isolated workspace's agent must run there, not in the root cwd.
+      acpAgent: acpAgentOptions,
       exclude: [],
     })
     for (const definition of cwdBuiltins.definitions()) {

@@ -1,7 +1,7 @@
 import type { PermissionMode } from "./config.js"
 import { PermissionManager, isPathReadTool } from "./permissions.js"
 import type { ApprovalContext } from "../zapsdk/tools/executor.js"
-import { approvalFacts } from "./approval-facts.js"
+import { approvalFacts, isAcpAgentRequest } from "./approval-facts.js"
 import { matchDangerousToolCall } from "../zapsdk/utils/safety.js"
 import { REQUEST_CAPABILITIES_TOOL, parseCapabilityRequest } from "./capabilities.js"
 
@@ -29,7 +29,10 @@ export type ApprovalCategory = "read" | "edit" | "shell" | "sandbox-escape" | "d
 
 /** One factual policy order shared by interactive and headless hosts. */
 export function evaluateApprovalPolicy(manager: PermissionManager, name: string, args: Record<string, unknown>, options: ApprovalPolicyOptions): ApprovalPolicyDecision {
-  const decision = decide(manager, name, args, options)
+  const decided = decide(manager, name, args, options)
+  // No session/project grant for an ACP agent's free-form request: a saved
+  // rule could only be the bare tool name, which would allow every future one.
+  const decision = isAcpAgentRequest(name) ? { ...decided, allowScope: false } : decided
   // Only a prompt the user already answered this turn becomes a refusal; a
   // mode change or new rule that allows the call still lets it run.
   return decision.decision === "ask" && manager.declinedThisTurn(name, args, options.context)

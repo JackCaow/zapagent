@@ -4,7 +4,7 @@ import { homedir } from "node:os"
 import { createHash } from "node:crypto"
 import { getAppDataDir } from "../zapsdk/utils/platform.js"
 import { matchGlob } from "../zapsdk/builtin-tools/glob-util.js"
-import { approvalFacts, opaqueShell } from "./approval-facts.js"
+import { approvalFacts, isAcpAgentRequest, opaqueShell } from "./approval-facts.js"
 import type { ApprovalContext } from "../zapsdk/tools/executor.js"
 import type { Logger } from "../zapsdk/debug/logger.js"
 import { writeFileAtomic } from "./utils/secure-write.js"
@@ -446,7 +446,7 @@ export function ruleMatchesTool(
 ): boolean {
   const { toolNames, argPattern } = parsePattern(rule.pattern)
   if (!toolNames.some(n => n === toolName)) return false
-  if (isScopedAgentTool(toolName) && argPattern === null) return rule.type === "deny"
+  if ((isScopedAgentTool(toolName) || isAcpAgentRequest(toolName)) && argPattern === null) return rule.type === "deny"
   if (argPattern === null) return true
   if (toolName === "move_file") {
     const paths = [args.source, args.destination].filter((value): value is string => typeof value === "string" && !!value)
@@ -673,6 +673,8 @@ export function inferPattern(toolName: string, args: Record<string, unknown>, cw
     if (isAbsolute(rel)) return `${alias}(${rel})`
     return `${alias}(${fileRuleScope(toolName, rel)})`
   }
+  // An external ACP agent's unmapped request has no scope to save.
+  if (isAcpAgentRequest(toolName)) return null
   // Non-aliased tools: exact tool-name match is fine (no args to wildcard).
   // High-risk tools that need arg scoping should get a dedicated branch above.
   return toolName

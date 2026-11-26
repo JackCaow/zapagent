@@ -68,6 +68,39 @@ describe("RemoteAgentManager (session mode)", () => {
   })
 })
 
+describe("RemoteAgentManager lifecycle", () => {
+  it("discards a session that finishes starting after reset() and closes its transport", async () => {
+    const { app } = fakeAgent({ async script(turn) { await turn.update(text("hi")) } })
+    let disposed = 0
+    let releaseInit!: () => void
+    const gate = new Promise<void>(resolve => { releaseInit = resolve })
+    const manager = new RemoteAgentManager(() => {
+      const transport = inProcessTransport(app)
+      return { ...transport, open: (client) => {
+        const connection = transport.open(client)
+        // Hold initialize until the test has called reset().
+        const request = connection.agent.request.bind(connection.agent)
+        connection.agent.request = (async (method: string, params: unknown) => { if (method === "initialize") await gate; return request(method as never, params as never) }) as never
+        return connection
+      }, dispose: async () => { disposed += 1; await transport.dispose() } }
+    })
+    const pending = manager.prompt(spec, "/w", "x", undefined, { signal: new AbortController().signal, onEvent() {} })
+    await manager.reset()
+    releaseInit()
+    await expect(pending).rejects.toThrow("start was cancelled")
+    expect(manager.current).toBeUndefined()
+    expect(disposed).toBe(1)
+  })
+
+  it("refuses to start an agent when host policy blocks host processes", async () => {
+    let spawned = 0
+    const manager = new RemoteAgentManager(() => { spawned += 1; throw new Error("unreachable") })
+    manager.host.blocked = "blocked by policy"
+    await expect(manager.prompt(spec, "/w", "x", undefined, { signal: new AbortController().signal, onEvent() {} })).rejects.toThrow("blocked by policy")
+    expect(spawned).toBe(0)
+  })
+})
+
 describe("/agent command", () => {
   it("parses list, switch and back", () => {
     expect(parseCommand("/agent")).toEqual({ type: "set_agent", value: "" })

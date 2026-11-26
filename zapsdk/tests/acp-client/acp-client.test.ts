@@ -315,6 +315,8 @@ describe("acp_agent tool", () => {
       expect(started).toMatchObject({ agentType: "fake", task: "write out.md" });
       expect(finished).toMatchObject({ agentType: "fake", success: true });
       const subagentId = started && "subagentId" in started ? started.subagentId : "";
+      expect((result.meta as { subagentId?: string }).subagentId).toBe(subagentId);
+      expect(subagentId).toMatch(/^acp_fake_[a-z0-9]+_[a-z0-9]{4}$/);
       expect(events.filter(event => event.type === "content_final").every(event => event.path?.[0] === subagentId)).toBe(true);
     } finally { await rm(cwd, { recursive: true, force: true }); }
   });

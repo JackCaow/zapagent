@@ -6,7 +6,7 @@ import {
   type NewSessionResponse, type PromptResponse, type SessionUpdate,
 } from "@agentclientprotocol/sdk";
 import { AcpClientError, type AcpClientHandlers } from "./types.js";
-import { terminateProcessTreeWithGrace } from "../execution/process.js";
+import { terminateProcessTree, terminateProcessTreeWithGrace } from "../execution/process.js";
 
 const STDERR_CAP = 16 * 1024;
 const CANCEL_GRACE_MS = 5_000;
@@ -25,6 +25,8 @@ export interface AcpTransport {
   readonly exited: Promise<{ code: number | null; signal: string | null }>;
   stderrTail(): string;
   dispose(): Promise<void>;
+  /** Synchronous SIGKILL of the agent's process tree (process exit only). */
+  kill?(): void;
 }
 
 export function stdioTransport(child: ChildProcess): AcpTransport {
@@ -50,6 +52,9 @@ export function stdioTransport(child: ChildProcess): AcpTransport {
       child.stdin?.end();
       terminateProcessTreeWithGrace(child, 3_000);
       await exited;
+    },
+    kill() {
+      if (child.exitCode === null && child.signalCode === null) terminateProcessTree(child, "SIGKILL");
     },
   };
 }

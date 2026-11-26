@@ -596,6 +596,7 @@ export function useAgentRunner({
       try {
         if (!remoteSpec) throw new Error(`ACP agent ${config.activeAgent} is not available; /agent zap switches back`)
         if (invocation?.goalTurn) throw new Error("/goal runs on zap's own model; /agent zap switches back")
+        if (systemPrompt) throw new Error("This command runs on zap's own model; /agent zap switches back")
         completedResult = await runRemoteTurn({
           spec: remoteSpec, cwd, conversation, currentConfig: config, controller,
           createPreview: () => {
@@ -619,7 +620,7 @@ export function useAgentRunner({
         }, task, images)
       } catch (err) {
         caughtError = err
-        if (!remoteSpec || invocation?.goalTurn) addLog("error", err instanceof Error ? err.message : String(err))
+        if (!remoteSpec || invocation?.goalTurn || systemPrompt) addLog("error", err instanceof Error ? err.message : String(err))
       } finally {
         if (controller.signal.aborted) {
           setOutputThroughput(undefined)

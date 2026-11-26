@@ -325,6 +325,12 @@ export function dispatchSlashCommand(
   const displayCommand = meta.displayText ? parseCommand(meta.displayText) : null
 
   const dispatchAgentTurn = (...args: Parameters<DispatchSlashCommandDeps["dispatchUserTurn"]>): boolean | Promise<boolean> => {
+    // /review, /commit, /init and skills carry zap prompts written for zap's
+    // own tools; an external agent would silently ignore them.
+    if (deps.configRef.current.activeAgent) {
+      deps.addLog("error", `${displayCommand?.type ?? cmd.type} runs on zap's own model, not ${deps.configRef.current.activeAgent}. /agent zap switches back.`)
+      return true
+    }
     meta.onInputRequired?.()
     if (!precheckProvider(deps)) return true
     return deps.dispatchUserTurn(...args).then(result => {
@@ -347,8 +353,9 @@ export function dispatchSlashCommand(
 
   switch (cmd.type) {
     case "exit":
-      deps.exit()
-      return true
+      // Close an external agent gracefully (bounded) before leaving.
+      return Promise.race([remoteAgents.reset(), new Promise(resolve => setTimeout(resolve, 3_500))])
+        .then(() => { deps.exit(); return true })
 
     case "clear": {
       // Wipe everything to a fresh-boot state. Sequence matters: write the
@@ -358,6 +365,7 @@ export function dispatchSlashCommand(
       // top-left those erases just no-op against blank rows.
       wipeTerminalScrollback()
       resetConversationState()
+      void remoteAgents.reset()
       deps.bumpTranscript()
       return true
     }

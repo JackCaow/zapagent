@@ -7,7 +7,7 @@ import type { AcpAgentSpec } from "../../zapsdk/acp-client/types.js"
 import type { AgentEvent } from "../../zapsdk/agent/events.js"
 import type { ImageContent } from "../../zapsdk/core/types.js"
 import { createLocalProcessBroker } from "../../zapsdk/execution/process.js"
-import type { ApprovalCallback } from "../../zapsdk/tools/executor.js"
+import type { ApprovalCallback, ApprovalContext } from "../../zapsdk/tools/executor.js"
 import { VERSION } from "../version.js"
 
 /** Host hooks the live session reads at request time, so approval and
@@ -15,6 +15,9 @@ import { VERSION } from "../version.js"
 export interface RemoteAgentHost {
   approve?: ApprovalCallback
   trackEdit?: (paths: string[]) => Promise<unknown>
+  /** Set when host policy forbids running agents on the host (they run
+   * outside zap's OS sandbox): the reason shown instead of starting one. */
+  blocked?: string
 }
 
 interface LiveSession {
@@ -26,10 +29,14 @@ interface LiveSession {
 
 /** One external ACP agent driving the TUI conversation ("session mode").
  * The agent process stays up across turns so the agent keeps its own
- * context; it is replaced on agent/cwd change and closed on /new and exit. */
+ * context. It is replaced on agent/cwd change and closed when the
+ * conversation is reset, after a failed turn, and at exit. */
 export class RemoteAgentManager {
   private live?: LiveSession
-  private starting?: Promise<LiveSession>
+  private starting?: { key: string; promise: Promise<LiveSession> }
+  /** Bumped by reset(); a start that outlives its generation is discarded. */
+  private generation = 0
+  private readonly transports = new Set<AcpTransport>()
   /** Signal of the turn in flight; approval prompts close when it aborts. */
   private turnSignal?: AbortSignal
   readonly host: RemoteAgentHost = {}
@@ -65,55 +72,79 @@ export class RemoteAgentManager {
       // A cooperative cancel resolves with stopReason "cancelled"; a throw
       // means the agent died, failed, or ignored cancellation and may still
       // be working. Never reuse it for the next turn.
-      await this.reset()
+      if (this.live === live) await this.reset()
       throw error
     } finally {
       this.turnSignal = undefined
     }
   }
 
+  /** Close the agent (and discard one still starting). Context is lost. */
   async reset(): Promise<void> {
+    this.generation += 1
     const live = this.live
     this.live = undefined
     this.starting = undefined
     await live?.session.close().catch(() => {})
   }
 
+  /** Last resort at process exit: no event loop is left for a graceful close. */
+  killAll(): void {
+    for (const transport of this.transports) transport.kill?.()
+  }
+
   private async ensure(spec: AcpAgentSpec, cwd: string, signal: AbortSignal, onStarted?: (session: AcpAgentSession) => void): Promise<LiveSession> {
+    if (this.host.blocked) throw new Error(this.host.blocked)
     const key = JSON.stringify([spec.id, spec.command, spec.args ?? [], spec.mode, spec.model, spec.config, cwd])
+    // Let a start for another agent settle (and be replaced) first.
+    while (this.starting && this.starting.key !== key) await this.starting.promise.catch(() => {})
     if (this.live?.key === key) return this.live
+    if (this.starting) return this.starting.promise
     if (this.live) await this.reset()
-    this.starting ??= (async () => {
+    const generation = this.generation
+    const promise = (async () => {
       const handlers = createAcpHostHandlers({
         agentId: spec.id, cwd,
         approve: Object.assign(
-          (name: string, args: Record<string, unknown>, s?: AbortSignal) => this.host.approve
-            ? this.host.approve(name, args, s)
+          (name: string, args: Record<string, unknown>, s?: AbortSignal, context?: Readonly<ApprovalContext>) => this.host.approve
+            ? this.host.approve(name, args, s, context)
             : Promise.resolve({ approved: false as const, source: "policy" as const, reason: "no approval handler" }),
-          { precheck: (name: string, args: Record<string, unknown>) => this.host.approve?.precheck?.(name, args) },
+          { precheck: (name: string, args: Record<string, unknown>, context?: Readonly<ApprovalContext>) =>
+            this.host.approve?.precheck?.(name, args, context) },
         ),
         trackEdit: paths => this.host.trackEdit?.(paths) ?? Promise.resolve(),
         signal: () => this.turnSignal,
       })
-      const session = await AcpAgentSession.start({
-        spec, cwd, transport: this.transportFor(spec, cwd), handlers, signal, clientVersion: VERSION,
-      })
+      const transport = this.transportFor(spec, cwd)
+      this.transports.add(transport)
+      void transport.exited.then(() => this.transports.delete(transport))
+      const session = await AcpAgentSession.start({ spec, cwd, transport, handlers, signal, clientVersion: VERSION })
+      if (generation !== this.generation) {
+        // reset() ran while the agent was starting (/agent, /new, abort).
+        await session.close().catch(() => {})
+        throw new Error(`${spec.id} start was cancelled`)
+      }
       const live = { key, spec, session, handlers }
       this.live = live
       onStarted?.(session)
       return live
-    })().finally(() => { this.starting = undefined })
-    return this.starting
+    })()
+    const starting = { key, promise }
+    this.starting = starting
+    try { return await promise }
+    finally { if (this.starting === starting) this.starting = undefined }
   }
 }
 
+/** Agents inherit zap's environment, like any host process zap starts. */
 function spawnTransport(spec: AcpAgentSpec, cwd: string): AcpTransport {
   return stdioTransport(createLocalProcessBroker().spawnCommand(spec.command, spec.args ?? [], {
-    cwd, hostHome: true, environment: spec.env, preserveEnvironment: spec.preserveEnvironment, stdin: "pipe",
+    cwd, hostHome: true, environment: spec.env, stdin: "pipe",
   }))
 }
 
 export const remoteAgents = new RemoteAgentManager()
 
 // Agent processes are detached process groups; never leave one behind.
-process.once("exit", () => { void remoteAgents.reset() })
+// "exit" runs synchronously, so a graceful close cannot complete here.
+process.once("exit", () => { remoteAgents.killAll() })
