@@ -18,8 +18,8 @@ over standard ACP, ACP extensions, or adapters for non-ACP CLIs.
    and zap↔zap calls.
 
 Non-goals: changing `src/acp/` agent behaviour (it only gains the extension
-methods), running agents inside zapVM (zapvm keeps its own Go client; no shared
-code), and MCP passthrough (phase 4+).
+methods), running agents inside zapVM (zapVM lives in its own repository and
+VM execution is disabled in zap), and MCP passthrough (phase 4+).
 
 ## Layers
 

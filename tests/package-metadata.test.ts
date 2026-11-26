@@ -18,7 +18,8 @@ describe("package metadata", () => {
     expect(pkg.files).toContain("THIRD_PARTY_NOTICES.md")
     // zapVM lives in its own repository and is installed separately.
     expect(readFileSync(join(root, "LICENSE"), "utf-8")).not.toContain("zapvm/")
-    expect(existsSync(join(root, "zapvm"))).toBe(false)
+    // Source is gone; a developer's untracked build cache under zapvm/ may remain.
+    expect(existsSync(join(root, "zapvm", "go.mod"))).toBe(false)
     for (const file of ["CONTRIBUTING.md", "SECURITY.md", "CODE_OF_CONDUCT.md"]) {
       expect(readFileSync(join(root, file), "utf-8").length).toBeGreaterThan(100)
     }
