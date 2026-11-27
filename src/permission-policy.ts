@@ -10,13 +10,14 @@ export interface ApprovalPolicyOptions {
   mode: PermissionMode
   cwd: string
   context?: Readonly<ApprovalContext>
+  hostCommands?: "trusted" | "untrusted" | "disabled"
   allowedTools?: readonly string[]
   disallowedTools?: readonly string[]
 }
 export interface ApprovalPolicyDecision {
   decision: "allow" | "deny" | "ask"
   reason: string
-  source: "rule" | "dangerous" | "policy" | "sandbox" | "fallback"
+  source: "rule" | "dangerous" | "policy" | "sandbox" | "fallback" | "project"
   allowScope: boolean
   /** What kind of capability the call needs; used to measure interruptions. */
   category: ApprovalCategory
@@ -44,7 +45,8 @@ export function evaluateApprovalPolicy(manager: PermissionManager, name: string,
 
 function decide(manager: PermissionManager, name: string, args: Record<string, unknown>, options: ApprovalPolicyOptions): ApprovalPolicyDecision {
   const facts = approvalFacts(name, args, options.context)
-  const kind: ApprovalCategory = facts.sandboxEscape ? "sandbox-escape" : facts.shellCommands !== undefined ? "shell"
+  const escape = options.hostCommands === undefined && facts.sandboxEscape
+  const kind: ApprovalCategory = escape ? "sandbox-escape" : facts.shellCommands !== undefined ? "shell"
     : name.startsWith("mcp__") ? "mcp" : facts.editOnly ? "edit" : facts.readOnly ? "read" : "tool"
   // Only a new, unpinned note that replaces nothing: overwriting, pinning or
   // superseding memory steers future sessions, so it still asks.
@@ -52,7 +54,7 @@ function decide(manager: PermissionManager, name: string, args: Record<string, u
     && !(Array.isArray(args.tags) && args.tags.includes("pinned")) && !(Array.isArray(args.supersedes) && args.supersedes.length > 0)
     && typeof args.name === "string" && manager.isNewProjectMemory(args.name)
   const tier = (): RiskTier => facts.readOnly ? "R0" : projectMemory ? "R1"
-    : facts.shellCommands !== undefined ? (!facts.sandboxEscape && manager.isSandboxConfined() && !manager.reachesBeyondAllowlist(args) ? "R1" : "R2")
+    : facts.shellCommands !== undefined ? (!escape && manager.isSandboxConfined() && !manager.reachesBeyondAllowlist(args) ? "R1" : "R2")
     : manager.changesOnlyWorkspaceFiles(name, args, options.context) ? "R1" : "R2"
   const result = (decision: ApprovalPolicyDecision["decision"], reason: string, source: ApprovalPolicyDecision["source"] = "policy", allowScope = false): ApprovalPolicyDecision =>
     ({ decision, reason, source, allowScope, category: source === "dangerous" ? "dangerous" : kind, tier: source === "dangerous" ? "R3" : tier() })
@@ -64,14 +66,16 @@ function decide(manager: PermissionManager, name: string, args: Record<string, u
     if (typeof requested === "string") return result("deny", requested)
   }
   const rule = manager.checkPermission(name, args, options.context)
-  const escape = facts.sandboxEscape
   const sandbox = escape ? manager.checkSandboxEscape() : undefined
   const denial = rule.decision === "deny" ? rule : sandbox?.decision === "deny" ? sandbox : undefined
   if (denial) return result("deny", denial.rule ? `matched deny rule ${denial.rule.pattern}` : denial.reason ?? "denied", "rule")
+  if (options.hostCommands === "disabled" && (facts.shellCommands !== undefined || name === "delegate_agent" || name === "acp_agent")) {
+    return result("deny", "Local commands are disabled by your configuration")
+  }
   if (facts.shellCommands) {
     const danger = facts.shellCommands.map(command => matchDangerousToolCall({ ...args, command, check_steps: undefined }, options.context?.workspaceRoot ?? options.cwd, options.context?.cwd ?? options.cwd, options.context?.shell)).find(Boolean)
     if (danger) return result("ask", `dangerous bash (${danger.id})`, "dangerous")
-    if (options.mode === "acceptEdits" && facts.shellCommands.some(command =>
+    if ((options.hostCommands !== undefined || options.mode === "acceptEdits") && facts.shellCommands.some(command =>
       splitShellSubcommands(command, options.context?.shell.syntax).some(part => /^(?:git\s+push|(?:npm|pnpm|bun)\s+publish|gh\s+(?:release|pr)\s+create)(?:\s|$)/.test(part.trim())))) {
       return result("ask", "publishing changes needs approval for this invocation")
     }
@@ -89,6 +93,11 @@ function decide(manager: PermissionManager, name: string, args: Record<string, u
     if (paths.decision === "ask") return result("ask", paths.reason ?? "Shell filesystem paths require authorization", "fallback", true)
     const network = manager.checkShellNetwork(args, options.context)
     if (network.decision === "ask") return result("ask", network.reason ?? "Shell network destinations require authorization", "fallback", true)
+  }
+  if (name === "bash" && options.hostCommands) {
+    return options.hostCommands === "trusted"
+      ? result("allow", "project authorizes local commands", "project")
+      : result("ask", "allow local commands in this project", "project", options.mode === "acceptEdits")
   }
   if (rule.decision === "allow") return result("allow", rule.reason ?? `rule ${rule.rule?.pattern}`, "rule")
   if (options.allowedTools?.includes(name)) return result("allow", "allowed by --allowed-tools")

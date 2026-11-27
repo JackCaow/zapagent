@@ -19,20 +19,22 @@ const hookFixture = String.raw`
   mock.module("./src/singletons.ts", () => ({ appLogger: { info() {}, warn() {} }, permissionManager: manager }));
   mock.module("./src/session.ts", () => ({ getCurrentSessionId: () => sessionId }));
   const { usePermissionApproval } = await import("./src/hooks/usePermissionApproval.ts");
-  const hook = usePermissionApproval({ configRef: { current: { permissionMode: "default" } }, addLog() {} });
+  const hook = usePermissionApproval({ configRef: { current: { permissionMode: "default" } }, access: { canRunHostCommands: () => false }, allowProjectCommands() {}, addLog() {} });
   const flush = async () => { for (let index = 0; index < 8; index++) await new Promise(setImmediate); };
   const bounded = promise => Promise.race([promise, new Promise(resolve => setTimeout(() => resolve("unsettled"), 120))]);
   const firstController = new AbortController(), nextController = new AbortController();
-  const first = hook.onApproval("bash", { command: "printf fixture" }, firstController.signal);
+  const scenario = process.env.SCENARIO;
+  const covered = scenario === "covered";
+  const firstName = covered ? "write_file" : "bash";
+  const write = name => ({ path: process.env.ZAPCODE_DATA_DIR + "/" + name, content: "fixture" });
+  const first = hook.onApproval(firstName, covered ? write("first") : { command: "printf fixture" }, firstController.signal);
   await flush();
   const initial = pending;
-  const scenario = process.env.SCENARIO;
-  const nextName = scenario === "covered" ? "bash" : "mcp_sampling:fixture";
-  const nextArgs = nextName === "bash" ? { command: "echo fixture" } : { messageCount: 1, maxTokens: 8 };
-  const next = hook.onApproval(nextName, nextArgs, nextController.signal);
+  const nextName = covered ? "write_file" : "mcp_sampling:fixture";
+  const next = hook.onApproval(nextName, covered ? write("next") : { messageCount: 1, maxTokens: 8 }, nextController.signal);
   await flush();
   const result = { initialName: initial?.name, keptFirst: pending === initial };
-  const batch = { tools: ["bash"], resource: { kind: "all" }, lifetime: "project" };
+  const batch = { tools: [firstName], resource: { kind: "all" }, lifetime: "project" };
   if (scenario === "queued-cancel") {
     nextController.abort(); await flush();
     result.next = await bounded(next);
@@ -61,7 +63,7 @@ const hookFixture = String.raw`
     result.next = await bounded(next);
     result.pendingAfterChange = pending?.name ?? null;
   } else if (scenario === "covered") {
-    result.grantError = initial?.grant({ ...batch, lifetime: "session" }, ["bash"]) ?? null;
+    result.grantError = initial?.grant({ ...batch, lifetime: "session" }, [firstName]) ?? null;
     await flush(); result.first = await bounded(first); result.next = await bounded(next);
     result.pendingAfterGrant = pending?.name ?? null;
   } else {
@@ -96,7 +98,7 @@ const componentFixture = String.raw`
   const render = () => { position = 0; input = undefined; return ApprovalBar(props); };
   render(); input("g", {});
   const before = render();
-  props = { ...props, toolName: "bash", args: { command: "printf fixture", dangerouslyDisableSandbox: true }, allowScope: false };
+  props = { ...props, toolName: "bash", args: { command: "printf fixture" }, allowScope: false };
   const after = render();
   const text = node => {
     if (typeof node === "string") return node;
@@ -172,7 +174,7 @@ it("exits a previous customization when a request becomes once-only", () => {
   const result = run("component", componentFixture)
   expect(result.customizedBefore).toBe(true)
   expect(result.customizedAfter).toBe(false)
-  expect(result.text).toContain("Runs outside the OS sandbox")
+  expect(result.text).toContain("Yes, this once")
   expect(result.text).toContain("this once")
   expect(result.chosen).toEqual(["once"])
 })

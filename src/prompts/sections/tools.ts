@@ -39,7 +39,7 @@ export const toolsSection: PromptSection = {
       "You can call multiple tools in a single response. When tools are independent (e.g. reading three unrelated files), invoke them in parallel. When one tool's output informs another's arguments, call them sequentially. Maximize parallelism where dependencies allow.",
     )
 
-    if (has("bash")) parts.push("When required access is unavailable, use the tool's declared approval mechanism for the needed resource. A file read approval is distinct from running a shell outside the sandbox. Explain a concrete boundary before requesting an unsandboxed retry; HTTP status or a generic command failure alone does not prove a sandbox denial. Do not ask the user to copy files when an available approved read can access them.")
+    if (has("bash")) parts.push("When required access is unavailable, use the tool's declared approval mechanism for the needed resource. Explain the specific resource you need to use. Treat a generic command error or HTTP status as an observation; check the reported cause before requesting more access. Do not ask the user to copy files when an available approved read can access them.")
     if (has("glob_files") || has("search_files")) parts.push("Search results describe only the searched scope and coverage. A traversal limit, skipped files, or a content search with no matches does not prove a named file is absent. Prefer the supplied exact path or a narrower relevant directory before declaring a missing resource.")
 
     if (has("agent")) {

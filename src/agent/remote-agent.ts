@@ -10,10 +10,8 @@ import { createLocalProcessBroker } from "../../zapsdk/execution/process.js"
 import type { ApprovalCallback, ApprovalContext } from "../../zapsdk/tools/executor.js"
 import { VERSION } from "../version.js"
 
-/** Host hooks the live session reads at request time, so approval and
- * checkpoint wiring can change (config rebuilds) without a reconnect. */
+/** Host hooks shared across the native session. Approval is per turn. */
 export interface RemoteAgentHost {
-  approve?: ApprovalCallback
   trackEdit?: (paths: string[]) => Promise<unknown>
   /** Set when host policy forbids running agents on the host (they run
    * outside zap's OS sandbox): the reason shown instead of starting one. */
@@ -38,7 +36,7 @@ export class RemoteAgentManager {
   private readonly transports = new Set<AcpTransport>()
   /** Signal of the turn in flight; approval prompts close when it aborts. */
   private busy = false
-  private turnSignal?: AbortSignal
+  private turn?: { signal: AbortSignal; approve?: ApprovalCallback }
   private readonly inactive = AbortSignal.abort()
   readonly host: RemoteAgentHost = {}
 
@@ -52,6 +50,7 @@ export class RemoteAgentManager {
 
   async prompt(spec: AcpAgentSpec, cwd: string, text: string, images: ImageContent[] | undefined, options: {
     signal: AbortSignal
+    approve?: ApprovalCallback
     onEvent: (event: AgentEvent) => void
     onModelId?: (model: string) => void
     onContextUsage?: (usage: { used: number; size: number }) => void
@@ -77,7 +76,7 @@ export class RemoteAgentManager {
       }
       options.signal.throwIfAborted()
       if (this.live !== live) throw new Error(`${spec.id} session was closed`)
-      this.turnSignal = AbortSignal.any([options.signal, turn.signal])
+      this.turn = { signal: AbortSignal.any([options.signal, turn.signal]), approve: options.approve }
       options.onAccepted?.()
       sent = true
       const result = await live.session.prompt(content, {
@@ -93,7 +92,7 @@ export class RemoteAgentManager {
       throw error
     } finally {
       turn.abort()
-      this.turnSignal = undefined
+      this.turn = undefined
       this.busy = false
     }
   }
@@ -135,14 +134,14 @@ export class RemoteAgentManager {
     const handlers = createAcpHostHandlers({
       agentId: spec.id, cwd,
       approve: Object.assign(
-        (name: string, args: Record<string, unknown>, s?: AbortSignal, context?: Readonly<ApprovalContext>) => this.host.approve
-          ? this.host.approve(name, args, s, context)
-          : Promise.resolve({ approved: false as const, source: "policy" as const, reason: "no approval handler" }),
+        (name: string, args: Record<string, unknown>, s?: AbortSignal, context?: Readonly<ApprovalContext>) =>
+          this.turn?.approve?.(name, args, s, context)
+          ?? Promise.resolve({ approved: false as const, source: "policy" as const, reason: "no turn approval handler" }),
         { precheck: (name: string, args: Record<string, unknown>, context?: Readonly<ApprovalContext>) =>
-          this.host.approve?.precheck?.(name, args, context) },
+          this.turn?.approve?.precheck?.(name, args, context) },
       ),
       trackEdit: paths => this.host.trackEdit?.(paths) ?? Promise.resolve(),
-      signal: () => generation === this.generation && this.turnSignal ? this.turnSignal : this.inactive,
+      signal: () => generation === this.generation ? this.turn?.signal ?? this.inactive : this.inactive,
     })
     const transport = this.transportFor(spec, cwd)
     this.transports.add(transport)

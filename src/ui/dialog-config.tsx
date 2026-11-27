@@ -45,7 +45,7 @@ export function WorkspaceAccessDialog({ cwd, remembered, onChoose, onCancel }: {
   cwd: string; remembered: boolean; onChoose: (choice: WorkspaceChoice) => void; onCancel: () => void
 }) {
   const options: PickerOption[] = [
-    { id: "project", label: "Always allow work in this project" },
+    { id: "project", label: "Always allow work in this project", meta: "commands run with your account’s permissions" },
     { id: "analyze", label: "Keep this session read-only", meta: "keep project files unchanged" },
   ]
   if (remembered) options.push({ id: "revoke", label: "Forget project access and return to analysis" })

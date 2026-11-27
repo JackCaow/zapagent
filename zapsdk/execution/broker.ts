@@ -55,7 +55,7 @@ export interface DefaultExecutionBrokerOptions {
 export class DefaultExecutionBroker implements ExecutionBroker {
   private readonly services?: ServiceExecutionHost;
   private readonly shellFacts: ShellExecutionEnvironment;
-  private readonly sandbox: OsSandbox;
+  private readonly sandbox?: OsSandbox;
   private readonly sandboxMode: SandboxMode;
   private readonly allowUnsandboxed: boolean;
   private readonly limits: ToolResourceLimits;
@@ -69,8 +69,8 @@ export class DefaultExecutionBroker implements ExecutionBroker {
     this.shellFacts = options.shellEnvironment ?? (options.processBrokerFactory
       ? { syntax: "unknown", filesystem: "unknown" }
       : { syntax: process.platform === "win32" ? "cmd" : "posix", filesystem: "host" });
-    this.sandbox = options.sandbox ?? createPlatformSandbox();
     this.sandboxMode = options.sandboxMode ?? "disabled";
+    if (this.sandboxMode !== "disabled") this.sandbox = options.sandbox ?? createPlatformSandbox();
     this.allowUnsandboxed = options.allowUnsandboxed !== false;
     this.limits = configureLimits(DEFAULT_TOOL_RESOURCE_LIMITS, options.limits);
     this.hardTimeout = options.limits?.timeoutMs !== undefined;
@@ -85,7 +85,7 @@ export class DefaultExecutionBroker implements ExecutionBroker {
   shellEnvironment(): ShellExecutionEnvironment { return { ...this.shellFacts }; }
 
   sandboxStatus(): SandboxStatus {
-    if (this.sandboxMode === "disabled") {
+    if (!this.sandbox) {
       return { provider: "none", available: false, reason: "OS sandbox is disabled" };
     }
     return this.sandbox.status();
@@ -211,7 +211,7 @@ export class DefaultExecutionBroker implements ExecutionBroker {
     try {
       if (signal?.aborted) return reject("aborted", "CANCELLED");
       sandbox = needsProcessSandbox && !unsandboxed && sandboxStatus.available
-        ? this.sandbox.createContext({ executionId: request.executionId,
+        ? this.sandbox?.createContext({ executionId: request.executionId,
             workspace: request.workspace, effects: request.effects, grant: request.grant,
             externalCliIntegration: request.tool.definition.name === "delegate_agent"
               && request.tool.definition.executionLocation === "host"

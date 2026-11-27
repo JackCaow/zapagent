@@ -501,7 +501,6 @@ export async function runHeadless(args: HeadlessArgs, host: HeadlessHost = {}): 
   const { provider: llmProvider, registry, executor: baseExecutor, createRegistryForCwd, executionFacts, executionCapacity, sandboxConfined, sandboxNetworkPolicy } = buildAgentObjects(
     config,
     approval.onApproval,
-    /* planCb      */ undefined,
     /* checkpoint  */ checkpoint,
     /* skills      */ skills,
     /* cwdOverride */ cwd,

@@ -91,11 +91,10 @@ describe("app tool surface", () => {
     const previous = process.env.ZAPCODE_DATA_DIR
     process.env.ZAPCODE_DATA_DIR = join(root, "data")
     try {
-      const planCallbacks = { enter: () => {}, isActive: () => false, requestExit: async () => ({ approved: false }) }
-      const { registry } = buildAgentObjects(getDefaultConfig(), undefined, planCallbacks, undefined, undefined, root, "disabled")
-      for (const name of ["monitor", "cron_create", "cron_delete", "cron_list", "move_file", "http_request", "current_time", "enter_plan_mode"])
+      const { registry } = buildAgentObjects(getDefaultConfig(), undefined, undefined, undefined, root, "disabled")
+      for (const name of ["monitor", "cron_create", "cron_delete", "cron_list", "move_file", "http_request", "current_time", "enter_plan_mode", "exit_plan_mode"])
         expect(registry.has(name)).toBe(false)
-      for (const name of ["bash", "read_file", "http_fetch", "exit_plan_mode", "task_status"]) expect(registry.has(name)).toBe(true)
+      for (const name of ["bash", "read_file", "http_fetch", "task_status"]) expect(registry.has(name)).toBe(true)
     } finally {
       if (previous === undefined) delete process.env.ZAPCODE_DATA_DIR
       else process.env.ZAPCODE_DATA_DIR = previous

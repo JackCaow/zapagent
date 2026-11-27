@@ -117,8 +117,10 @@ describe("RemoteAgentManager (session mode)", () => {
     } })
     const manager = new RemoteAgentManager(() => inProcessTransport(app))
     const asked: string[] = []
-    manager.host.approve = Object.assign(async (name: string) => { asked.push(name); return false }, {})
-    const result = await manager.prompt(spec, "/w", "go", undefined, { signal: new AbortController().signal, onEvent() {} })
+    const result = await manager.prompt(spec, "/w", "go", undefined, {
+      signal: new AbortController().signal, onEvent() {},
+      approve: async name => { asked.push(name); return false },
+    })
     expect(asked).toEqual(["bash"])
     expect(result.report).toBe("n")
     await manager.reset()

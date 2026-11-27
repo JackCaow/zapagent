@@ -405,13 +405,7 @@ export const ToolResult = memo(function ToolResult({ log }: { log: LogEntry }) {
     ? `rewind coverage unavailable${checkpoint.error ? `: ${checkpoint.error}` : ""}`
     : ""
 
-  // exit_plan_mode special case: the plan markdown the model presented to
-  // the user lives in tool.arguments.plan and otherwise never appears in
-  // the transcript — the PlanApprovalBar that displayed it during approval
-  // is a dynamic-frame component, gone the moment the user decides. Render
-  // the full plan body under the result label so the transcript remains a
-  // complete record of what was approved (and so the user can scroll back
-  // to it after implementation starts).
+  // Preserve plans stored in older transcripts.
   if (tool.name === "exit_plan_mode" && tool.arguments && typeof (tool.arguments as { plan?: unknown }).plan === "string") {
     const plan = (tool.arguments as { plan: string }).plan
     return (

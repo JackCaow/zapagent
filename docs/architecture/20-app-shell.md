@@ -69,7 +69,7 @@ checkpointRef (CheckpointManager)
 toasts                       (useToasts)
 pendingImages
 inputQueue + systemInboxSize (useSyncExternalStore)
-pendingApproval / pendingPlan  (usePermissionApproval / usePlanMode)
+pendingApproval / pendingQuestions (usePermissionApproval / useAskUser)
 agentRef                     (useAgentObjects —— 重建 agent 实例)
 status/step/streamingText/...  (useAgentRunner —— 跑 agent + 写 logs)
 ```
@@ -85,7 +85,7 @@ status/step/streamingText/...  (useAgentRunner —— 跑 agent + 写 logs)
 
 ### Static frame freeze（Ink-specific）
 
-Approval bar / plan-approval bar / dialog / palette 任一打开都会
+工具审批、提问、队列窗口或补全列表打开时会调用
 `setStaticCommitFrozen(true)`，让 Transcript 暂时不 commit 新 static row
 （avoid eraseLines undershoot when frame height changes mid-stream）。
 Overlay 关掉时 batch flush 缓冲的段落。

@@ -142,7 +142,7 @@ remote/root identity，非 git 目录回退到 legacy 的 sanitized cwd；sessio
 8. 给 Ink 的 `log-update` 实例打补丁：跟踪上次写入时的终端宽度，resize 时按新宽度
    重算视觉行高度，避免 CJK 长行重排出 ghost 行。
 9. `App` 内部按需 hydrate：`useLogs / useAgentRunner / usePermissionApproval /
-   usePlanMode / usePalettes / useTurnDispatcher / useKeyboardShortcuts`，每个
+   useAskUser / usePalettes / useTurnDispatcher / useKeyboardShortcuts`，每个
    hook 各管一个子系统。
 
 ---

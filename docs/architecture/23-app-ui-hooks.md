@@ -11,7 +11,6 @@ src/
 │   ├── useAgentRunner.ts        # 跑 LoopAgent 的真主体
 │   ├── useTurnDispatcher.ts     # 用户提交 + 队列 drain + 系统事件 drain
 │   ├── usePermissionApproval.ts # tool 审批决策
-│   ├── usePlanMode.ts           # plan / exit-plan-mode 状态机
 │   ├── usePalettes.ts           # slash 和 @ 文件 palette
 │   ├── usePasteHandler.ts       # 粘贴文本 / 图片 / 历史导航
 │   ├── useKeyboardShortcuts.ts  # 全局快捷键路由
@@ -24,7 +23,7 @@ src/
     ├── text-field.tsx           # 文本输入低层 primitive
     ├── footer.tsx               # 底部状态栏
     ├── live-activity.tsx        # 运行中的 spinner + pending tool 行
-    ├── dialog-*.tsx             # 各种模态：connect / model / sessions / mem / permissions / rewind / approval / plan-approval
+    ├── dialog-*.tsx             # 各种模态：connect / model / sessions / mem / permissions / rewind / approval
     ├── slash-palette.tsx        # / 命令补全
     ├── file-palette.tsx         # @ 文件补全
     ├── conversation-surface.tsx # Box 包装 + 一些 layout 约束
@@ -146,13 +145,6 @@ setStatus / setStep / setActiveTool 等 state 全在这里聚合；React 把变�
 ApprovalBar 选 "always allow" 时返回的 choice 携带 scope（session / project
 / global），写回 PermissionManager 对应 store。
 
-### `usePlanMode`
-
-`enter_plan_mode` 工具调用：`config.permissionMode = "plan"`，UI footer
-显示 plan 标记。`exit_plan_mode` 工具调用：发出 `pendingPlan` state（带
-模型给的 plan 文本），UI 弹 PlanApprovalBar。用户接受 → `permissionMode`
-恢复 default + 工具 resolve；拒绝 → 模型继续在 plan mode 内规划。
-
 ### `usePalettes`
 
 监听 `inputValue` 变化：
@@ -270,7 +262,6 @@ shiki 单例初始化在 App 顶部 `initHighlighter()` 触发（fire-and-forget
   - `dialog-rewind` —— snapshot 列表 + dry-run diff stats
   - `dialog-approval` (ApprovalBar) —— 横在 prompt 上方，按上下选
     allow/deny/edit/always allow
-  - `dialog-plan-approval` —— 接 plan 提交
 
 ### Helpers
 
@@ -313,8 +304,6 @@ useAgentObjects ── 产 agentRef ──→ useAgentRunner.buildAgentRuntime
 useTurnDispatcher ── inputQueue/systemInbox drain ──→ dispatchUserTurn ──→ runAgent
 
 usePermissionApproval.onApproval ── 注入 ToolExecutor
-
-usePlanMode.planCallbacks ── 注入 createBuiltinRegistry
 
 usePalettes ── 监听 inputValue ──→ slashEntries/fileEntries
 

@@ -15,7 +15,6 @@ import {
   ToolExecutor,
   createSerperSearch,
   type ApprovalCallback,
-  type PlanModeCallbacks,
   type AskUserCallbacks,
   DefaultToolPolicyEngine,
   type SandboxMode,
@@ -46,7 +45,6 @@ function safeHost(url: string): string {
 export function buildAgentObjects(
   config: AppConfig,
   onApproval?: ApprovalCallback,
-  planCallbacks?: PlanModeCallbacks,
   checkpoint?: CheckpointManager | null,
   skills?: Map<string, SkillDefinition>,
   /** Override the working directory for tools that resolve relative paths
@@ -183,9 +181,6 @@ export function buildAgentObjects(
       sandboxTemporaryDirectory: environment.facts?.sandboxTemporaryDirectory,
     },
     webSearch: config.serperKey ? { searchFn: createSerperSearch(config.serperKey) } : undefined,
-    // Plan mode tools: main agent only. Blocks write/edit/bash while active
-    // (enforced by the existing permissionMode=plan check in onApproval).
-    planMode: planCallbacks ? { callbacks: planCallbacks } : undefined,
     askUser: askUserCallbacks ? { callbacks: askUserCallbacks } : undefined,
     // `skill` tool: lets the model pull in named-skill guidance mid-run
     // (CCB-parity). Main agent only; subagents don't get it.

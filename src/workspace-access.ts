@@ -1,24 +1,33 @@
+import { randomUUID } from "node:crypto"
 import { readFileSync, realpathSync, statSync, unlinkSync, unwatchFile, watchFile } from "node:fs"
 import { dirname, isAbsolute, join, relative, sep } from "node:path"
 import { canonicalizeWithNearestExistingAncestorSync } from "../zapsdk/builtin-tools/filesystem.js"
 import type { PermissionMode } from "./config.js"
+import type { ApprovalCallback, ApprovalContext, ApprovalResponse } from "../zapsdk/tools/executor.js"
 import { getProjectAuthorizationSettingsPath } from "./permissions.js"
 import { writeFileAtomic } from "./utils/secure-write.js"
 
 export type WorkspaceChoice = "project" | "analyze" | "revoke"
 type TurnOrigin = { kind: "user" } | { kind: "task"; ids: readonly string[] }
 type ProjectIdentity = { root: string; device: string; inode: string }
-type WorkGrant = "auto" | "project" | "approved-plan"
+type WorkGrant = { projectId?: string }
+
+export interface WorkspaceRun {
+  actor: { id: string; kind: "root"; runId: string }
+  signal: AbortSignal
+  mode: PermissionMode
+  assertActive(): void
+  bindApproval(approve: ApprovalCallback | undefined): ApprovalCallback
+}
 
 /** Only the interactive host issues these grants. A checkout cannot supply its own. */
 export class WorkspaceAccess {
   private readonly root: string
   private readonly record: string
   private readonly taskContinuations = new Map<string, {
-    session: string; workspace: ProjectIdentity; signal: AbortSignal
+    session: string; workspace: ProjectIdentity; grant: WorkGrant; signal: AbortSignal
   }>()
-  private onGrantChange?: () => void
-  private active?: { session: string; run: string; grant?: WorkGrant }
+  private active?: { session: string; run: string; grant?: WorkGrant; revocation: AbortController }
 
   constructor(cwd: string) {
     this.root = realpathSync(cwd)
@@ -27,7 +36,7 @@ export class WorkspaceAccess {
 
   private identity() {
     const stat = statSync(this.root, { bigint: true })
-    return { version: 1, root: this.root, device: String(stat.dev), inode: String(stat.ino), capability: "workspace-work" }
+    return { version: 2, root: this.root, device: String(stat.dev), inode: String(stat.ino), capability: "host-commands" }
   }
 
   private recordOutsideWorkspace(): boolean {
@@ -35,31 +44,60 @@ export class WorkspaceAccess {
     return path === ".." || path.startsWith(`..${sep}`) || isAbsolute(path)
   }
 
-  remembered(): boolean {
+  private projectGrant(): string | undefined {
     try {
-      if (!this.recordOutsideWorkspace()) return false
+      if (!this.recordOutsideWorkspace()) return
       const grant = JSON.parse(readFileSync(this.record, "utf8"))
-      return Object.entries(this.identity()).every(([key, value]) => grant?.[key] === value)
-    } catch { return false }
+      if (typeof grant?.id === "string" && grant.id && Object.entries(this.identity()).every(([key, value]) => grant[key] === value)) return grant.id
+    } catch { /* An unreadable or outdated record grants nothing. */ }
   }
+
+  remembered(): boolean { return this.projectGrant() !== undefined }
 
   choose(choice: WorkspaceChoice, session: string): void {
     if (choice === "project") {
       if (!this.recordOutsideWorkspace()) throw new Error("Project access must be saved outside the workspace.")
-      writeFileAtomic(this.record, JSON.stringify(this.identity()) + "\n")
+      let projectId = this.projectGrant()
+      if (!projectId) {
+        projectId = randomUUID()
+        writeFileAtomic(this.record, JSON.stringify({ ...this.identity(), id: projectId }) + "\n")
+      }
+      if (this.active?.session === session && !this.active.grant?.projectId && !this.active.revocation.signal.aborted) {
+        this.active.grant = { projectId }
+      }
     }
     if (choice === "revoke" && this.recordOutsideWorkspace()) {
       try { unlinkSync(this.record) }
       catch (err) { if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err }
     }
-    if (choice !== "project") this.clearTaskContinuations()
-    if (this.active?.session === session && choice !== "project") this.active.grant = undefined
+    if (choice !== "project") this.revoke(session)
+  }
+
+  private revoke(session: string): void {
+    this.clearTaskContinuations()
+    if (this.active?.session !== session) return
+    this.active.grant = undefined
+    this.active.revocation.abort()
+  }
+
+  watchProject(session: () => string, onRevoked: () => void): () => void {
+    let watchedGrant = this.projectGrant()
+    const check = () => {
+      const grant = this.projectGrant()
+      if (grant && grant === watchedGrant) return
+      watchedGrant = grant
+      this.revoke(session())
+      onRevoked()
+    }
+    watchFile(this.record, { persistent: false, interval: 250 }, check)
+    check()
+    return () => unwatchFile(this.record, check)
   }
 
   rememberTask(id: string, session: string, signal: AbortSignal): void {
-    if (this.active?.grant !== "auto" || this.active.session !== session || signal.aborted) return
+    if (!this.active?.grant || this.active.session !== session || this.active.revocation.signal.aborted || signal.aborted) return
     try {
-      this.taskContinuations.set(id, { session, workspace: this.identity(), signal })
+      this.taskContinuations.set(id, { session, workspace: this.identity(), grant: this.active.grant, signal })
     } catch { /* A missing workspace cannot authorize a later turn. */ }
   }
 
@@ -69,52 +107,64 @@ export class WorkspaceAccess {
 
   clearTaskContinuations(): void { this.taskContinuations.clear() }
 
-  private canResume(session: string, ids: readonly string[]): boolean {
+  private canResume(session: string, ids: readonly string[], projectId: string | undefined): boolean {
     if (!ids.length) return false
     try {
       const { root, device, inode } = this.identity()
       return ids.every(id => {
         const grant = this.taskContinuations.get(id)
-        return grant?.session === session && !grant.signal.aborted
+        return grant?.session === session && !grant.signal.aborted && grant.grant.projectId === projectId
           && grant.workspace.root === root && grant.workspace.device === device && grant.workspace.inode === inode
       })
     } catch { return false }
   }
 
-  begin(session: string, run: string, base: PermissionMode, origin: TurnOrigin, onProjectRevoked?: () => void): void {
+  begin(session: string, run: string, base: PermissionMode, origin: TurnOrigin): WorkspaceRun {
     if (this.active) throw new Error("Another workspace task is still running")
-    const project = base === "default" && origin.kind === "user" && this.remembered()
-    const auto = base === "auto" && (origin.kind === "user" || this.canResume(session, origin.ids))
-    const active = this.active = { session, run, grant: auto ? "auto" : project ? "project" : undefined }
-    if (project && onProjectRevoked) {
-      this.onGrantChange = () => {
-        if (this.active !== active || active.grant !== "project" || this.remembered()) return
-        active.grant = undefined
-        onProjectRevoked()
-      }
-      watchFile(this.record, { persistent: false, interval: 250 }, this.onGrantChange)
-      this.onGrantChange()
+    const { device, inode } = this.identity()
+    const projectId = base === "plan" ? undefined : this.projectGrant()
+    const eligible = base !== "plan" && (origin.kind === "user" || this.canResume(session, origin.ids, projectId))
+    const grant = eligible && (projectId !== undefined || base !== "default") ? { projectId } : undefined
+    const active = this.active = { session, run, grant, revocation: new AbortController() }
+    const actor = Object.freeze({ id: session, kind: "root" as const, runId: run })
+    const signal = active.revocation.signal
+    const valid = () => {
+      if (this.active !== active || signal.aborted) return false
+      try {
+        const identity = this.identity()
+        if (identity.device === device && identity.inode === inode && (!active.grant?.projectId || this.projectGrant() === active.grant.projectId)) return true
+      } catch { /* A missing workspace also invalidates the current turn. */ }
+      this.revoke(session)
+      return false
     }
-  }
-
-  get activeRun(): string | undefined { return this.active?.run }
-
-  assertProjectCommandAllowed(base: PermissionMode, session: string, run: string): void {
-    const active = this.active
-    if (!active || active.run !== run || active.session !== session || this.mode(base, session, run) !== "acceptEdits"
-      || (base === "default" && active.grant === "project" && !this.remembered())) {
-      throw new Error("This task no longer has project command access")
+    const denied: ApprovalResponse = { approved: false, source: "policy", reason: "This workspace turn no longer has authorization" }
+    return {
+      actor,
+      signal,
+      mode: this.mode(base, session, run),
+      assertActive: () => {
+        if (!valid()) throw new Error(denied.reason)
+      },
+      bindApproval: approve => {
+        const withActor = (context?: Readonly<ApprovalContext>): ApprovalContext => ({
+          cwd: this.root, workspaceRoot: this.root, shell: { syntax: "unknown", filesystem: "host" }, ...context, actor,
+        })
+        return Object.assign(
+          async (name: string, args: Record<string, unknown>, request?: AbortSignal, context?: Readonly<ApprovalContext>) => {
+            if (!approve || !valid() || request?.aborted) return denied
+            const live = request ? AbortSignal.any([request, signal]) : signal
+            const decision = await approve(name, args, live, withActor(context))
+            return valid() && !live.aborted ? decision : denied
+          },
+          { precheck: (name: string, args: Record<string, unknown>, context?: Readonly<ApprovalContext>) =>
+            approve && valid() ? approve.precheck?.(name, args, withActor(context)) : denied },
+        )
+      },
     }
-  }
-
-  approvePlan(session: string): void {
-    if (this.active?.session === session && !this.active.grant) this.active.grant = "approved-plan"
   }
 
   end(run: string): void {
     if (this.active?.run !== run) return
-    if (this.onGrantChange) unwatchFile(this.record, this.onGrantChange)
-    this.onGrantChange = undefined
     this.active = undefined
   }
 
@@ -122,13 +172,17 @@ export class WorkspaceAccess {
     return this.active ? this.active.session === session && !!this.active.grant : remembered
   }
 
+  canRunHostCommands(session: string, run?: string): boolean {
+    const active = this.active
+    return !!run && active?.run === run && active.session === session && !!active.grant?.projectId
+      && !active.revocation.signal.aborted && this.projectGrant() === active.grant.projectId
+  }
+
   mode(base: PermissionMode, session: string, actorRun?: string): PermissionMode {
-    if (actorRun && (actorRun !== this.active?.run || session !== this.active?.session)) return "plan"
-    if (base === "auto") {
-      if (!this.active) return "default"
-      return this.active.session === session && this.active.grant === "auto" ? "acceptEdits" : "plan"
-    }
-    if (base !== "default" || !this.active) return base
-    return this.active.session === session && this.active.grant && this.active.grant !== "auto" ? "acceptEdits" : "plan"
+    if (actorRun && (actorRun !== this.active?.run || session !== this.active?.session
+      || this.active.revocation.signal.aborted || !this.active.grant || (!!this.active.grant.projectId && this.projectGrant() !== this.active.grant.projectId))) return "plan"
+    if (base !== "auto" && base !== "default") return base
+    if (!this.active) return "default"
+    return this.active.session === session && this.active.grant && (base === "auto" || !!this.active.grant.projectId) ? "acceptEdits" : "plan"
   }
 }

@@ -169,7 +169,7 @@ union / literal / record`。够覆盖现有内置工具；遇到未支持类型�
 
 | 工具 | 行为 |
 |---|---|
-| `enter_plan_mode` / `exit_plan_mode` | 切换 PermissionMode 到 `plan`，所有写工具被拦截；exit 时通过 callback 让宿主决定是否 commit。默认只注册 `exit_plan_mode`：进入计划模式是用户操作（`/mode plan`），需要模型主动进入的宿主显式注册 `enterPlanModeTool()` |
+| `enter_plan_mode` / `exit_plan_mode` | 切换 PermissionMode 到 `plan`，所有写工具被拦截；exit 时通过 callback 让宿主决定是否 commit。SDK 宿主可显式注册计划工具。Zap TUI 的只读和项目授权由用户管理 |
 | `skill` | 接收 skill name，把对应 `SkillDefinition` body 注入 conversation 作为系统指令；见 `zapsdk/skills` |
 | `memory_save` | 调用宿主注入的 `mdStore` 写一条 .md + 更新 MEMORY.md |
 

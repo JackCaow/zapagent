@@ -49,6 +49,7 @@ import { registerHostRuntime } from "../agent/hostProtocol.js"
 import { createProjectRuntimeEventStore, recoverProjectRuntimeOutcome } from "../agent/runtimeEventStore.js"
 import { contextTokensFromRunUsage, createRunHandlers } from "../agent/wireRunHandlers.js"
 import { runRemoteTurn } from "../agent/remote-turn.js"
+import type { WorkspaceRun } from "../workspace-access.js"
 import { appendCacheableSystemSection, buildRuntimePromptToolInputs } from "../agent/systemPrompt.js"
 import { createPromptSectionDiagnostics, buildPromptCacheDiagnostics, type PromptCacheDiagnostics } from "../agent/promptDiagnostics.js"
 import { persistRunUsage } from "../agent/usagePersistence.js"
@@ -581,17 +582,21 @@ export function useAgentRunner({
     systemPrompt?: string,
     images?: import("../../zapsdk/core/types.js").ImageContent[],
     memoryQueryText?: string,
-    invocation?: { workspaceRun?: { id: string; assertActive: () => void; assertProjectCommandAllowed: () => void }; permissionMode?: AppConfig["permissionMode"]; keepTurnDenials?: boolean; goalTurn?: GoalTurnInput; goalController?: AbortController; onOutcome?: (outcome: AgentOutcomeV1) => void; signal?: AbortSignal; propagateErrors?: boolean; resultSchema?: "outcome-v1" | "legacy" } & Pick<import("../../zapsdk/agent/loop.js").RunOptions,
+    invocation?: { workspaceRun?: WorkspaceRun; permissionMode?: AppConfig["permissionMode"]; keepTurnDenials?: boolean; goalTurn?: GoalTurnInput; goalController?: AbortController; onOutcome?: (outcome: AgentOutcomeV1) => void; signal?: AbortSignal; propagateErrors?: boolean; resultSchema?: "outcome-v1" | "legacy" } & Pick<import("../../zapsdk/agent/loop.js").RunOptions,
       "onInputAccepted" | "hasSteering" | "takeSteering" | "onSteeringAccepted">,
   ): Promise<LoopAgentResult | undefined> => {
-    const turnConfig = invocation?.permissionMode ? { ...config, permissionMode: invocation.permissionMode } : config
+    const workspaceRun = invocation?.workspaceRun
+    const permissionMode = workspaceRun?.mode ?? invocation?.permissionMode
+    const turnConfig = permissionMode ? { ...config, permissionMode } : config
     if (!invocation?.goalTurn) resetGoalView(true)
     // Background notifications are not the user answering; a decline stands.
     if (!invocation?.keepTurnDenials) permissionManager.startTurn()
     running.current = true
     agentRunStore.clear()
     const controller = new AbortController()
-    const externalSignal = invocation?.signal
+    const externalSignal = workspaceRun && invocation?.signal
+      ? AbortSignal.any([workspaceRun.signal, invocation.signal])
+      : workspaceRun?.signal ?? invocation?.signal
     const forwardExternalAbort = () => controller.abort(externalSignal?.reason)
     if (externalSignal?.aborted) forwardExternalAbort()
     else externalSignal?.addEventListener("abort", forwardExternalAbort, { once: true })
@@ -626,9 +631,8 @@ export function useAgentRunner({
     let handlers: ReturnType<typeof createRunHandlers> | null = null
 
     const objects = agentRef.current
-    const rootExecutor = invocation?.workspaceRun
-      ? objects.executor.withActor({ id: getCurrentSessionId(), kind: "root", runId: invocation.workspaceRun.id })
-        .withExecutionAdmission(invocation.workspaceRun.assertActive)
+    const rootExecutor = workspaceRun
+      ? objects.executor.withActor(workspaceRun.actor).withExecutionAdmission(workspaceRun.assertActive)
       : objects.executor
 
     // Session mode: an external ACP agent answers this turn instead of zap's loop.
@@ -651,9 +655,6 @@ export function useAgentRunner({
         if (!remoteSpec) throw new Error(`Agent ${agentId} is unavailable. ${agentInstallHint(agentId)}`)
         if (invocation?.goalTurn) throw new Error("/goal runs on zap's own model; /agent zap switches back")
         if (systemPrompt) throw new Error("This command runs on zap's own model; /agent zap switches back")
-        const work = invocation?.workspaceRun
-        const projectShell = nativeClaude && work && turnConfig.permissionMode === "acceptEdits" && objects.sandboxConfined
-          ? rootExecutor.withExecutionAdmission(work.assertProjectCommandAllowed) : undefined
         completedResult = await runRemoteTurn({
           spec: remoteSpec, nativeClaude, setRemoteContext, cwd, conversation, currentConfig: turnConfig, controller,
           onModel: identity => {
@@ -661,7 +662,7 @@ export function useAgentRunner({
               scope: JSON.stringify([modelCachePath, currentSessionId, remoteAgents.epoch]), identity,
             })
           },
-          workspaceCommand: projectShell ? (args, signal) => projectShell.execute("bash", args, signal) : undefined,
+          approve: workspaceRun?.bindApproval(rootExecutor.onApproval),
           createPreview: () => {
             const next = createStreamingPreview({ addLog, setStreamingText, setIsStreaming, setThinkingText, setIsThinking, getIsFrozen: getIsFrozen ?? (() => false) })
             registerStaticFlushCallback?.(() => next.onStaticFlushed())

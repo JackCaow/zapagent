@@ -102,7 +102,7 @@ describe("buildAgentObjects — first-run safety", () => {
     cleanup.push(root)
     const checkpoint = new CheckpointManager({ sessionId: "factory-coverage", cwd: root, config: { blobDir: join(root, "blobs") } })
     const config: AppConfig = { ...getDefaultConfig(), providers: [], active: { providerId: "", model: "" } }
-    const { executor } = buildAgentObjects(config, async () => true, undefined, checkpoint, undefined, root, "disabled")
+    const { executor } = buildAgentObjects(config, async () => true, checkpoint, undefined, root, "disabled")
     const shell = await executor.execute("bash", { command: "printf probe > shell.txt" })
     expect(shell.success).toBe(true)
     expect(readFileSync(join(root, "shell.txt"), "utf8")).toBe("probe")
