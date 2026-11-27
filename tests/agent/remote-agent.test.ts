@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test"
+import { agent } from "@agentclientprotocol/sdk"
 import { RemoteAgentManager } from "../../src/agent/remote-agent.js"
 import { formatPlan } from "../../src/agent/remote-turn.js"
 import { parseCommand } from "../../src/commands.js"
@@ -35,6 +36,30 @@ describe("RemoteAgentManager (session mode)", () => {
     expect(manager.current?.spec.id).toBe("fake")
     await manager.reset()
     expect(manager.current).toBeUndefined()
+  })
+
+  it("reports the acknowledged session model and changes during the turn", async () => {
+    const configOptions = (model: string) => [{
+      id: "model", name: "Model", type: "select" as const, category: "model",
+      currentValue: model, options: [{ value: model, name: model }],
+    }]
+    const app = agent({ name: "model-fixture" })
+      .onRequest("initialize", () => ({ protocolVersion: 1 }))
+      .onRequest("session/new", () => ({ sessionId: "s-model", configOptions: configOptions("initial") }))
+      .onRequest("session/set_config_option", () => ({ configOptions: configOptions("acknowledged") }))
+      .onRequest("session/prompt", async ({ client }) => {
+        await client.notify("session/update", { sessionId: "s-model",
+          update: { sessionUpdate: "config_option_update", configOptions: configOptions("actual") } })
+        return { stopReason: "end_turn" }
+      })
+    const manager = new RemoteAgentManager(() => inProcessTransport(app))
+    const models: string[] = []
+    try {
+      await manager.prompt({ ...spec, model: "requested" }, "/w", "task", undefined,
+        { signal: new AbortController().signal, onEvent() {}, onModelId: model => models.push(model) })
+      expect(models).toEqual(["acknowledged", "actual"])
+      expect(manager.current?.session.modelId).toBe("actual")
+    } finally { await manager.reset() }
   })
 
   it("applies permission changes on the original thread before the next prompt", async () => {

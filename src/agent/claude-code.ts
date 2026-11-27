@@ -10,15 +10,11 @@ import { makeParserCtx, parseClaudeLine } from "../../zapsdk/builtin-tools/deleg
 import type { ImageContent, TokenUsage } from "../../zapsdk/core/types.js"
 import { createLocalProcessBroker, terminateProcessTree, terminateProcessTreeWithGrace } from "../../zapsdk/execution/process.js"
 import type { ApprovalCallback, ApprovalResponse } from "../../zapsdk/tools/executor.js"
+import { claudeProviderLabel } from "./claude-models.js"
+import type { ExternalModelIdentity } from "./startup-model-cache.js"
 import { claudeWorkspaceShell, type WorkspaceCommand } from "./claude-workspace-shell.js"
 
 const toolKinds: Record<string, ToolKind> = { Bash: "execute", Write: "edit", Edit: "edit", MultiEdit: "edit", NotebookEdit: "edit", Read: "read", Glob: "search", Grep: "search" }
-
-export interface ClaudeModelIdentity { provider: string; model: string }
-
-const providerLabels = new Map([
-  ["firstParty", "Anthropic"], ["bedrock", "Amazon Bedrock"], ["vertex", "Google Vertex AI"], ["foundry", "Microsoft Foundry"],
-])
 
 interface Options {
   command: string
@@ -33,7 +29,7 @@ interface Options {
   approve?: ApprovalCallback
   workspaceCommand?: WorkspaceCommand
   onEvent: (event: AgentEvent) => void
-  onModel?: (identity: ClaudeModelIdentity) => void
+  onModel?: (identity: ExternalModelIdentity) => void
   onAccepted?: () => void
 }
 
@@ -134,12 +130,11 @@ async function runClaudeCode(options: Options, sessionId: string, shell?: Return
     let apiProvider: string | undefined
     let servedByAnthropic: boolean | undefined
     let model: string | undefined
-    let reported: ClaudeModelIdentity | undefined
+    let reported: ExternalModelIdentity | undefined
     const reportModel = (value?: unknown) => {
       if (typeof value === "string" && value.trim() && !value.startsWith("<")) model = value.trim()
       if (!model || signal.aborted) return
-      const provider = apiProvider === "firstParty" && servedByAnthropic === false ? "Custom endpoint"
-        : apiProvider ? providerLabels.get(apiProvider) ?? apiProvider : servedByAnthropic ? "Anthropic" : "Claude Code"
+      const provider = claudeProviderLabel(apiProvider, servedByAnthropic)
       if (reported?.model === model && reported.provider === provider) return
       reported = { provider, model }
       options.onModel?.(reported)

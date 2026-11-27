@@ -3,7 +3,7 @@ import type { ChildProcess } from "node:child_process";
 import {
   client, ndJsonStream, PROTOCOL_VERSION,
   type AgentApp, type ClientConnection, type ContentBlock, type InitializeResponse,
-  type NewSessionResponse, type PromptResponse, type SessionUpdate,
+  type NewSessionResponse, type PromptResponse, type SessionUpdate, type SetSessionConfigOptionResponse,
 } from "@agentclientprotocol/sdk";
 import { AcpClientError, type AcpClientHandlers } from "./types.js";
 import { terminateProcessTree, terminateProcessTreeWithGrace } from "../execution/process.js";
@@ -142,8 +142,8 @@ export class AcpClientConnection {
     await this.call(this.connection.agent.request("session/set_mode", { sessionId, modeId }), "session_failed", options);
   }
 
-  async setConfigOption(sessionId: string, configId: string, value: string): Promise<void> {
-    await this.call(this.connection.agent.request("session/set_config_option", { sessionId, configId, value }), "session_failed");
+  async setConfigOption(sessionId: string, configId: string, value: string): Promise<SetSessionConfigOptionResponse> {
+    return this.call(this.connection.agent.request("session/set_config_option", { sessionId, configId, value }), "session_failed");
   }
 
   /** Unstable `session/set_model`; agents without it reject and the caller decides. */

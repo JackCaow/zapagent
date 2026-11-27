@@ -205,6 +205,11 @@ decision lives in Zap's user data and is bound to the directory's identity.
 revokes the saved decision. An explicit advanced `/mode` takes precedence.
 Headless runs and Goals use their existing explicit policies.
 
+Claude Code and `/agent codex` show the last cached model on startup, then
+refresh it from the installed CLI in the background. Once a conversation starts,
+the model reported by the live agent takes precedence. Model metadata is cached
+in Zap's user data, scoped to the workspace and runtime configuration.
+
 Codex applies workspace access to its native thread before sending the task.
 Claude Code uses manual stdio approvals for implementation and resumes its
 session. Identified project edits can be approved automatically. During an authorized

@@ -1,6 +1,17 @@
-import { createInterface } from "node:readline"
-import { createLocalProcessBroker, terminateProcessTreeWithGrace } from "../../zapsdk/execution/process.js"
 import { nativeCommand } from "./official-agents.js"
+
+import { probeModelMetadata } from "./model-metadata-probe.js"
+import { modelMetadataText, startupModelCachePath, type ExternalModelIdentity } from "./startup-model-cache.js"
+
+const providerLabels = new Map([
+  ["firstParty", "Anthropic"], ["bedrock", "Amazon Bedrock"], ["vertex", "Google Vertex AI"], ["foundry", "Microsoft Foundry"],
+])
+
+export function claudeProviderLabel(apiProvider?: string, servedByAnthropic?: boolean): string {
+  if (apiProvider === "firstParty" && servedByAnthropic === false) return "Custom endpoint"
+  if (apiProvider) return providerLabels.get(apiProvider) ?? apiProvider
+  return servedByAnthropic ? "Anthropic" : "Claude Code"
+}
 
 export interface ClaudeModelChoice {
   value: string
@@ -8,48 +19,58 @@ export interface ClaudeModelChoice {
   resolvedModel?: string
 }
 
-function cleanText(value: unknown): string | undefined {
-  return typeof value === "string" ? value.replace(/[\x00-\x1f\x7f-\x9f]/g, "").trim() || undefined : undefined
+export function claudeStartupCachePath(cwd: string, preference?: string): string {
+  return startupModelCachePath("claude", cwd, [preference, process.env.CLAUDE_CONFIG_DIR, process.env.ANTHROPIC_BASE_URL,
+    process.env.CLAUDE_CODE_USE_BEDROCK, process.env.CLAUDE_CODE_USE_VERTEX, process.env.CLAUDE_CODE_USE_FOUNDRY])
 }
 
-/** Ask the installed CLI for the same model catalog exposed to the Agent SDK.
- * Only initialize the protocol. No user prompt or session is created. */
 export async function discoverClaudeModels(cwd: string, signal: AbortSignal): Promise<ClaudeModelChoice[]> {
+  return (await readClaudeMetadata(cwd, signal, "catalog")).models
+}
+
+export async function resolveClaudeStartupModel(cwd: string, signal: AbortSignal, preference?: string): Promise<ExternalModelIdentity | undefined> {
+  return (await readClaudeMetadata(cwd, signal, "startup", preference)).identity
+}
+
+function isCustomEndpoint(baseURL: unknown): boolean {
+  if (typeof baseURL !== "string" || !baseURL.trim()) return false
+  try { return new URL(baseURL).origin !== "https://api.anthropic.com" } catch { return true }
+}
+
+async function readClaudeMetadata(cwd: string, signal: AbortSignal, mode: "catalog" | "startup", preference?: string): Promise<{
+  models: ClaudeModelChoice[]
+  identity?: ExternalModelIdentity
+}> {
   const cli = await nativeCommand("claude")
-  const lifetime = AbortSignal.any([signal, AbortSignal.timeout(8000)])
-  const child = createLocalProcessBroker(lifetime).spawnCommand(cli.command, [...cli.args,
+  const args = [...cli.args,
     "--print", "--verbose", "--safe-mode", "--no-session-persistence", "--strict-mcp-config",
     "--tools", "", "--input-format", "stream-json", "--output-format", "stream-json",
-  ], { cwd, hostHome: true, stdin: "pipe" })
-  const closed = new Promise<void>(resolve => child.once("close", () => resolve()))
-  child.on("error", () => {})
-  child.stdin!.on("error", () => {})
-  child.stderr!.resume()
-  const lines = createInterface({ input: child.stdout!, crlfDelay: Infinity })
-  child.stdin!.write(JSON.stringify({ type: "control_request", request_id: "catalog", request: { subtype: "initialize" } }) + "\n")
-  try {
-    for await (const line of lines) {
-      lifetime.throwIfAborted()
-      let event
-      try { event = JSON.parse(line) } catch { continue }
-      const response = event?.response
-      if (event?.type !== "control_response" || response?.request_id !== "catalog") continue
-      const models = response.response?.models
-      if (response.subtype !== "success" || !Array.isArray(models)) break
-      const result = new Map<string, ClaudeModelChoice>()
-      for (const model of models) {
-        const value = cleanText(model?.value)
-        if (!value || value !== model.value || value.startsWith("-") || result.has(value)) continue
-        result.set(value, { value, label: cleanText(model.displayName) ?? value, resolvedModel: cleanText(model.resolvedModel) })
-      }
-      return [...result.values()]
+    ...(preference ? [`--model=${preference}`] : []),
+  ]
+  return probeModelMetadata({ command: cli.command, args }, cwd, signal, async ({ send, receive }) => {
+    const request = async (subtype: string) => {
+      send({ type: "control_request", request_id: subtype, request: { subtype } })
+      const { response } = await receive(event => event.type === "control_response" && event.response?.request_id === subtype)
+      if (response.subtype !== "success") throw new Error("Claude Code did not return model metadata")
+      return response.response
     }
-    lifetime.throwIfAborted()
-    throw new Error("Claude Code did not return a model list")
-  } finally {
-    lines.close()
-    child.stdin!.end()
-    if (child.pid && child.exitCode === null && child.signalCode === null) terminateProcessTreeWithGrace(child)
-    await closed
-  }
+    const initial = await request("initialize")
+    if (mode === "startup") {
+      const settings = await request("get_settings")
+      const model = modelMetadataText(settings?.applied?.model)
+      const apiProvider = modelMetadataText(initial?.account?.apiProvider)
+      const custom = isCustomEndpoint(process.env.ANTHROPIC_BASE_URL) || isCustomEndpoint(settings?.effective?.env?.ANTHROPIC_BASE_URL)
+      const provider = claudeProviderLabel(apiProvider, custom ? false : undefined)
+      return { models: [], identity: model ? { model, provider } : undefined }
+    }
+    const models = initial?.models
+    if (!Array.isArray(models)) throw new Error("Claude Code did not return a model list")
+    const choices = new Map<string, ClaudeModelChoice>()
+    for (const model of models) {
+      const value = modelMetadataText(model?.value)
+      if (!value || value !== model.value || value.startsWith("-") || choices.has(value)) continue
+      choices.set(value, { value, label: modelMetadataText(model.displayName) ?? value, resolvedModel: modelMetadataText(model.resolvedModel) })
+    }
+    return { models: [...choices.values()] }
+  })
 }
