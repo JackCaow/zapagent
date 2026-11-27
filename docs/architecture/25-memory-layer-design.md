@@ -139,8 +139,7 @@ contextPrefix segments
   ├─ global_memory_index
   ├─ global_memory_working_pack
   ├─ memory_index
-  ├─ memory_working_pack
-  └─ active_plan
+  └─ memory_working_pack
 ```
 
 The model receives the selected context as a transient user message at the tail of the provider request. It is not persisted into `ConversationManager`.
@@ -211,7 +210,6 @@ transient tail message:
   runtime environment
   memory index
   memory working pack
-  active todo plan
 ```
 
 Diagnostics:
@@ -229,7 +227,7 @@ Diagnostics:
 
 Cache invariants:
 
-- Memory content and todo state must not move into the cacheable system prefix.
+- Memory content must not move into the cacheable system prefix.
 - Volatile runtime environment must not sit between the stable system prefix and tool/history bytes; `LoopAgent` moves it to transient tail context before provider serialization.
 - Current user turn and transient context must not become Anthropic conversation cache breakpoints.
 - Conversation-prefix fingerprints must ignore app-only cache hints and canonicalize provider-visible structured data so internal hint cleanup or object key ordering does not look like history churn.

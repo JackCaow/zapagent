@@ -1,24 +1,21 @@
 import type { CompletionContract } from "./completion.js";
 
 /**
- * V1 was intentionally small so existing hosts could share task-decomposition
- * and completion settings. Keep it public as an input shape: config written
+ * V1 was intentionally small so existing hosts could share completion
+ * and execution settings. Keep it public as an input shape: config written
  * against V1 must continue to resolve without a migration step.
  */
 export interface HarnessPolicyV1 {
   version: 1;
-  taskDecomposition: TaskDecompositionPolicy;
   reserveSteps: number;
   completion: CompletionContract;
 }
 
 export type HarnessAutonomy = "interactive" | "bounded" | "supervised";
 export type HarnessTaskClass = "question" | "investigation" | "change" | "migration";
-export type HarnessPlanThreshold = "never" | "complexity" | "risk";
 export type HarnessWorkspaceMode = "shared-read" | "isolated-write";
 export type HarnessCheckpointMode = "never" | "best-effort" | "before-destructive" | "before-write";
 export type HarnessObservabilityLevel = "minimal" | "standard" | "debug";
-export type TaskDecompositionPolicy = "off" | "auto" | "required";
 
 /**
  * Resource constraints are shared product policy, not hidden verifier hints.
@@ -37,7 +34,6 @@ export interface HarnessBudgetConstraints {
 
 export interface HarnessTaskPolicy {
   classHint?: HarnessTaskClass;
-  requirePlanAbove: HarnessPlanThreshold;
   completion: CompletionContract;
 }
 
@@ -64,7 +60,6 @@ export interface HarnessPolicyOverrides {
   /** Omit for the current V2 product default. Set 1 to retain V1 behavior. */
   version?: 1 | 2;
   /** V1 compatibility fields. */
-  taskDecomposition?: TaskDecompositionPolicy;
   reserveSteps?: number;
   completion?: Partial<CompletionContract>;
   /** V2 fields. */
@@ -85,7 +80,6 @@ export interface HarnessPolicyOverrides {
 export interface ResolvedHarnessPolicy extends HarnessPolicyV2 {
   legacy: {
     sourceVersion: 1 | 2;
-    taskDecomposition: TaskDecompositionPolicy;
     reserveSteps: number;
   };
 }
@@ -94,7 +88,6 @@ export const DEFAULT_HARNESS_POLICY: Readonly<HarnessPolicyV2> = Object.freeze({
   version: 2,
   autonomy: "interactive",
   task: Object.freeze({
-    requirePlanAbove: "complexity",
     completion: Object.freeze({ id: "delivery-response-v2", requirements: Object.freeze([Object.freeze({ kind: "final_response" as const }), Object.freeze({ kind: "delivery" as const })]) }),
   }),
   budgets: Object.freeze({}),
@@ -106,7 +99,6 @@ export const DEFAULT_HARNESS_POLICY: Readonly<HarnessPolicyV2> = Object.freeze({
 });
 
 const LEGACY_DEFAULTS = Object.freeze({
-  taskDecomposition: "auto" as const,
   reserveSteps: 2,
 });
 
@@ -114,9 +106,6 @@ export function resolveHarnessPolicy(
   overrides: HarnessPolicyOverrides | undefined,
 ): ResolvedHarnessPolicy {
   const sourceVersion = overrides?.version ?? 2;
-  const taskDecomposition = overrides?.taskDecomposition
-    ?? planThresholdToLegacyMode(overrides?.task?.requirePlanAbove)
-    ?? LEGACY_DEFAULTS.taskDecomposition;
   const reserveSteps = nonNegativeInteger(overrides?.reserveSteps) ?? LEGACY_DEFAULTS.reserveSteps;
   const completion = {
     ...(sourceVersion === 1 ? { id: "natural-response-v1" } : DEFAULT_HARNESS_POLICY.task.completion),
@@ -129,8 +118,6 @@ export function resolveHarnessPolicy(
     autonomy: overrides?.autonomy ?? DEFAULT_HARNESS_POLICY.autonomy,
     task: {
       classHint: overrides?.task?.classHint,
-      requirePlanAbove: overrides?.task?.requirePlanAbove
-        ?? legacyModeToPlanThreshold(taskDecomposition),
       completion,
     },
     budgets: normalizeBudgetConstraints(overrides?.budgets),
@@ -146,14 +133,9 @@ export function resolveHarnessPolicy(
     },
     legacy: {
       sourceVersion,
-      taskDecomposition,
       reserveSteps,
     },
   };
-}
-
-export function policyToTaskDecomposition(policy: ResolvedHarnessPolicy): TaskDecompositionPolicy {
-  return policy.legacy.taskDecomposition;
 }
 
 function normalizeBudgetConstraints(
@@ -171,18 +153,6 @@ function normalizeBudgetConstraints(
     ...(nonNegativeFinite(budgets?.costUsd) === undefined
       ? {} : { costUsd: nonNegativeFinite(budgets?.costUsd) }),
   };
-}
-
-function legacyModeToPlanThreshold(mode: TaskDecompositionPolicy): HarnessPlanThreshold {
-  return mode === "off" ? "never" : mode === "required" ? "risk" : "complexity";
-}
-
-function planThresholdToLegacyMode(
-  threshold: HarnessPlanThreshold | undefined,
-): TaskDecompositionPolicy | undefined {
-  return threshold === undefined
-    ? undefined
-    : threshold === "never" ? "off" : threshold === "risk" ? "required" : "auto";
 }
 
 function nonNegativeInteger(value: number | undefined): number | undefined {

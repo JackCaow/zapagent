@@ -60,7 +60,7 @@ describe("dispatchSlashCommand reset commands", () => {
         // Any attempted reset or checkpoint rebind fails this test.
         const unexpected = () => { throw new Error("state must not reset"); };
         const deps = { addToast: (...args) => toasts.push(args), setLogs: unexpected,
-          setTodos: unexpected, bumpTranscript: unexpected, onResetRuntimeState: unexpected,
+          bumpTranscript: unexpected, onResetRuntimeState: unexpected,
           checkpointRef: { current: { setSessionId: unexpected } } };
         assert.equal(dispatchSlashCommand("/new", deps), true);
         assert.equal(getCurrentSessionId(), id);
@@ -95,9 +95,6 @@ describe("dispatchSlashCommand reset commands", () => {
         '  exit: () => {},',
         '  bumpTranscript: () => {},',
         '  setLogs: () => {},',
-        '  setTodos: () => {},',
-        '  todosRef: { current: [] },',
-        '  subagentTodosRef: { current: new Map() },',
         '  checkpointRef: { current: { setSessionId: () => { rebound = true; } } },',
         '  turnStartLogIndexRef: { current: 0 },',
         '  setDialog: () => {},',
@@ -161,9 +158,6 @@ function makeDeps(
     exit: () => {},
     bumpTranscript: () => {},
     setLogs: () => {},
-    setTodos: () => {},
-    todosRef: { current: [] },
-    subagentTodosRef: { current: new Map() },
     checkpointRef: { current: { setSessionId: () => {} } as never },
     turnStartLogIndexRef: { current: 0 },
     setDialog: () => {},

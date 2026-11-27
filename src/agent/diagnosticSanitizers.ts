@@ -144,8 +144,6 @@ function sanitizeContextSegmentMeta(value: unknown): Record<string, unknown> | u
   }
   if (value.queryFallback === true) out.queryFallback = true
   if (typeof value.budgetTokens === "number") out.budgetTokens = nonNegativeFinite(value.budgetTokens)
-  if (typeof value.todoCount === "number") out.todoCount = nonNegativeFinite(value.todoCount)
-  if (typeof value.inProgressCount === "number") out.inProgressCount = nonNegativeFinite(value.inProgressCount)
   return Object.keys(out).length > 0 ? out : undefined
 }
 

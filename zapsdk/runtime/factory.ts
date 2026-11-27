@@ -19,7 +19,6 @@ import { AgentCoordinator } from "../coordinator/coordinator.js";
 import { DeferredAgentCoordinatorExecutor } from "../coordinator/executor-bridge.js";
 import { RuntimeAgentCoordinatorStateStore } from "../coordinator/store.js";
 import {
-  policyToTaskDecomposition,
   resolveHarnessPolicy,
   type HarnessPolicyOverrides,
 } from "../harness/policy.js";
@@ -161,7 +160,6 @@ export function createAgentRuntime(options: CreateAgentRuntimeOptions): AgentRun
     maxSteps: options.loopAgent.maxSteps ?? harnessPolicy.budgets.modelTurns,
     timeoutMs: options.loopAgent.timeoutMs ?? harnessPolicy.budgets.wallTimeMs,
     adaptiveBudget: harnessPolicy.legacy.sourceVersion === 2 ? harnessPolicy.budgets : undefined,
-    taskDecomposition: options.loopAgent.taskDecomposition ?? policyToTaskDecomposition(harnessPolicy),
     reserveSteps: options.loopAgent.reserveSteps ?? harnessPolicy.legacy.reserveSteps,
     executor,
     onRunEnd: async (context) => {

@@ -9,7 +9,7 @@ src/
 ├── agent/
 │   ├── buildAgentRuntime.ts          # TUI Runtime adapter + devtools/logger/checkpoint
 │   ├── runtimeEventStore.ts          # 项目级持久 Runtime EventStore
-│   ├── contextAttachments.ts        # 每 turn 的 memory/working-pack/todo 注入
+│   ├── contextAttachments.ts        # 每 turn 的 记忆附件注入
 │   ├── streamingPreview.ts          # text/thinking delta → React state + Static commit
 │   └── wireRunHandlers.ts           # 把 agent events 翻成 addLog/replaceLog
 └── permissions.ts                   # 规则评估、模式匹配、settings 持久化
@@ -62,7 +62,6 @@ Moonshot 的 "Kimi For Coding" 端点（`api.kimi.com`、`api.moonshot.{cn,ai}`�
 - `executeCommand: { defaultCwd, store: taskStore }` —— bash 拿全局 TaskStore，
   能用 `run_in_background:true`
 - `webSearch: { searchFn: createSerperSearch(key) }` 仅当 `serperKey` 填了
-- `todoWrite: { store: todoStore }` —— 主 agent 独有；subagent registry 没有这条
 - `planMode: { callbacks: planCallbacks }` —— 主 agent 独有
 - `skill: { getSkill, listNames }` —— 主 agent 独有
 - `cronHandle / monitorHandle` —— 来自 `singletons.ts`
@@ -107,7 +106,7 @@ postProcess 这里很轻，主要是 memory 文件读取时挂个 N-day-old 提�
 | contextWindow | `getActiveContextWindow(config)` |
 | storageSessionId / sessionId | `getCurrentSessionId()` |
 | onRunEnd | `(ctx) => checkpoint.makeSnapshot(turnStartIndex, logIndex)`；workspace cleanup 由工厂 finally 保证 |
-| subagent | `{ onEvent: subAgentEventHandler, todoStore }` |
+| subagent | `{ onEvent: subAgentEventHandler }` |
 | subagentFactory | `subagentTool`（来自 SDK，注入避免循环依赖） |
 | onImageStripSelfHeal | `() => updateConfig(setVisionSupport(false))` |
 
@@ -145,14 +144,9 @@ buildPerTurnAttachments(autoMemory, {
   relevance 过滤为空，会退回小预算 pack，保证 pinned compact state/timeline
   仍可恢复。
 
-`makeContextPrefixBuilder({ attachments, getTodos, modelId })` 返回 `() => string`：
-- 拼 memory + workingPack + `renderTodoAttachment(todos)`（产出 `<active_plan>`）
-- 都为空返回 undefined（LoopAgent 跳过注入）
+`makeContextBuilders({ attachments })` 生成本轮的上下文前缀和诊断信息，包含项目结构和记忆。没有附件时返回空值。
 
-`makeTurnEndGuard(getTodos)` 返回 `() => string | null`：
-- turn 自然结束前 LoopAgent 喊一声，如果有 in-progress todo 就注入
-  `<system-reminder>` 让模型 todo_write 收尾或直接干活
-- LoopAgent 保证每 run 最多 fire 一次，避免死循环
+`reviewFailedTools` 在自然结束前检查工具失败。如果存在失败，LoopAgent 最多提醒模型复核一次。
 
 ---
 

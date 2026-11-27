@@ -32,15 +32,15 @@ import {
   getProviderDisplayName,
   type AppConfig,
 } from "./config.js"
-import { cwdShort, configPath, getCurrentSessionId, getSessionPersistenceStatus, peekJournalLogIndex, appendSnapshot, appendTodoUpdate, readCurrentSessionLogs, readTodoUpdates, resolveRestoredUsageContext, resolveUnmeasuredUsageContext, sessionLogsToMessages, type PersistedUsage } from "./session.js"
+import { cwdShort, configPath, getCurrentSessionId, getSessionPersistenceStatus, peekJournalLogIndex, appendSnapshot, readCurrentSessionLogs, resolveRestoredUsageContext, resolveUnmeasuredUsageContext, sessionLogsToMessages, type PersistedUsage } from "./session.js"
 import { useLogs } from "./hooks/useLogs.js"
 import { useAgentRunner } from "./hooks/useAgentRunner.js"
 import { useToasts } from "./hooks/useToasts.js"
 import { useUpdateCheck } from "./hooks/useUpdateCheck.js"
 import { UpdateNotice } from "./ui/UpdateNotice.js"
-import { autoMemory, appLogger, agentLogger, conversation, permissionManager, tokenAccounting } from "./singletons.js"
+import { autoMemory, appLogger, agentLogger, conversation, permissionManager, taskStore, tokenAccounting } from "./singletons.js"
+import type { TaskStartedEvent } from "../zapsdk/tasks/types.js"
 import { CheckpointManager } from "../zapsdk/checkpoint/index.js"
-import { type Todo, type TodoStore } from "../zapsdk/index.js"
 import { loadAllSkills } from "../zapsdk/skills/loader.js"
 import type { SkillDefinition } from "../zapsdk/skills/types.js"
 import { inferInvocationRules } from "./permissions.js"
@@ -133,7 +133,6 @@ import { AskUserBar } from "./ui/dialog-ask-user.js"
 import { collectPendingTools, LiveActivity } from "./ui/live-activity.js"
 import { TokenWarning } from "./ui/token-warning.js"
 import { ToastContainer } from "./ui/toast.js"
-import { TodosPanel } from "./ui/todos-panel.js"
 import { TermWidthContext } from "./ui/term-width.js"
 import type { AgentObjects } from "./agent/types.js"
 import { ProjectRecoveryCenter } from "../zapsdk/index.js"
@@ -262,18 +261,20 @@ export function App() {
 
   // ── Config ──
   const [access] = useState(() => new WorkspaceAccess(process.cwd()))
-  const workPrompt = useRef("")
   const [rememberedAccess, setRememberedAccess] = useState(() => access.remembered())
-  const [config, setConfig] = useState<AppConfig>(() => loadAppConfig(configPath))
+  const [config, setConfig] = useState<AppConfig>(() => ({ ...loadAppConfig(configPath), permissionMode: "auto" }))
   const configRef = useRef(config)
   useEffect(() => { configRef.current = config }, [config])
 
   const updateConfig = useCallback((next: AppConfig) => {
-    if (conversationAgentId(configRef.current) !== conversationAgentId(next)) void remoteAgents.reset()
+    const previous = configRef.current
+    const agentChanged = conversationAgentId(previous) !== conversationAgentId(next)
+    if (agentChanged) void remoteAgents.reset()
+    if (agentChanged || next.permissionMode !== previous.permissionMode) access.clearTaskContinuations()
     configRef.current = next
     setConfig(next)
     saveAppConfig(configPath, next)
-  }, [])
+  }, [access])
 
   // Best-effort catalog hydration for providers created before model metadata
   // persistence existed. It never blocks first render; if /connect changes the
@@ -373,31 +374,6 @@ export function App() {
       appLogger.debug("dialog_state", { dialog })
     }
   }, [dialog])
-
-  // ── Todo store (in-memory; agent's todo_write tool reads/writes here) ──
-  const [todos, setTodos] = useState<Todo[]>([])
-  const todosRef = useRef<Todo[]>([])
-  useEffect(() => { todosRef.current = todos }, [todos])
-  const subagentTodosRef = useRef<Map<string, Todo[]>>(new Map())
-  const todoStoreRef = useRef<TodoStore>({
-    getKey: () => "main",
-    get: (key) =>
-      key === "main" ? todosRef.current : (subagentTodosRef.current.get(key) ?? []),
-    set: (key, _oldTodos, newTodos) => {
-      if (key === "main") {
-        todosRef.current = newTodos
-        setTodos(newTodos)
-      } else {
-        subagentTodosRef.current.set(key, newTodos)
-      }
-      // Persist to the session JSONL so resume rebuilds the same todo
-      // state. Without this the in-memory store is the only source of
-      // truth — every restart starts from an empty list even though the
-      // session's user messages and tool calls have already been written.
-      try { appendTodoUpdate(key, newTodos) }
-      catch { /* JSONL write failures are non-fatal — the agent run continues with in-memory state. */ }
-    },
-  })
 
   // ── Checkpoint manager ──
   // Lives across the whole process; `setSessionId` keeps its label aligned
@@ -500,8 +476,7 @@ export function App() {
   const { agentRef } = useAgentObjects({
     config,
     onApproval,
-    todoStore: todoStoreRef.current,
-    planCallbacks,
+    planCallbacks: config.permissionMode === "plan" ? planCallbacks : undefined,
     askUserCallbacks,
     checkpoint,
     skillsRef,
@@ -553,7 +528,6 @@ export function App() {
     runGoalCommand,
     goalRunning,
     goalStatus,
-    goalTodoId,
     resetGoalView,
     abortRef,
     status: runnerStatus,
@@ -597,9 +571,7 @@ export function App() {
     addLog,
     replaceLog,
     peekNextLogId,
-    todosRef,
     checkpoint,
-    todoStore: todoStoreRef.current,
     turnStartLogIndexRef,
     turnStartUiLogIndexRef,
     compactLogs,
@@ -624,13 +596,6 @@ export function App() {
   // set feeds LiveActivity so its aggregate counts stay aligned with the
   // transcript's multi-agent panel.
   //
-  // todo_write is excluded: it doesn't render in the transcript either
-  // (Transcript.tsx returns null for `tool.name === "todo_write"` — the live
-  // list lives in TodosPanel), so surfacing it as `⚙ TodoWrite (+N) · Esc to
-  // interrupt` in LiveActivity produces a "stuck" bar with no counterpart
-  // anywhere on screen — confusing whenever a todo_write tool/result pair
-  // briefly straddles a render (or stays pending under a frozen Static
-  // buffer during a dialog).
   const pendingTools = useMemo(() => collectPendingTools(logs), [logs])
 
   // Most recent completed root-agent tool in the current user turn. Keeping
@@ -715,7 +680,7 @@ export function App() {
       /** Optional compact text used only for memory recall/query ranking. */
       memoryQueryText?: string,
       onAccepted?: () => void,
-      entryId?: string,
+      continuationTaskIds?: readonly string[],
     ): Promise<unknown> => {
       turnStartLogIndexRef.current = peekJournalLogIndex()
       turnStartUiLogIndexRef.current = getUiLogCount()
@@ -728,17 +693,19 @@ export function App() {
           undefined, full !== undefined ? { restoreText: full } : undefined)
       }
       try {
-        access.begin(getCurrentSessionId(), runId, !silent, text, entryId, configRef.current.permissionMode === "default" ? () => {
+        access.begin(getCurrentSessionId(), runId, configRef.current.permissionMode,
+          silent ? { kind: "task", ids: continuationTaskIds ?? [] } : { kind: "user" }, () => {
           setRememberedAccess(false)
           abortRef.current?.abort()
           addLog("system", "Project access was revoked. Returning to analysis.")
-        } : undefined)
+        })
         return await runAgent(text, systemPrompt, images, memoryQueryText ?? displayText ?? text, {
           workspaceRun: { id: runId, assertActive: () => {
             if (access.activeRun !== runId) throw new Error("The workspace task has ended")
           }, assertProjectCommandAllowed: () => access.assertProjectCommandAllowed(configRef.current.permissionMode, getCurrentSessionId(), runId) }, permissionMode: effectiveMode(), propagateErrors: true,
           keepTurnDenials: silent,
           onInputAccepted: () => {
+            if (continuationTaskIds) access.consumeTasks(continuationTaskIds)
             onAccepted?.()
             if (silent) addLog("task-notification", text)
             else logUser(displayText ?? text, restoreText, images)
@@ -789,16 +756,12 @@ export function App() {
         runGoalCommand,
         bumpTranscript,
         setLogs,
-        setTodos,
-        todosRef,
-        subagentTodosRef,
         checkpointRef: checkpointHandle,
         turnStartLogIndexRef,
         setDialog,
         addLog,
         configRef,
         updateConfig,
-        openWorkspaceAccess: task => { workPrompt.current = task; setDialog("workspace-access") },
         addToast,
         getLogs: () => logsRef.current,
         compactLogs,
@@ -836,7 +799,7 @@ export function App() {
       if (getMessageQueue().getSessionId() !== getCurrentSessionId()) bindQueue()
       return result
     },
-    // bumpTranscript / setLogs / setTodos / updateConfig / setDialog are
+    // bumpTranscript / setLogs / updateConfig / setDialog are
     // stable; refs aren't deps. Only addLog/addToast/compactLogs/dispatchUserTurn
     // could realistically change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -844,16 +807,21 @@ export function App() {
   )
 
   // ── Turn dispatcher (unified handleSubmit + drain) ──
-  const bindWorkSubmission = useCallback((entry: QueueEntry) => {
-    access.bindSubmission(entry.sessionId, entry.id, entry.text, entry.displayForm)
-  }, [access])
+  useEffect(() => {
+    const onStarted = ({ task }: TaskStartedEvent) => {
+      const signal = abortRef.current?.signal
+      if (!task.ownerAgentId && task.sessionId && signal && configRef.current.permissionMode === "auto") {
+        access.rememberTask(task.taskId, task.sessionId, signal)
+      }
+    }
+    taskStore.on("started", onStarted)
+    return () => { taskStore.off("started", onStarted) }
+  }, [abortRef, access])
   const { handleSubmit } = useTurnDispatcher({
-    onEnqueued: bindWorkSubmission,
-    getTodos: () => todosRef.current,
     // Pending delivery is busy for UI/controls, but must not block the
     // dispatcher effect that starts that very delivery.
     isRunning: isAgentRunning,
-    paused: dialog === "workspace-access" || dialog === "rewind" || dialog === "update" || dialog === "restoring",
+    paused: dialog === "permissions" || dialog === "workspace-access" || dialog === "rewind" || dialog === "update" || dialog === "restoring",
     inputQueue,
     systemInboxSize,
     followUpMode: config.followUpMode ?? "queue",
@@ -892,21 +860,18 @@ export function App() {
   }, [handleSubmit])
 
   function chooseWorkspaceAccess(choice: WorkspaceChoice) {
-    const writing = choice === "task" || choice === "project"
+    const writing = choice === "project"
     if (isRunning && writing) {
       addToast("Finish the current task before starting another.", { variant: "warning" })
       return
     }
-    const prompt = workPrompt.current || (conversation.getTurns().length ? "Implement the plan we just discussed and verify the changes." : "")
-    try { access.choose(choice, getCurrentSessionId(), prompt || undefined) }
+    try { access.choose(choice, getCurrentSessionId()) }
     catch (error) { addToast(String(error), { variant: "error" }); return }
     setRememberedAccess(access.remembered())
     if (!writing && isRunning) abortRef.current?.abort()
     updateConfig({ ...configRef.current, permissionMode: writing ? "default" : "plan" })
     setDialog(null)
-    workPrompt.current = ""
-    if (writing && prompt) submitInputDeferred(prompt)
-    else addToast(writing ? "Ready to work. Enter your task." : isRunning ? "Stopping the current task. Future turns will only analyze." : "Analysis only.")
+    addToast(writing ? "Project access saved." : isRunning ? "Stopping the current task. Future turns will be read-only." : "Read only. Choose Auto in /mode to resume work.")
   }
 
   // ── /clear-style reset (also bound to Ctrl+L) ──
@@ -923,9 +888,6 @@ export function App() {
     void remoteAgents.reset()
     restoreMemoryQueryHistoryFromLogs([])
     setLogs([])
-    todosRef.current = []
-    setTodos([])
-    subagentTodosRef.current.clear()
     turnStartLogIndexRef.current = 0
     turnStartUiLogIndexRef.current = 0
     bumpTranscript()
@@ -1001,7 +963,7 @@ export function App() {
   //
   // Modal screen takeover — DISABLED BY DEFAULT (2026-05-20).
   //
-  // Earlier behavior unmounted TodosPanel / LiveActivity / ToastContainer /
+  // Earlier behavior unmounted LiveActivity / ToastContainer /
   // queued-message preview / Prompt / palettes / Footer when a dialog was
   // open. The unmount + later remount cascade emits a big batch of erase
   // and cursor-positioning escape bytes through Ink each time. Apple
@@ -1104,21 +1066,6 @@ export function App() {
     } catch (err) {
       addLog("error", `checkpoint hydrate failed: ${err instanceof Error ? err.message : String(err)}`)
     }
-    // `parseTodoUpdates` is tail-wins per key. The exact validated map
-    // was also persisted into the durable fork during commit.
-    try {
-      const todoMap = metadata.todos
-      const main = todoMap.get("main") as Todo[] | undefined
-      todosRef.current = main ?? []
-      setTodos(main ?? [])
-      subagentTodosRef.current.clear()
-      for (const [key, list] of todoMap) {
-        if (key === "main") continue
-        subagentTodosRef.current.set(key, list as Todo[])
-      }
-    } catch (err) {
-      addLog("error", `todo restore failed: ${err instanceof Error ? err.message : String(err)}`)
-    }
     if (conversationAgentId(config)) addLog("system", "Transcript restored. The local agent will start a new conversation on your next message.")
     bumpTranscript()
     appLogger.info("session_restore_end", { sessionId: loadedSessionId })
@@ -1149,8 +1096,6 @@ export function App() {
 
       {!inModal && (
         <>
-          {dialog !== "queue" && <TodosPanel todos={todos} goalId={goalStatus?.id} goalAttached={goalRunning} todoGoalId={goalTodoId} />}
-
           <ToastContainer toasts={toasts} />
           <UpdateNotice state={updateCheck} />
 
@@ -1177,7 +1122,6 @@ export function App() {
         lastCompletedTool={lastCompletedTool}
         goal={goalStatus}
         goalAttached={goalRunning}
-        goalTodos={goalStatus?.id === goalTodoId ? todos : []}
         goalAwaitingInput={!!pendingApproval || !!pendingPlan || !!pendingQuestions}
         stopHint={inputQueue.length || editingMessageId || pendingImages.length || dialog || palettes.slashOpen || palettes.fileOpen ? "Ctrl+C to stop" : undefined}
       />}
@@ -1259,7 +1203,7 @@ export function App() {
       }} onCancel={closeDialog} onRestart={request => { readCurrentSessionLogs(); requestUpdateRestart(request); exit() }} />}
       {dialog === "connect"     && <ConnectDialog     config={config} onAgentSelected={addToast} onSave={updateConfig} onCommit={commitConfig} onCancel={closeDialog} />}
       {dialog === "model"       && <ModelDialog       config={config} includeClaude claudeModel={claudeModel} onSave={updateConfig} onCommit={commitConfig} onCancel={closeDialog} />}
-      {dialog === "workspace-access" && <WorkspaceAccessDialog cwd={process.cwd()} remembered={access.remembered()} onChoose={chooseWorkspaceAccess} onCancel={closeDialog} />}
+      {dialog === "workspace-access" && <WorkspaceAccessDialog cwd={process.cwd()} remembered={access.remembered()} onChoose={chooseWorkspaceAccess} onCancel={() => setDialog("permissions")} />}
       {dialog === "mode"        && <ModeDialog        config={config} onCommit={commitConfig} onCancel={closeDialog} />}
       {dialog === "effort"      && <EffortDialog      config={config} onCommit={commitConfig} onCancel={closeDialog} />}
       {dialog === "status"      && (
@@ -1297,7 +1241,7 @@ export function App() {
       {dialog === "queue" && <QueueDialog queue={getMessageQueue()} entries={inputQueue} mode={config.followUpMode ?? "queue"}
         onModeChange={mode => updateConfig({ ...configRef.current, followUpMode: mode })}
         onEdit={editQueueMessage} onError={error => addToast(error, { variant: "error" })} onCancel={closeDialog} />}
-      {dialog === "permissions" && <PermissionsDialog availableTools={agentRef.current.registry.definitions().filter(tool => tool.permission === "confirm").map(tool => tool.name)} onCancel={closeDialog} />}
+      {dialog === "permissions" && <PermissionsDialog availableTools={agentRef.current.registry.definitions().filter(tool => tool.permission === "confirm").map(tool => tool.name)} onProjectAccess={() => setDialog("workspace-access")} onCancel={closeDialog} />}
       {dialog === "supertask_watch" && <SupertaskWatchDialog cwd={process.cwd()} onCancel={closeDialog} />}
       {dialog === "rewind"      && (
         <RewindDialog
@@ -1343,17 +1287,6 @@ export function App() {
             if (process.stdout.isTTY) process.stdout.write("\x1b[H\x1b[2J\x1b[3J")
             setLogs(truncated)
             restoreMemoryQueryHistoryFromLogs(truncated)
-            // Todo state is model-facing dynamic context. Restore the same
-            // marker-filtered branch immediately instead of waiting for a
-            // restart to repair stale plans from the abandoned future.
-            const todoMap = readTodoUpdates(getCurrentSessionId())
-            const mainTodos = (todoMap.get("main") as Todo[] | undefined) ?? []
-            todosRef.current = mainTodos
-            setTodos(mainTodos)
-            subagentTodosRef.current.clear()
-            for (const [key, list] of todoMap) {
-              if (key !== "main") subagentTodosRef.current.set(key, list as Todo[])
-            }
             bumpTranscript()
             closeDialog()
           }}
@@ -1399,8 +1332,8 @@ export function App() {
           hasApiKey={hasKey}
           showWelcome={logs.length === 0 && !isRunning && !isStreaming}
           shellMode={isShellMode()}
-          permissionMode={effectiveMode()}
-          analysisHint={config.permissionMode === "plan" || (config.permissionMode === "default" && !access.canWork(getCurrentSessionId(), rememberedAccess))}
+          permissionMode={config.permissionMode === "auto" ? "auto" : effectiveMode()}
+          analysisHint={config.permissionMode === "default" && !access.canWork(getCurrentSessionId(), rememberedAccess)}
           termWidth={termWidth}
           mcp={mcpFooterSummary}
         />

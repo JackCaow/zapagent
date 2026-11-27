@@ -23,8 +23,7 @@ export const BUILTIN_COMMANDS: SlashEntry[] = [
   { name: "/model",       desc: "Show or switch model" },
   { name: "/effort",      desc: "Set reasoning effort (off | cycle | <value>)" },
   { name: "/agent",       desc: "Talk to an external ACP agent (agy | codex) · /agent zap" },
-  { name: "/work",        desc: "Start implementation or manage project access" },
-  { name: "/mode",        desc: "Permission mode (default | acceptEdits | plan | bypass)" },
+  { name: "/mode",        desc: "Choose how Zap works (Auto by default)" },
   { name: "/permissions", desc: "Manage active permission rules" },
   { name: "/sessions",    desc: "Browse saved sessions" },
   { name: "/queue",       desc: "Manage follow-up messages · Queue / Steer" },
@@ -32,7 +31,6 @@ export const BUILTIN_COMMANDS: SlashEntry[] = [
   { name: "/mem",         desc: "Browse memory (list / show / forget)" },
   { name: "/mcp",         desc: "Manage MCP servers" },
   { name: "/serper",      desc: "Set Serper web search API key" },
-  { name: "/todos",       desc: "Show/hide todo panel · /todos clear" },
   { name: "/compact",     desc: "Summarize and compact conversation" },
   { name: "/status",      desc: "Session snapshot — provider, context, MCP" },
   { name: "/new",         desc: "Start a new session" },
@@ -86,16 +84,17 @@ export function filterCommands(
   const q = input.slice(1).toLowerCase()
   if (!q) return [...BUILTIN_COMMANDS, ...primary]
   const all = [...BUILTIN_COMMANDS, ...primary, ...secondary]
-  // Prefix match first, then substring — keeps `/co` from showing `/connect`
-  // below `/copy` etc.
+  // An exact command leads so Enter on /mode does not open /model.
+  const exact: SlashEntry[] = []
   const prefix: SlashEntry[] = []
   const sub: SlashEntry[] = []
   for (const e of all) {
     const name = e.name.slice(1).toLowerCase()
-    if (name.startsWith(q)) prefix.push(e)
+    if (name === q) exact.push(e)
+    else if (name.startsWith(q)) prefix.push(e)
     else if (name.includes(q)) sub.push(e)
   }
-  return [...prefix, ...sub]
+  return [...exact, ...prefix, ...sub]
 }
 
 interface Props {

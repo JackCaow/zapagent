@@ -843,13 +843,13 @@ describe("buildStatusText", () => {
     expect(text).toContain("transient context text stable at 1.2K tokens")
     expect(text).toContain("cacheable static prefix is about 88% of known prompt/context tokens")
     expect(text).toContain("static 10.0K of 11.3K")
-    expect(text).toContain("non-cacheable dynamic memory/todo context can cap observed hit rate below 90%")
+    expect(text).toContain("non-cacheable dynamic memory context can cap observed hit rate below 90%")
     expect(text).toContain("prompt static hash promptstatic")
     expect(text).toContain("dynamic hash promptdyn123")
     expect(text).toContain("inspect cacheable system prompt")
     expect(text).toContain("tool definitions")
     expect(text).toContain("tool schema hash toolhash1234")
-    expect(text).not.toContain("memory/todo context can lower total cache share")
+    expect(text).not.toContain("memory context can lower total cache share")
   })
 
   it("does not double-count a relocated runtime environment in cacheable share hints", () => {
@@ -934,7 +934,7 @@ describe("buildStatusText", () => {
     expect(text).toContain("cacheable static+tool prefix is about 82% of known prompt/context tokens")
     expect(text).toContain("static 10.0K + tools 600 of 13.0K")
     expect(text).toContain("dynamic/context 2.4K")
-    expect(text).toContain("non-cacheable dynamic memory/todo context can cap observed hit rate below 90%")
+    expect(text).toContain("non-cacheable dynamic memory context can cap observed hit rate below 90%")
   })
 
   it("does not treat stable prompt-cache tool schemas as a cache-hit cap", () => {
@@ -1684,11 +1684,10 @@ describe("buildStatusText", () => {
             },
           },
           {
-            name: "active_plan",
+            name: "repo_map",
             chars: 300,
             estimatedTokens: 80,
-            hash: "todohash1234",
-            meta: { todoCount: 3, inProgressCount: 1 },
+            hash: "maphash1234",
           },
         ],
       },
@@ -1708,9 +1707,7 @@ describe("buildStatusText", () => {
     expect(text).toContain("top_skipped [c.md min_score s3 r3]")
     expect(text).toContain("query queryabc1234 (low_signal+fallback)")
     expect(text).toContain("budget 768 tok")
-    expect(text).toContain("active_plan: 80 tok")
-    expect(text).toContain("todos 3")
-    expect(text).toContain("in_progress 1")
+    expect(text).toContain("repo_map: 80 tok")
   })
 
   it("caps long memory include lists in context segment diagnostics", () => {

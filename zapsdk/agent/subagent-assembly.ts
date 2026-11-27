@@ -49,7 +49,6 @@ export function assembleSubagentTool(input: AssemblyInput): { registry: ToolRegi
     onEvent: config.onEvent,
     budget: input.budget,
     fallbackProvider: input.fallbackProvider,
-    todoStore: config.todoStore,
     contextWindow: input.contextWindow,
     inputTokenLimit: input.inputTokenLimit,
     outputTokenCeiling: input.outputTokenCeiling,

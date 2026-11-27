@@ -120,7 +120,6 @@ tool result says checkpoints do not cover those edits.
 | `agent_message_chunk` | `content_delta{kind:text}` → `content_final` at turn end |
 | `tool_call` | `content_final{kind:tool_call}` (toolName = `kind`/`title`) + `status:tool` |
 | `tool_call_update` (completed/failed) | `content_final{kind:tool_result}`; diff content → diff metadata (`diff-meta.ts`) |
-| `plan` | a todo update, reusing the todo UI |
 | `usage_update`, `_meta.usage` | `run_step` usage |
 | `current_mode_update`, `config_option_update` | status bar / mode indicator |
 | `available_commands_update` | slash-command palette entries (`/agent:<cmd>`) |
@@ -261,5 +260,3 @@ an adapter from a real agent.
 - Should tool mode keep agent processes warm across calls by default (faster,
   but uses resources), or start one per call (simpler)? Proposal: per call,
   with a pool only when `sessionId` is reused.
-- Plan updates from remote agents: merge them into zap's todo list or keep a
-  separate panel? Proposal: separate, labelled by agent.

@@ -45,7 +45,7 @@ describe("prompt profiles", () => {
     expect(prompt.startsWith(custom)).toBe(true)
     expect(prompt).toContain("TOOL_SENTINEL")
     expect(prompt).toContain("SKILL_SENTINEL")
-    expect(prompt).toContain("# Plan state")
+    expect(prompt).not.toContain("# Plan state")
     expect(prompt).not.toContain("# Working on the task")
     expect(assemblePrompt({ cwd: "/workspace", enabledTools: new Set(), promptProfile: "concise" },
       [{ name: "extension", compute: () => "extension text" }])).toBe("extension text")

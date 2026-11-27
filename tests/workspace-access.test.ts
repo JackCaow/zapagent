@@ -21,27 +21,46 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true })
 })
 
-it("binds an approved task to the matching foreground submission and releases it on completion", () => {
-  expect(parseCommand("/work fix parser")).toEqual({ type: "open_workspace_access", value: "fix parser" })
+it("allows ordinary Auto follow-ups and only grants live child actors the active project's permissions", () => {
+  expect(parseCommand("/work")).toMatchObject({ type: "run_skill" })
   const access = new WorkspaceAccess(project)
-  access.choose("task", "a", "fix parser")
-  access.bindSubmission("a", "selected", "fix parser", "fix parser")
-  for (const [id, visible, task] of [["background", false, "fix parser"], ["queued", true, "fix parser"]] as const) {
-    access.begin("a", id, visible, task, id)
-    expect(access.mode("default", "a")).toBe("plan")
-    access.end(id)
+  for (const run of ["first", "follow-up"]) {
+    access.begin("a", run, "auto", { kind: "user" })
+    expect(access.mode("auto", "a", run)).toBe("acceptEdits")
+    expect(access.mode("plan", "a", run)).toBe("plan")
+    expect(access.mode("auto", "a", "stale")).toBe("plan")
+    expect(access.mode("auto", "different-session", run)).toBe("plan")
+    access.assertProjectCommandAllowed("auto", "a", run)
+    access.end(run)
+    expect(() => access.assertProjectCommandAllowed("auto", "a", run)).toThrow("no longer")
   }
-  access.begin("a", "work", true, "fix parser", "selected")
-  expect(access.mode("default", "a")).toBe("acceptEdits")
-  expect(access.mode("plan", "a")).toBe("plan")
-  expect(access.mode("default", "different-session")).toBe("plan")
-  access.end("old-run")
-  expect(access.mode("default", "a")).toBe("acceptEdits")
-  expect(access.mode("acceptEdits", "a", "unrelated-run")).toBe("plan")
-  access.end("work")
-  access.approvePlan("a")
-  access.begin("a", "follow-up", true, "")
-  expect(access.mode("default", "a")).toBe("plan")
+  expect(access.remembered()).toBe(false)
+})
+
+it("continues an owned Auto task once and refuses unknown, cancelled, or revoked task authority", () => {
+  const access = new WorkspaceAccess(project)
+  const signal = new AbortController()
+  const cancelled = new AbortController()
+  access.begin("a", "start", "auto", { kind: "user" })
+  access.rememberTask("known", "a", signal.signal)
+  access.rememberTask("cancelled", "a", cancelled.signal)
+  access.rememberTask("revoked", "a", signal.signal)
+  access.end("start")
+  cancelled.abort()
+  const resume = (session: string, ids: string[]) => {
+    access.begin(session, "resume", "auto", { kind: "task", ids })
+    const mode = access.mode("auto", session, "resume")
+    access.end("resume")
+    return mode
+  }
+  expect(resume("b", ["known"])).toBe("plan")
+  expect(resume("a", ["known", "missing"])).toBe("plan")
+  expect(resume("a", ["cancelled"])).toBe("plan")
+  expect(resume("a", ["known"])).toBe("acceptEdits")
+  access.consumeTasks(["known"])
+  expect(resume("a", ["known"])).toBe("plan")
+  access.choose("revoke", "a")
+  expect(resume("a", ["revoked"])).toBe("plan")
 })
 
 it("validates project identity on restart and does not follow a grant to a replacement checkout", () => {
@@ -62,10 +81,10 @@ it("validates project identity on restart and does not follow a grant to a repla
 it("revokes active and future work and asks about an edit beyond the assigned workspace", () => {
   const access = new WorkspaceAccess(project)
   access.choose("project", "a")
-  access.begin("a", "notification", false, "")
+  access.begin("a", "notification", "default", { kind: "task", ids: [] })
   expect(access.mode("default", "a")).toBe("plan")
   access.end("notification")
-  access.begin("a", "run", true, "")
+  access.begin("a", "run", "default", { kind: "user" })
   const mode = access.mode("default", "a")
   const manager = new PermissionManager(project)
   for (const [path, decision] of [["src/main.ts", "allow"], [join(root, "other"), "ask"]]) {
@@ -82,7 +101,7 @@ it("revokes active and future work and asks about an edit beyond the assigned wo
 it("stops a project-authorized task when another host forgets the project", async () => {
   const first = new WorkspaceAccess(project), second = new WorkspaceAccess(project)
   first.choose("project", "one")
-  const revoked = new Promise<void>(resolve => second.begin("two", "run", true, "task", undefined, resolve))
+  const revoked = new Promise<void>(resolve => second.begin("two", "run", "default", { kind: "user" }, resolve))
   try {
     expect(second.mode("default", "two")).toBe("acceptEdits")
     second.assertProjectCommandAllowed("default", "two", "run")

@@ -637,7 +637,7 @@ function adaptLegacyTool(tool: Tool): ToolManifest {
 - Shell OS sandbox；
 - Network policy；
 - 写入 Agent worktree/copy isolation；
-- Tool output、todo、checkpoint 绑定 workspaceId。
+- Tool output、checkpoint 绑定 workspaceId。
 
 ### Phase 5：Transaction + Merge
 

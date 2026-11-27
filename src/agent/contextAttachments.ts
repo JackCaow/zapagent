@@ -1,5 +1,4 @@
-import type { LoopAgentResult, Todo } from "../../zapsdk/index.js"
-import { renderTodoAttachment } from "../prompts/sections/todos.js"
+import type { LoopAgentResult } from "../../zapsdk/index.js"
 import { buildMdIndex, buildMdPack } from "../../zapsdk/memory/md-pack.js"
 import type { MdPackRecordDiagnostic } from "../../zapsdk/memory/md-pack.js"
 import { openMdStore } from "../../zapsdk/memory/md-store.js"
@@ -782,10 +781,6 @@ function isLowSignalContinuationFallbackQuery(query: string): boolean {
 
 export interface ContextPrefixDeps {
   attachments: PerTurnAttachments
-  /** Live todos ref — read fresh on every call so mid-run todo_write updates
-   *  reflect in the next LLM call's <active_plan>. */
-  getTodos: () => Todo[]
-  modelId: string
 }
 
 interface ContextSegment {
@@ -796,10 +791,7 @@ interface ContextSegment {
 
 const tokenCounter = new TokenCounter()
 
-function collectContextSegments(
-  deps: ContextPrefixDeps,
-  options: { includeTodos?: boolean } = {},
-): ContextSegment[] {
+function collectContextSegments(deps: ContextPrefixDeps): ContextSegment[] {
   const segments: ContextSegment[] = []
   if (deps.attachments.repoMapAttachment) {
     segments.push({
@@ -887,22 +879,7 @@ function collectContextSegments(
       },
     })
   }
-  if (options.includeTodos !== false) segments.push(...collectTodoSegments(deps))
   return segments
-}
-
-function collectTodoSegments(deps: ContextPrefixDeps): ContextSegment[] {
-  const todos = deps.getTodos()
-  const todoBlock = renderTodoAttachment(todos, { model: deps.modelId })
-  if (!todoBlock) return []
-  return [{
-    name: "active_plan",
-    text: todoBlock,
-    meta: {
-      todoCount: todos.length,
-      inProgressCount: todos.filter((t) => t.status === "in_progress").length,
-    },
-  }]
 }
 
 function memoryRecallDiagnosticsMeta(
@@ -1282,75 +1259,17 @@ function escapeContextText(value: string): string {
     .replace(/>/g, "&gt;")
 }
 
-/** Builder for the stable LoopAgent.RunOptions.contextPrefix snapshot. The
- *  loop evaluates the returned callback once at run start. */
-export function makeContextPrefixBuilder(deps: ContextPrefixDeps): () => string | undefined {
-  return () => {
-    const parts = collectContextSegments(deps).map((s) => s.text)
-    return parts.length > 0 ? parts.join("\n\n") : undefined
-  }
-}
-
-/** Diagnostics for transient context. Hashes let us spot churn without
- * logging memory contents verbatim. */
-export function makeContextDiagnosticsBuilder(deps: ContextPrefixDeps): () => ContextDiagnostics | undefined {
-  return () => {
-    const segments = collectContextSegments(deps)
-    if (segments.length === 0) return undefined
-    const fullText = segments.map((s) => s.text).join("\n\n")
-    return buildDiagnosticsFromSegments(segments, fullText)
-  }
-}
-
-export function makeContextBuilders(deps: ContextPrefixDeps): {
+/** Snapshot the static attachments once for both the provider request and diagnostics. */
+export function makeContextBuilders({ attachments }: ContextPrefixDeps): {
   contextPrefix: () => string | undefined
-  contextDelta: () => string | undefined
   contextDiagnostics: () => ContextDiagnostics | undefined
 } {
-  let baselineTodoText: string | undefined
-  let stableSegments: ContextSegment[] | undefined
-  let lastSnapshot: { text: string | undefined; diagnostics: ContextDiagnostics | undefined } | undefined
-  const snapshot = (segments: ContextSegment[]) => {
-    if (segments.length === 0) {
-      return { text: undefined, diagnostics: undefined }
-    }
-    const text = segments.map((s) => s.text).join("\n\n")
-    return {
-      text,
-      diagnostics: buildDiagnosticsFromSegments(segments, text),
-    }
-  }
+  const segments = collectContextSegments({ attachments })
+  const text = segments.map(segment => segment.text).join("\n\n") || undefined
+  const diagnostics = text ? buildDiagnosticsFromSegments(segments, text) : undefined
   return {
-    contextPrefix: () => {
-      stableSegments = collectContextSegments(deps)
-      baselineTodoText = stableSegments.find((segment) => segment.name === "active_plan")?.text
-      lastSnapshot = snapshot(stableSegments)
-      return lastSnapshot.text
-    },
-    contextDelta: () => {
-      const todoSegments = collectTodoSegments(deps)
-      const currentTodoText = todoSegments[0]?.text
-      const clearedTodoSegment: ContextSegment = {
-        name: "active_plan_delta",
-        text: '<active_plan update="cleared">\nNo active todos remain.\n</active_plan>',
-        meta: { todoCount: 0, inProgressCount: 0, cleared: true },
-      }
-      const deltaSegments = currentTodoText === baselineTodoText
-        ? []
-        : todoSegments.length > 0
-          ? todoSegments
-          : baselineTodoText
-            ? [clearedTodoSegment]
-            : []
-      lastSnapshot = snapshot([...(stableSegments ?? []), ...deltaSegments])
-      return deltaSegments.map((segment) => segment.text).join("\n\n") || undefined
-    },
-    contextDiagnostics: () => {
-      if (!lastSnapshot) lastSnapshot = snapshot(collectContextSegments(deps))
-      const diagnostics = lastSnapshot.diagnostics
-      lastSnapshot = undefined
-      return diagnostics
-    },
+    contextPrefix: () => text,
+    contextDiagnostics: () => diagnostics,
   }
 }
 
@@ -1369,26 +1288,18 @@ function buildDiagnosticsFromSegments(segments: ContextSegment[], fullText: stri
   }
 }
 
-/** Review observed work against the original request before natural finish.
- *  LoopAgent bounds this to one reminder and permits an honest incomplete
- *  response. The review costs a model call, so it runs only when there is
- *  something to reconcile: an unfinished todo or a failed tool call, even if
- *  the todo list was cleared afterwards. */
-export function makeTurnEndGuard(getTodos: () => Todo[]): (result?: Pick<LoopAgentResult, "toolResults">) => string | null {
-  return (result) => {
-    const active = getTodos().find((t) => t.status === "in_progress")
-    if (!active && !result?.toolResults.some((r) => !r.success)) return null
-    return (
-      "<system-reminder>\n" +
-      (active ? `Todo "${escapeContextText(active.content)}" remains in_progress.\n` : "") +
+/** Reconcile failed tool results before finishing. LoopAgent bounds this to one review. */
+export function reviewFailedTools(result?: Pick<LoopAgentResult, "toolResults">): string | null {
+  if (!result?.toolResults.some(result => !result.success)) return null
+  return (
+    "<system-reminder>\n" +
       "Review the original user request and latest authorized steering against the actual " +
       "observations from this run. Do not substitute your own plan or a weaker success criterion. " +
       "If evidence contradicts a requirement and a useful authorized check or repair remains " +
       "possible within the budget, take that step. Otherwise report verified results and " +
-      "unresolved limitations honestly. Todo completion and command exit zero do not establish " +
-      "functional correctness. You may finish with an honest incomplete or unverified result; " +
+      "unresolved limitations honestly. A successful tool call does not establish functional " +
+      "correctness. You may finish with an honest incomplete or unverified result; " +
       "do not invent checks or repeat an external side effect just to obtain evidence.\n" +
       "</system-reminder>"
-    )
-  }
+  )
 }

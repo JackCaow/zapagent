@@ -71,6 +71,8 @@ export function startGoalBackgroundRunner(goal: GoalRecord): void {
 
 /** The same command implementation is used by the TUI and the CLI. */
 export function goalCommand(args: string[], cwd: string, currentMode: import("./config.js").PermissionMode = "default", platform: NodeJS.Platform = process.platform, sessionId?: string, onForeground?: (goal: GoalRecord) => void, enforceSessionMode = false, onSelected?: (goal: GoalRecord) => void): string {
+  // Auto is a foreground conversation choice. Goal has its own durable policy.
+  if (currentMode === "auto") currentMode = "default"
   const action = args[0] ?? ""
   if (!action || action === "help") return [
     "Usage: /goal <objective> [--background] [--artifact] [--strict] [--accept-edits | --permission-mode=MODE] [--check=bun|npm|pytest|go] [--install=npm] [--tokens=N] [--minutes=N] [--model-calls=N] [--tool-calls=N] | status [id] | list | pause [id] | resume [id] | cancel [id] | budget extend [id] --tokens=N --minutes=N",
@@ -164,7 +166,7 @@ export function goalCommand(args: string[], cwd: string, currentMode: import("./
       launch(store.prepareResume(stopped.id))
       return `Goal ${goal.id} resumed; budget and task state retained.`
     }
-    const permissionMode = args.includes("--accept-edits") ? "acceptEdits" : modeArgs.length ? modeArgs[0]!.slice("--permission-mode=".length) as import("./config.js").PermissionMode : currentMode
+    const permissionMode = args.includes("--accept-edits") ? "acceptEdits" : modeArgs.length ? modeArgs[0]!.slice("--permission-mode=".length) as GoalRecord["permissionMode"] : currentMode
     const strict = args.includes("--strict")
     const deliveryPolicy = args.includes("--artifact") ? "artifact" : "workspace"
     const objective = args.filter(arg => arg !== "--background" && arg !== "--strict" && arg !== "--artifact" && arg !== "--accept-edits" && !arg.startsWith("--permission-mode=") && !arg.startsWith("--check=") && !arg.startsWith("--install=") && !limitArgs.includes(arg)).join(" ").trim()

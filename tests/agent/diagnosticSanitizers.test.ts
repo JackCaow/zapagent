@@ -120,8 +120,6 @@ describe("diagnostic sanitizers", () => {
       ],
       queryHash: "x".repeat(160),
       budgetTokens: 2048.7,
-      todoCount: 0,
-      inProgressCount: 0,
     })
   })
 

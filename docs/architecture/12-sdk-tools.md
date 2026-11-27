@@ -165,11 +165,10 @@ union / literal / record`。够覆盖现有内置工具；遇到未支持类型�
 | `monitor` | 配合 `taskStore`：列 / 杀 / 取输出。Task lifecycle 见 `zapsdk/tasks`。CLI 不注册（与 `bash run_in_background` 重复） |
 | `cron_create / cron_delete / cron_list` | `croner` 封装；调用方持有 `cronTools()` handle，可注入 `onFire` 把命中投递到对话。CLI 不注册（未接入 `onFire`，到点不会触发对话） |
 
-### Plan / Todo / Skill / Memory
+### Plan / Skill / Memory
 
 | 工具 | 行为 |
 |---|---|
-| `todo_write` | 通过注入的 `TodoStore` 读/写。`getKey()` 决定主 vs subagent key，主 agent 用 `"main"`，subagent 用自己的 `sa_xxx` |
 | `enter_plan_mode` / `exit_plan_mode` | 切换 PermissionMode 到 `plan`，所有写工具被拦截；exit 时通过 callback 让宿主决定是否 commit。默认只注册 `exit_plan_mode`：进入计划模式是用户操作（`/mode plan`），需要模型主动进入的宿主显式注册 `enterPlanModeTool()` |
 | `skill` | 接收 skill name，把对应 `SkillDefinition` body 注入 conversation 作为系统指令；见 `zapsdk/skills` |
 | `memory_save` | 调用宿主注入的 `mdStore` 写一条 .md + 更新 MEMORY.md |
@@ -216,8 +215,7 @@ parent 时 path 自然形成 `["sa_outer","sa_inner"]` 的树。
 
 ```ts
 const registry = createBuiltinRegistry({
-  // 各种 options：allowedPaths、defaultCwd、todoStore、planCallbacks
-  todoWrite: { store: todoStore },
+  // 各种 options：allowedPaths、defaultCwd、planCallbacks
   planMode:   { callbacks: planCallbacks },
   skill:      { skills: skillsRef.current },
   cronHandle, monitorHandle,

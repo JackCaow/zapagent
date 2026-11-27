@@ -139,7 +139,7 @@ RuntimeStateStore 使用 fail-closed 策略，不复用这里的 best-effort 语
 
 | Store | 作用 | 兼容策略 |
 |---|---|---|
-| `src/session.ts` JSONL | 用户可恢复 transcript、todo、usage、snapshot、rewind | 格式不变，旧 session 继续读取 |
+| `src/session.ts` JSONL | 用户可恢复 transcript、usage、snapshot、rewind | 格式不变，旧 session 继续读取 |
 | Runtime EventStore | Runtime 审计、未来 host replay 的事实源 | 新目录独立写入 |
 
 当前 TUI 仍从 `AgentEvent` 直接投影 UI。这是迁移兼容层，不是最终状态。HostProtocol

@@ -15,7 +15,6 @@ import {
   ToolExecutor,
   createSerperSearch,
   type ApprovalCallback,
-  type TodoStore,
   type PlanModeCallbacks,
   type AskUserCallbacks,
   DefaultToolPolicyEngine,
@@ -47,7 +46,6 @@ function safeHost(url: string): string {
 export function buildAgentObjects(
   config: AppConfig,
   onApproval?: ApprovalCallback,
-  todoStore?: TodoStore,
   planCallbacks?: PlanModeCallbacks,
   checkpoint?: CheckpointManager | null,
   skills?: Map<string, SkillDefinition>,
@@ -185,10 +183,6 @@ export function buildAgentObjects(
       sandboxTemporaryDirectory: environment.facts?.sandboxTemporaryDirectory,
     },
     webSearch: config.serperKey ? { searchFn: createSerperSearch(config.serperKey) } : undefined,
-    // todo_write is registered only when a store is supplied — subagent
-    // registries (constructed without this option) don't get the tool, which
-    // matches CCB's "todos are main-agent-only" choice.
-    todoWrite: todoStore ? { store: todoStore } : undefined,
     // Plan mode tools: main agent only. Blocks write/edit/bash while active
     // (enforced by the existing permissionMode=plan check in onApproval).
     planMode: planCallbacks ? { callbacks: planCallbacks } : undefined,

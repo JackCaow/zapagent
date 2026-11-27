@@ -8,7 +8,6 @@ import {
   subagentTool,
   type AgentEventHandler,
   type AgentRuntime,
-  type TodoStore,
 } from "../../zapsdk/index.js"
 import { AgentLogger } from "../../zapsdk/debug/agent-logger.js"
 import type { CheckpointManager } from "../../zapsdk/checkpoint/index.js"
@@ -43,7 +42,6 @@ export interface BuildAgentRuntimeDeps extends Pick<AgentObjects, "provider" | "
   currentSessionId: string
   checkpoint: CheckpointManager | null
   turnStartLogPosition: () => { journalLogIndex: number; uiLogIndex: number }
-  todoStore: TodoStore
   subAgentEventHandler: AgentEventHandler
   onUpdateConfig?: (next: AppConfig) => void
 }
@@ -114,7 +112,6 @@ export function buildAgentRuntime(deps: BuildAgentRuntimeDeps): AgentRuntime {
       inheritedInstructions: inherited.instructions,
       publicPromptSections: inherited.publicPromptSections,
       onEvent: deps.subAgentEventHandler,
-      todoStore: deps.todoStore,
       createRegistryForCwd: deps.createRegistryForCwd,
       requireWriteIsolation: true,
     },

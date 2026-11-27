@@ -79,7 +79,7 @@ describe("actual prompt capabilities", () => {
           [{ name: "example", description: "Example guidance" }])
         const registry = new ToolRegistry()
         const agent = new LoopAgent({ provider: { async call() { throw new Error("no I/O expected") } }, registry,
-          executor: new ToolExecutor(registry, {}), systemPrompt: prompt, promptProfile, taskDecomposition: "required" })
+          executor: new ToolExecutor(registry, {}), systemPrompt: prompt, promptProfile })
         const effective = agent.effectiveSystemPrompt()!
         for (const name of ["todo_write", "task_status", "search_files", "glob_files", "web_search", "http_fetch", "## agent"]) expect(effective).not.toContain(name)
         expect(effective).not.toContain("via the `skill` tool")

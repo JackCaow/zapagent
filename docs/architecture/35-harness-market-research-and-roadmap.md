@@ -9,7 +9,7 @@
 | 工作包 | 状态 | 已验证范围 |
 | --- | --- | --- |
 | P0.1：`CompletionContractV2`、`EvidenceLedgerV2`、Runtime completion projection | 已完成 | artifact/write fingerprint 自动取证；命令/approval/merge 的 host evidence 接口；`modelClaimedSuccess`、`evidenceState`、`infrastructureOutcome` 分离；旧 `requireSuccessfulToolCall` 兼容。 |
-| P0.2：`HarnessPolicyV2` 与自适应预算决策 | 已完成 | V1 `taskDecomposition`/`reserveSteps` 经 adapter 保持兼容；V2 默认以 model turn、wall time、tool call、fresh input 的通用资源观察形成 transient `BudgetDecision`，并以稳定 reason code 记录。固定步数提示仅为 V1 direct caller 保留。 |
+| P0.2：`HarnessPolicyV2` 与自适应预算决策 | 已完成 | V1 `reserveSteps` 经 adapter 保持兼容；V2 默认以 model turn、wall time、tool call、fresh input 的通用资源观察形成 transient `BudgetDecision`，并以稳定 reason code 记录。固定步数提示仅为 V1 direct caller 保留。 |
 | P0.3：Broker/StateStore 自动取证与事件回放 | 待实施 | command、approval、workspace、merge 的运行时自动汇集。 |
 | P0.4：Provider capability probe | 待实施 | tool/reasoning/schema/cancel/cache 的可执行兼容性 fixture。 |
 | P1–P3：Controller、任务图、App Server | 待实施 | 依赖 P0 稳定的事件与完成语义。 |
@@ -139,7 +139,6 @@ interface HarnessPolicyV2 {
   autonomy: "interactive" | "bounded" | "supervised";
   task: {
     classHint?: "question" | "investigation" | "change" | "migration";
-    requirePlanAbove?: "risk" | "complexity";
     completion: CompletionContract;
   };
   budgets: {
@@ -257,7 +256,7 @@ DeepSeek 等模型只需实现这个标准 adapter，不需要为某个模型在
 
 | 交付 | 最小变更 | 验收 |
 | --- | --- | --- |
-| Controller extraction | 将 Progress/Budget/Completion 从 loop 提取为纯输入输出模块，并保留桥接层。 | 单元测试可重放 event fixture；不因 todo 格式错误阻断工具调用。 |
+| Controller extraction | 将 Progress/Budget/Completion 从 loop 提取为纯输入输出模块，并保留桥接层。 | 单元测试可重放 event fixture。 |
 | `HookBus` | 以 before/after tool、approval、checkpoint、completion、recovery 为稳定事件。 | 验证/审计/插件无需修改 LoopAgent；hook 无法提升 capability。 |
 | Broker observability | 统一 tool/process/network/files 的预算和过程状态。 | 能解释 timeout、后台任务、输出截断、网络拒绝；限制由 Broker 实际执行。 |
 | write transaction | 写前 checkpoint，写后 diff/hash/测试记录，失败可 rollback 或明确标为 partial。 | destructive operation 的原始版本可定位；未验证写入无法被标为 verified。 |
@@ -320,7 +319,7 @@ DeepSeek 等模型只需实现这个标准 adapter，不需要为某个模型在
 - provider cache accounting 覆盖率 ≥ 99%；
 - 同时报告任务成功率、证据完整率、false-success 率、平均/分位 steps、tool calls、fresh input tokens 与成本。
 
-缓存命中率不单独构成成功：将不变的 RepoMap、长期 memory、稳定 system contract 固定在可缓存前缀；把 todo/runtime delta、工具输出和即时状态留在变化尾部；并对重复 read/search 做由事实驱动的抑制，而非删掉必要诊断。
+缓存命中率不单独构成成功：将不变的 RepoMap、长期 memory、稳定 system contract 固定在可缓存前缀；把 runtime delta、工具输出和即时状态留在变化尾部；并对重复 read/search 做由事实驱动的抑制，而非删掉必要诊断。
 
 ### 6.3 公平实验顺序
 

@@ -8,7 +8,7 @@ import { normalizeAssistantText } from "./output-text.js";
 import { earliestDeadlineAt } from "../execution/deadline.js";
 import { toolOutputTool } from "../builtin-tools/tool-output.js";
 import { assembleSubagentTool } from "./subagent-assembly.js";
-import { type TaskDecompositionMode, primaryArgSig, stepSignature, createRunToolExecutionHooks, duplicateQueryKey, isDuplicateQuery, isRepeatFriendlyStep, isLiveTaskWait, progressPollSignature } from "./tool-execution-guards.js";
+import { primaryArgSig, stepSignature, createRunToolExecutionHooks, duplicateQueryKey, isDuplicateQuery, isRepeatFriendlyStep, isLiveTaskWait, progressPollSignature } from "./tool-execution-guards.js";
 import type { LLMProvider, LLMCallOptions } from "../core/llm.js";
 import { hasMeaningfulOutput } from "../core/provider-request.js";
 import { assertProviderRequestAllowed } from "../core/provider-deadline.js";
@@ -46,7 +46,6 @@ import type { CompletionAssessment } from "../harness/completion.js";
 import type { HarnessBudgetConstraints } from "../harness/policy.js";
 import { computeCacheUsageStats } from "./cache-metrics.js";
 import type { ConversationManager } from "../memory/conversation.js";
-import type { TodoStore } from "../builtin-tools/todo.js";
 import type { ResultCompressor } from "../context/result-compressor.js";
 import { HistoricalImageRetention } from "../context/historical-images.js";
 import { ReactiveCompact, type RecoveryCallOptions } from "../context/reactive-compact.js";
@@ -111,20 +110,19 @@ export interface RunOptions {
   hasSteering?: () => boolean;
   takeSteering?: () => SteeringInput | undefined;
   onSteeringAccepted?: (input: SteeringInput) => void;
-  /** Stable run context (RepoMap, recalled memory, initial todo/runtime
+  /** Stable run context (RepoMap, recalled memory, runtime
    * snapshot). A function is evaluated exactly once per run. The resulting
    * transient message is fixed immediately before the current user turn so
    * later tool iterations can reuse the provider's prompt-prefix cache. */
   contextPrefix?: string | (() => string | null | undefined);
   /** Small live delta for state that can genuinely change during the run
-   * (currently the active todo plan). Re-evaluated before each LLM call and
-   * appended at the tail only when it differs from the run-start snapshot. */
+   * Re-evaluated before each LLM call and appended at the tail only when it differs from the run-start snapshot. */
   contextDelta?: () => string | null | undefined;
   /**
    * Optional diagnostics for the stable context and current live delta. Hosts should return
    * segment-level token/hash data for the same data sources used by
    * contextPrefix so cache investigations can distinguish memory churn from
-   * todo/plan churn without persisting the context itself.
+   * context churn without persisting the context itself.
    */
   contextDiagnostics?: () => ContextDiagnostics | null | undefined;
   /**
@@ -143,9 +141,7 @@ export interface RunOptions {
    * are abnormal terminations where the guard's assumption (model thinks
    * it's done) doesn't hold.
    *
-   * Current use case: detect dangling `in_progress` todos and nudge the
-   * model to call todo_write one more time before the turn ends. Runtime also
-   * uses this hook for explicit completion evidence. Async hooks receive a
+   * Runtime also uses this hook for explicit completion evidence. Async hooks receive a
    * deadline/cancellation signal and the current candidate result.
    */
   turnEndGuard?: (result: LoopAgentResult, signal?: AbortSignal) => string | null | undefined | Promise<string | null | undefined>;
@@ -205,10 +201,6 @@ export interface SubagentConfig {
   maxDepth?: number;
   /** Event listener for subagent events (tool_call, tool_result, etc.) */
   onEvent?: AgentEventHandler;
-  /** Shared todo store (main + subagent keys). When set, general-type
-   *  subagents get their own keyed list via this store, preventing them
-   *  from clobbering the main agent's list. */
-  todoStore?: TodoStore;
   workspaceManager?: WorkspaceManager;
   mergeCoordinator?: MergeCoordinator;
   createRegistryForCwd?: (cwd: string) => ToolRegistry;
@@ -246,8 +238,6 @@ export interface SubagentFactoryArgs {
   budget?: AgentBudget;
   /** Fallback provider to pass through to subagents. */
   fallbackProvider?: LLMProvider;
-  /** Shared todo store; subagents re-register todo_write with their own key. */
-  todoStore?: TodoStore;
   /** Budget planning params inherited from parent LoopAgent. */
   contextWindow?: number;
   inputTokenLimit?: number;
@@ -292,14 +282,6 @@ export interface LoopAgentOptions {
    */
   adaptiveBudget?: HarnessBudgetConstraints;
   reserveSteps?: number;
-  /**
-   * How strongly the loop requires an explicit todo-based task decomposition
-   * before executing tools. "auto" lets the model choose a useful plan without
-   * blocking simple tasks; "required" permits only one read-only baseline
-   * action before an actionable plan is mandatory. "off" disables the gate.
-   * The gate is inert when todo_write is not registered.
-   */
-  taskDecomposition?: "off" | "auto" | "required";
   maxToolRetries?: number;
   conversation?: ConversationManager;
   resultCompressor?: ResultCompressor;
@@ -490,7 +472,6 @@ export class LoopAgent {
   private maxTokens: number;
   private adaptiveBudget?: HarnessBudgetConstraints;
   private reserveSteps: number;
-  private taskDecomposition: TaskDecompositionMode;
   private readonly promptProfile: PromptProfile;
   private readonly explicitPromptProfile: boolean;
   private maxToolRetries: number;
@@ -581,7 +562,6 @@ export class LoopAgent {
     );
     this.maxTokens = nonNegativeIntegerOrDefault(options.maxTokens, Infinity);
     this.reserveSteps = nonNegativeIntegerOrDefault(options.reserveSteps, 2);
-    this.taskDecomposition = options.taskDecomposition ?? "auto";
     this.maxToolRetries = options.maxToolRetries ?? 2;
     this.budgetTokenCounter = new TokenCounter(() => this.provider.getImageTokenContext?.() ?? {});
     this.conversation = options.conversation;
@@ -780,13 +760,13 @@ export class LoopAgent {
     const errorTracker: ErrorTracker = new Map();
     const seenFiles: SeenFiles = new Map();
     const state: LoopState = createInitialLoopState();
-    const toolExecutionHooks = createRunToolExecutionHooks(this.executor, (name, args) => {
+    const toolExecutionHooks = createRunToolExecutionHooks((name, args) => {
       this.emitter.emit({
         type: "observation",
         kind: "duplicate_tool_suppressed",
         detail: { tool: name, target: primaryArgSig(name, args) },
       });
-    }, this.taskDecomposition, this.registry.has("todo_write"));
+    });
     const beforeTool = toolExecutionHooks.beforeExecute;
     toolExecutionHooks.beforeExecute = (name, args) => {
       const suppressed = beforeTool?.(name, args);
@@ -890,7 +870,7 @@ export class LoopAgent {
     // Only the small, genuinely-live contextDelta remains at the tail.
     let latestRuntimeTimeBudget: RuntimeTimeBudget | undefined;
     // Reuse successful reductions only for identical host-generated content.
-    // A changed live todo/memory delta must always be evaluated afresh.
+    // A changed live context delta must always be evaluated afresh.
     const transientReplacements = new Map<string, Message>();
     const transientView = (message: Message): Message => transientReplacements.get(contextFingerprint([message])) ?? message;
     this.retainTransientRecovery = (before, after) => {
@@ -1522,9 +1502,8 @@ export class LoopAgent {
           // user sees a synthesized summary rather than a red error toast.
           //
           // Steps composed entirely of repeat-friendly tools (edit_file,
-          // multi_edit, todo_write) reset the tracker — those tools are
-          // progressive by design (iterating edits on one file or syncing
-          // the todo list).
+          // multi_edit) reset the tracker — those tools are
+          // designed for successive edits to the same file.
           const poll = progressPollSignature(toolCalls, results);
           if (isRepeatFriendlyStep(toolCalls) || isLiveTaskWait(toolCalls, results)) {
             lastStepSignature = null;
@@ -1682,16 +1661,14 @@ export class LoopAgent {
   protocolPrompt(): string {
     const toolNames = this.registry.definitions().map((t) => t.name).join(", ");
     if (this.promptProfile === "concise") {
-      return conciseAgentProtocol(toolNames, this.maxSteps, this.taskDecomposition === "required" && this.registry.has("todo_write"));
+      return conciseAgentProtocol(toolNames, this.maxSteps);
     }
     return (
       `[AGENT PROTOCOL]\n` +
       `Tools: ${toolNames}\n` +
       `Budget: ${this.maxSteps} steps\n` +
       `Rules:\n` +
-      (this.registry.has("todo_write")
-        ? `- Think before acting. For a non-trivial tool task, decompose it with todo_write before implementation: 3-5 ordered, observable items; one in_progress; each has acceptanceCriteria; include an early minimal end-to-end probe and a contingency for a slow/blocked dependency; final item is a concrete verification.\n`
-        : `- Think before acting. For non-trivial work, choose a useful plan and verify the result using only the exposed tools.\n`) +
+      `- Think before acting. For non-trivial work, choose a useful plan and verify the result using only the exposed tools.\n` +
       `- Search/scan first, then targeted reads. Don't read every file.\n` +
       `- For recovery or forensics tasks, preserve the original input before running a parser, database client, or repair command that could mutate it.\n` +
       `- Reuse prior read/search results while the workspace is unchanged; do not repeat them through bash/grep/sed.\n` +

@@ -28,10 +28,10 @@ interface DialogProps {
 
 // ── Mode picker ──────────────────────────────────────────────────────────
 const MODES: { id: PermissionMode; label: string; meta: string }[] = [
-  { id: "default",           label: "default",            meta: "use access granted for this task or project" },
-  { id: "acceptEdits",       label: "acceptEdits",        meta: "approve file edits automatically" },
-  { id: "plan",              label: "plan",               meta: "read-only research" },
-  { id: "bypassPermissions", label: "bypassPermissions",  meta: "approve ordinary requests automatically" },
+  { id: "auto",              label: "Auto",               meta: "work in this project, ask when needed" },
+  { id: "default",           label: "Require project access", meta: "use access granted for this task or project" },
+  { id: "acceptEdits",       label: "Allow edits",        meta: "approve project file edits automatically" },
+  { id: "bypassPermissions", label: "Skip routine approvals", meta: "approve ordinary requests automatically" },
 ]
 
 export function ModeDialog({ config, onCommit, onCancel }: DialogProps) {
@@ -45,12 +45,11 @@ export function WorkspaceAccessDialog({ cwd, remembered, onChoose, onCancel }: {
   cwd: string; remembered: boolean; onChoose: (choice: WorkspaceChoice) => void; onCancel: () => void
 }) {
   const options: PickerOption[] = [
-    { id: "task", label: "Start implementation", meta: "edit files and run project commands for this task" },
     { id: "project", label: "Always allow work in this project" },
-    { id: "analyze", label: "Only analyze", meta: "keep project files unchanged" },
+    { id: "analyze", label: "Keep this session read-only", meta: "keep project files unchanged" },
   ]
   if (remembered) options.push({ id: "revoke", label: "Forget project access and return to analysis" })
-  return <PickerDialog title={`Work in ${cwd}?`} options={options} onCancel={onCancel}
+  return <PickerDialog title={`Project access · ${cwd}`} options={options} onCancel={onCancel}
     onSelect={id => onChoose(id as WorkspaceChoice)} />
 }
 

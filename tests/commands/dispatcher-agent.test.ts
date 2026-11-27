@@ -7,8 +7,8 @@ async function run(input: string, activeAgent?: string) {
   const logs: string[] = []
   const turns: unknown[][] = []
   await dispatchSlashCommand(input, {
-    exit: () => {}, bumpTranscript: () => {}, setLogs: () => {}, setTodos: () => {},
-    todosRef: { current: [] }, subagentTodosRef: { current: new Map() }, checkpointRef: { current: {} as any },
+    exit: () => {}, bumpTranscript: () => {}, setLogs: () => {},
+    checkpointRef: { current: {} as any },
     turnStartLogIndexRef: { current: 0 }, setDialog: () => {}, addLog: (_type, text) => logs.push(text),
     configRef, updateConfig: next => { configRef.current = next }, addToast: () => {}, compactLogs: () => {},
     agentRef: { current: { provider: {} } as any }, skillsRef: { current: new Map() },

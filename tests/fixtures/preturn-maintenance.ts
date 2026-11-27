@@ -43,7 +43,7 @@ const options = { currentSessionId: "fixture", config, conversation,
   } },
   autoMemory: { buildInstructions: async () => "" }, agentLogger: {},
   addLog: (...args: unknown[]) => logs.push(args), replaceLog() {}, peekNextLogId: () => 0,
-  compactLogs() { compactCompleted = true }, checkpoint: null, todoStore: {},
+  compactLogs() { compactCompleted = true }, checkpoint: null,
   turnStartLogIndexRef: { current: 0 }, turnStartUiLogIndexRef: { current: 0 },
 }
 if (process.env.COMPACT_MODE === "manual") {

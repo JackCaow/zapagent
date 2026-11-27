@@ -80,14 +80,13 @@ interface PromptContext {
 变化少（项目维护者偶尔改），所以留在 cacheable prefix；如果文件内容变化，
 新的 bytes 会自然形成新的 provider cache entry。`env` 每天 date rollover、
 cwd/model/branch 都可能变，因此放在 boundary 后面。`LoopAgent.run()` 会把它包装
-为 `runtime_environment` transient context segment，和 memory/todo 一起放在
+为 `runtime_environment` transient context segment，和记忆附件一起放在
 当前请求末尾；完整 template 仍保留给 devtools 和 prompt hash 诊断。
 
-### Memory + Todo 不在这里
+### 运行环境与记忆附件
 
-**runtime environment**、**memory index** 和 **todo reminder** 故意不留在
-provider 的稳定 system prefix，而是
-通过 LoopAgent 的 `contextPrefix` 每 turn 注入到最后一条 user-role 消
+**runtime environment** 和 **memory index** 放在稳定系统前缀之外。
+每轮通过 LoopAgent 的 `contextPrefix` 每 turn 注入到最后一条 user-role 消
 息——这样它们：
 - 不污染 cacheable prefix（每 turn 变化）
 - 注意力位置在 tail，模型更容易看到（system prompt 头部经过几十轮 tool 后 attention 衰减）
@@ -99,11 +98,7 @@ attachments = buildPerTurnAttachments(autoMemory, {
   memoryQuery: buildMemoryQueryForRun(task, recentUserMessages),
   contextWindow,
 })
-contextPrefix = makeContextBuilders({
-  attachments,
-  getTodos,
-  modelId,
-})
+{ contextPrefix, contextDiagnostics } = makeContextBuilders({ attachments })
 ```
 
 `memoryQuery` 会先剥离 submit 阶段生成的 `<file_content>` / `<mcp_resource>`
@@ -213,9 +208,7 @@ delete(filename): boolean
 
 `useAgentRunner` / `runHeadless` 在 `buildPerTurnAttachments` 阶段调一次
 （per run，不 per call），作为 `contextPrefix` 的 index + working pack。
-`makeContextBuilders` 会在每次 provider call 前重新拼 context，这样 todo
-状态可以更新；memory attachment 本身保持 run 内稳定，减少 transient context
-hash churn。
+`makeContextBuilders` 为每轮生成一份附件快照，后续模型调用复用相同内容和诊断。
 
 全局个人记忆以独立 segment 注入：`global_memory_index` 和
 `global_memory_working_pack`。它们只读取全局 `user` / `feedback` 记录，

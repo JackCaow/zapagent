@@ -85,9 +85,8 @@ model requests, available tools and account usage.
 * **Codex.** Install the official CLI and the ACP adapter with
   `npm install -g @openai/codex @agentclientprotocol/codex-acp`. Run `codex login`
   or use Zap's Codex login picker, then choose a model with `/model`. The adapter
-  starts Codex app-server locally. Zap requests its read-only sandbox in default
-  and plan modes. With `/mode acceptEdits` or bypass mode, Codex can write in its
-  workspace. An escalation request goes through Zap's approval gate.
+  starts Codex app-server locally. In Auto, Codex can write within its workspace
+  during an interactive task. An escalation request goes through Zap's approval gate.
   Existing Zap Codex connections automatically use this route. If only Zap held
   a login before upgrading, sign in once with the official CLI. Zap ignores its
   old credential file. `zap auth status codex` checks the native login.
@@ -173,8 +172,7 @@ also skip CI, headless output and ACP; explicit `zap update` still checks.
 | `/model` | Search and switch models across all configured connections |
 | `/effort` | Set reasoning effort (`off`, `cycle`, or a provider value) |
 | `/agent` | List conversation agents (`agy`, `codex`, `claude-code`); `/agent <id>` sends messages to that agent, `/agent zap` switches back |
-| `/work` | Start implementing the plan, give a task with `/work <task>`, or manage project access |
-| `/mode` | Set permission mode (`default`, `acceptEdits`, `plan`, `bypass`) or a preset: `strict`, `balanced`, `autonomous` |
+| `/mode` | Choose how Zap works. Auto is the default. |
 | `/permissions` | Manage active permission rules |
 | `/sessions` | Browse saved sessions |
 | `/queue` | Manage individual follow-ups: edit, delete, reorder, retry, Steer, or toggle default queuing (also Ctrl+Q) |
@@ -182,7 +180,6 @@ also skip CI, headless output and ACP; explicit `zap update` still checks.
 | `/mem` | Browse memory (`list`, `show`, `forget`) |
 | `/mcp` | Manage MCP servers |
 | `/serper` | Set Serper web search API key |
-| `/todos` | Show/hide the todo panel or clear todos |
 | `/compact` | Summarize and compact conversation history |
 | `/status` | Show session snapshot: provider, context, cache, MCP |
 | `/new` | Start a new session |
@@ -196,14 +193,18 @@ also skip CI, headless output and ACP; explicit `zap update` still checks.
 | `/supertask` | Start, resume, abort, status, or watch a long-horizon task |
 | `/exit` | Exit zapAgent (`/quit` and `/q` also work) |
 
-An ordinary interactive conversation starts in analysis for a new directory.
-Use `/work` after a plan or `/work <task>` to start coding. Choose **Start
-implementation** for this root task (including its child agents), or **Always
-allow work in this project** to cover later interactive tasks. The project
-decision lives in Zap's user data and is bound to the directory's identity.
-**Only analyze** limits the current conversation. **Forget project access**
-revokes the saved decision. An explicit advanced `/mode` takes precedence.
-Headless runs and Goals use their existing explicit policies.
+Describe what you want to build or change. In Auto, Zap can edit files and run
+confined project checks as part of your task. Zap asks when an operation requires
+extra access. Say “review this first without editing” to ask the agent for
+analysis only.
+
+In Auto, the agent organizes its work and reports progress through actual
+changes and checks. Goals show execution and independent verification status.
+
+Open `/permissions` and press **p** to manage project access, including enabling
+read-only mode for the session or forgetting a saved project decision. Explicit
+project decisions live in Zap's user data and are bound to the directory's
+identity. Headless runs and Goals use their existing explicit policies.
 
 Claude Code and `/agent codex` show the last cached model on startup, then
 refresh it from the installed CLI in the background. Once a conversation starts,

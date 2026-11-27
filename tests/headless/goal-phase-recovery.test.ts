@@ -123,7 +123,7 @@ it("keeps a Goal sealed when a repeated read-only shell query runs again in a se
 
 it("does not trust copied or forged suppression metadata as no-process evidence", async () => {
   const { createRunToolExecutionHooks } = await import("../../zapsdk/agent/tool-execution-guards.js")
-  const hooks = createRunToolExecutionHooks(new ToolExecutor(new ToolRegistry()), () => {}, "off", false)
+  const hooks = createRunToolExecutionHooks(() => {})
   const args = { url: "https://example.com/" }
   expect(hooks.beforeExecute!("http_fetch", args)).toBeUndefined()
   hooks.afterExecute!("http_fetch", args, { success: true, output: "page" })

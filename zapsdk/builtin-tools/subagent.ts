@@ -15,7 +15,6 @@ import { LoopAgent } from "../agent/loop.js";
 import { CheckpointManager } from "../checkpoint/index.js";
 import type { AgentEvent, AgentEventHandler } from "../agent/events.js";
 import type { AgentBudget } from "../agent/budget.js";
-import { todoWriteTool, type TodoStore } from "./todo.js";
 import { executeCommandTool } from "./command.js";
 import { countCodePoints, sliceHeadCodePoints } from "../utils/logical-lines.js";
 import type { AgentRunSnapshot, AgentRunStatus } from "../agent/run-state.js";
@@ -51,10 +50,6 @@ export interface SubagentToolOptions {
   fallbackProvider?: LLMProvider;
   /** Ancestor subagent ids (path from root). Flattened events concat their own id. */
   eventPath?: string[];
-  /** When set, general-type subagents get their own keyed todo list via
-   *  this store (keyed by subagentId). Omit to keep subagents' inherited
-   *  todo_write routed to "main" — which was the latent bug this fixes. */
-  todoStore?: TodoStore;
   /** Model override for `explore`-type subagents (e.g. a cheaper Haiku).
    *  When undefined, explore uses the parent provider's bound model.
    *  `general` and `plan` always use the parent model regardless. */
@@ -773,19 +768,6 @@ function createDirectSubagentTool(options: SubagentToolOptions): Tool {
       // Only the root coordinator integrates artifacts. A child Agent may
       // create nested artifacts but cannot apply them directly to the root.
       baseRegistry.unregister("merge_agent_artifacts");
-
-      // ── Per-subagent todo key (else todo_write would clobber main's list) ──
-      if (options.todoStore && baseRegistry.has("todo_write")) {
-        const parentStore = options.todoStore;
-        baseRegistry.unregister("todo_write");
-        baseRegistry.register(todoWriteTool({
-          store: {
-            getKey: () => subagentId,
-            get: (key) => parentStore.get(key),
-            set: (key, oldTodos, newTodos) => parentStore.set(key, oldTodos, newTodos),
-          },
-        }));
-      }
 
       const registry = baseRegistry;
       const autoCompactThreshold = options.subagentAutoCompactThreshold ?? 200_000;

@@ -98,7 +98,7 @@ describe("ToolProgressTracker", () => {
 
   it("does not confuse runtime todo state with workspace changes", () => {
     const tracker = new ToolProgressTracker();
-    tracker.observeRound([{ ...edit, name: "todo_write", mayChangeWorkspace: false }]);
+    tracker.observeRound([{ ...edit, name: "task_status", mayChangeWorkspace: false }]);
     expect(tracker.workspaceChanged).toBe(false);
   });
 

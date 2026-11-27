@@ -64,14 +64,14 @@ import {
   buildMemoryQueryForRun,
   buildPerTurnAttachments,
   makeContextBuilders,
-  makeTurnEndGuard,
+  reviewFailedTools,
 } from "../agent/contextAttachments.js"
 import { buildRepoMapAttachment } from "../agent/repoMap.js"
 import { appendCacheableSystemSection, buildRuntimePromptToolInputs } from "../agent/systemPrompt.js"
 import { buildInheritedPromptInstructions } from "../prompts/required-sections.js"
 import { createPromptSectionDiagnostics, buildPromptCacheDiagnostics, type PromptCacheDiagnostics } from "../agent/promptDiagnostics.js"
 import { summarizeSkillsForPrompt } from "../agent/skillSummary.js"
-import { createAgentRuntime, subagentTool, type Todo, type TodoStore } from "../../zapsdk/index.js"
+import { createAgentRuntime, subagentTool } from "../../zapsdk/index.js"
 import { loadAllSkills } from "../../zapsdk/skills/loader.js"
 import type { HeadlessArgs } from "./args.js"
 import { createFormatter, type StopReason, type RunSummary, type HeadlessFormatter } from "./formatter.js"
@@ -365,16 +365,6 @@ export async function runHeadless(args: HeadlessArgs, host: HeadlessHost = {}): 
       return EXIT_BAD_ARGS
     }
   }
-  // Headless previously omitted todo_write entirely, so constrained runs had
-  // no structured way to decompose work before operating on a repository.
-  // Keep this store local to one process: the transcript records the plan,
-  // while a fresh invocation must not inherit stale work from an older run.
-  let headlessTodos: Todo[] = []
-  const headlessTodoStore: TodoStore = {
-    get: () => headlessTodos,
-    set: (_key, _oldTodos, nextTodos) => { headlessTodos = nextTodos },
-  }
-
   // ── Session restore (--continue / --session-id) ──────────────────────
   // Caveat: `setActiveSession` finalizes the auto-created writer and starts
   // a NEW one with a NEW UUID, then replays the loaded logs into it. So the
@@ -511,7 +501,6 @@ export async function runHeadless(args: HeadlessArgs, host: HeadlessHost = {}): 
   const { provider: llmProvider, registry, executor: baseExecutor, createRegistryForCwd, executionFacts, executionCapacity, sandboxConfined, sandboxNetworkPolicy } = buildAgentObjects(
     config,
     approval.onApproval,
-    /* todoStore   */ headlessTodoStore,
     /* planCb      */ undefined,
     /* checkpoint  */ checkpoint,
     /* skills      */ skills,
@@ -609,12 +598,7 @@ export async function runHeadless(args: HeadlessArgs, host: HeadlessHost = {}): 
       message: error instanceof Error ? error.message : String(error),
     })
   })
-  const { contextPrefix, contextDelta, contextDiagnostics } = makeContextBuilders({
-    attachments,
-    getTodos: () => headlessTodos,
-    modelId: config.active.model,
-  })
-  const turnEndGuard = makeTurnEndGuard(() => headlessTodos)
+  const { contextPrefix, contextDiagnostics } = makeContextBuilders({ attachments })
 
   // The value is reset immediately before the user transcript entry below.
   // Keep it in outer scope so RuntimeFactory's onRunEnd can bind the snapshot.
@@ -822,11 +806,10 @@ export async function runHeadless(args: HeadlessArgs, host: HeadlessHost = {}): 
       signal: controller.signal,
       images: host.images,
       contextPrefix,
-      contextDelta,
       contextDiagnostics,
-      turnEndGuard,
+      turnEndGuard: reviewFailedTools,
     }
-    repairResult = repairSession ? await repairSession.run(args.prompt, { images: host.images, contextPrefix, contextDelta, contextDiagnostics }) : undefined
+    repairResult = repairSession ? await repairSession.run(args.prompt, { images: host.images, contextPrefix, contextDiagnostics }) : undefined
     const execution = repairResult ? repairResult.attempts.at(-1)
       : outcomeMode ? await agent.runWithOutcome(args.prompt, runOptions) : undefined
     if (repairResult && !repairResult.lastOutcome) throw new OutcomeProtocolError(repairResult.code, "Public checks workflow stopped before a terminal outcome; recover any pending runtime outcome")

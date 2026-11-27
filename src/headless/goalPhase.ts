@@ -60,7 +60,7 @@ export async function runGoalMachineCommand(command: string, execute: () => Prom
 const GOAL_TOOLS = new Set([
   "read_file", "write_file", "edit_file", "multi_edit", "delete_file",
   "list_tree", "read_document", "read_pdf", "read_docx",
-  "read_tool_output", "todo_write",
+  "read_tool_output",
 ])
 const READ_ONLY_GOAL_TOOLS = new Set([
   "read_file", "list_tree", "read_document", "read_pdf", "read_docx",

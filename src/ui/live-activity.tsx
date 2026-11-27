@@ -5,7 +5,6 @@ import { Box, Text } from "ink"
 import type { LogEntry } from "./types.js"
 import { GoalStatus } from "./goal-status.js"
 import { goalActionText, type GoalView } from "../goal-view.js"
-import type { Todo } from "../../zapsdk/index.js"
 import type { ProviderRequestEvent } from "../../zapsdk/core/llm.js"
 import { c } from "./theme.js"
 import { shortAgentLabel } from "./group-logs.js"
@@ -105,7 +104,6 @@ export function collectPendingTools(logs: LogEntry[]): LogEntry[] {
 export interface LiveActivityProps {
   goal?: GoalView
   goalAttached?: boolean
-  goalTodos?: readonly Todo[]
   goalAwaitingInput?: boolean
   isRunning: boolean
   isStreaming: boolean
@@ -159,7 +157,7 @@ export const LiveActivity = memo(function LiveActivity({
   isRunning, isStreaming, isThinking, thinkingChars,
   status, activeTool, externalAgent, awaitingApproval, activeToolBytes = 0, termWidth, pendingTools,
   lastCompletedTool, providerRequest, stopHint = "Esc twice to stop",
-  goal, goalAttached = false, goalTodos = [], goalAwaitingInput = false,
+  goal, goalAttached = false, goalAwaitingInput = false,
 }: LiveActivityProps) {
   // Keep the 150ms animation state inside this small row. Hosting it in App
   // made every spinner tick reconcile the transcript, prompt and palettes.
@@ -188,7 +186,7 @@ export const LiveActivity = memo(function LiveActivity({
     }
   }, [isRunning, progress.kind, progress.value])
 
-  const withGoal = (activity: ReactNode) => goal ? <GoalStatus goal={goal} termWidth={termWidth} attached={goalAttached} todos={goalTodos}>
+  const withGoal = (activity: ReactNode) => goal ? <GoalStatus goal={goal} termWidth={termWidth} attached={goalAttached}>
     {!goalActive && <Text color={c.text.muted} wrap="truncate-end">{truncateToWidth(goalActionText(goal, goalAttached), Math.max(1, termWidth - 4))}</Text>}
     {activity}
   </GoalStatus> : activity
@@ -202,7 +200,7 @@ export const LiveActivity = memo(function LiveActivity({
   // prompt after the first agent response. Cheap: just one blank
   // row of vertical space.
   if (goal && !goalActive && (!isRunning || goalAttached)) {
-    return <GoalStatus goal={goal} termWidth={termWidth} attached={goalAttached} todos={goalTodos} />
+    return <GoalStatus goal={goal} termWidth={termWidth} attached={goalAttached} />
   }
   if (!isRunning && !isStreaming && !isThinking && pendingTools.length === 0 && !goal) {
     return <Box height={1} marginTop={1} />
@@ -236,7 +234,7 @@ export const LiveActivity = memo(function LiveActivity({
     : ""
   const goalTool = pendingTools.length > 0 || activeToolBytes > 0 ? activeTool : ""
   const approvalLabel = awaitingApproval ? "Waiting for your approval" : copy.primaryLabel
-  const segments = [goalActive ? waitingForGoalInput ? "等待你确认操作" : goalActionText(goal!, goalAttached, goalTodos, goalTool) : approvalLabel, awaitingApproval ? formatActivityDuration(elapsed) : copy.elapsed, waitingForGoalInput || awaitingApproval ? "" : copy.progress, goalActive ? "" : lastActionSegment]
+  const segments = [goalActive ? waitingForGoalInput ? "等待你确认操作" : goalActionText(goal!, goalAttached, goalTool) : approvalLabel, awaitingApproval ? formatActivityDuration(elapsed) : copy.elapsed, waitingForGoalInput || awaitingApproval ? "" : copy.progress, goalActive ? "" : lastActionSegment]
     .filter(Boolean)
     .join("  ·  ")
   const interruptHint = goal && termWidth < 70

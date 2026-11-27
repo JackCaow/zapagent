@@ -57,7 +57,9 @@ it("real CLI sends the selected profile with user/project text and unchanged sch
       expect(system).toContain("PROJECT_SENTINEL");
       if (custom) expect(system).toContain("CUSTOM_SENTINEL");
       expect(system.includes("Profile: concise")).toBe(profile === "concise");
-      expect(system.includes("3-5 ordered, observable items")).toBe(profile === "standard");
+      expect(system.includes("Think before acting. For non-trivial work")).toBe(profile === "standard");
+      expect(requests[0].tools.map((tool: any) => tool.function.name)).not.toContain("todo_write");
+      expect(system).not.toContain("todo_write");
       schemas ??= requests[0].tools;
       expect(requests[0].tools).toEqual(schemas);
       expect(JSON.stringify(requests[1].messages.filter((m: any) => m.role === "tool"))).toContain("CHECK_FAILURE_SENTINEL");

@@ -16,8 +16,6 @@ import {
   retrySystemEvents,
   getSystemInboxLength,
 } from "../queue/systemInbox.js"
-import type { Todo } from "../../zapsdk/builtin-tools/todo.js"
-import { canResumeForTaskEvent } from "../queue/task-resumption.js"
 import { pushHistory } from "../ui/prompt.js"
 import type { PendingImage } from "../queue/inputQueue.js"
 import type { ImageContent } from "../../zapsdk/core/types.js"
@@ -83,8 +81,6 @@ export interface UseTurnDispatcherOptions {
   openQueue?: () => void
   getInputValue?: () => string
   queueError?: string
-  onEnqueued?: (entry: QueueEntry) => void
-  getTodos?: () => Todo[]
   getSessionId?: () => string
   addLog: AddLog
   addToast: (text: string, options?: ToastOptions) => void
@@ -101,7 +97,7 @@ export interface UseTurnDispatcherOptions {
     restoreText?: string,
     memoryQueryText?: string,
     onAccepted?: () => void,
-    entryId?: string,
+    continuationTaskIds?: readonly string[],
   ) => Promise<unknown>
 
   /** Slash-command dispatcher pre-bound with its own deps by the App. Called
@@ -438,8 +434,6 @@ export function useTurnDispatcher(
 
   const pausedRef = useRef(opts.paused)
   pausedRef.current = opts.paused
-  const getTodosRef = useRef(opts.getTodos)
-  getTodosRef.current = opts.getTodos
 
   const dispatchTurn = useCallback(async () => {
     if (isDispatchingRef.current || opts.queueError || pausedRef.current) return
@@ -453,18 +447,19 @@ export function useTurnDispatcher(
         const humanPending = getQueueSnapshot().some(entry => entry.state !== "accepted")
         const events = !humanPending && precheckProvider() ? drainSystemInbox({
           sessionId: opts.getSessionId?.(),
-          eligible: event => canResumeForTaskEvent(getTodosRef.current?.() ?? [], event.taskId),
         }) : []
         let deliveredEvents = false
         if (events.length) {
           const text = events.map(event => event.payload).join("\n\n")
+          const session = opts.getSessionId?.()
+          const ownedIds = events.flatMap(event => session && event.sessionId === session && event.taskId ? [event.taskId] : [])
           let accepted = false
           try {
             const result = await dispatchUserTurn(text, undefined, undefined, text, true, undefined, text, () => {
               accepted = true
               deliveredEvents = true
               for (const event of events) event.onDelivered?.()
-            })
+            }, ownedIds.length === events.length ? ownedIds : undefined)
             if (!result || (typeof result === "object" && "stopped" in result && result.stopped !== "end_turn")) break
           } finally {
             if (!accepted) restoreSystemEvents(events, true)
@@ -479,13 +474,14 @@ export function useTurnDispatcher(
             const unreadable = images?.filter(image => image.base64 === undefined).map(image => image.filePath)
             if (unreadable?.length) throw new Error(`Queued image is no longer readable: ${unreadable.join(", ")}`)
             return dispatchUserTurn(buildDispatchText(entry.text, !!images?.length), undefined,
-              images, entry.displayForm, false, entry.restoreText, entry.displayForm, accepted, entry.id)
+              images, entry.displayForm, false, entry.restoreText, entry.displayForm, accepted)
           },
           command: async (entry, accepted) => {
             addLog("user", entry.displayForm, undefined, undefined, undefined, {
               restore: false, ...(entry.restoreText !== undefined ? { restoreText: entry.restoreText } : {}),
             })
-            openedDialog = ["open_rewind", "open_workspace_access"].includes(parseCommand(entry.text)?.type ?? "")
+            const command = parseCommand(entry.text)?.type
+            openedDialog = command === "open_rewind" || command === "show_permissions"
             const compact = isManualCompactCommand(entry.text)
             let inputRequired = false, result: unknown
             if (compact) manualCompactInFlightRef.current = true
@@ -522,8 +518,7 @@ export function useTurnDispatcher(
     } else {
       // A failed message at the head stops delivery. Say so, or typing looks dead.
       const wasPaused = getMessageQueue().isPaused()
-      const entry = enqueueCommand(command, opts.followUpMode)
-      if (!command.text.trimStart().startsWith("/") || looksLikeDroppedFilePath(command.text)) opts.onEnqueued?.(entry)
+      enqueueCommand(command, opts.followUpMode)
       if (wasPaused) {
         addToast("Queue paused by a failed message — this one waits. Ctrl+Q: r retry, x delete, c clear failed.", {
           variant: "warning", duration: 8000,
@@ -580,10 +575,9 @@ export function useTurnDispatcher(
         )
         return
       }
-      // Provider repair is a local control action, not a follow-up task. It
-      // must remain reachable behind a failed head, without reviving that head.
+      // Project access needs to remain reachable with pending or failed work.
       const control = parseCommand(value)
-      if (isGoalSessionControl(value) || (!opts.editingMessageId && control?.type === "open_workspace_access")) {
+      if (isGoalSessionControl(value) || (!opts.editingMessageId && control?.type === "show_permissions")) {
         pushHistory(value)
         addLog("user", displayForm, undefined, undefined, undefined, { restore: false })
         await dispatchCommand(expandPastes(value), { displayText: displayForm })
@@ -776,7 +770,6 @@ export function useTurnDispatcher(
       opts.followUpMode,
       opts.editingMessageId,
       opts.onEditCommitted,
-      opts.onEnqueued,
       opts.openQueue,
       opts.getInputValue,
       opts.queueError,

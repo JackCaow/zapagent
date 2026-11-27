@@ -93,12 +93,14 @@ export const Footer = memo(function Footer({
     : c.text.faint
 
   const modeLabel: Record<PermissionMode, string | null> = {
-    default:            analysisHint ? "Analyze · /work to edit" : null,
+    auto:               "Auto",
+    default:            analysisHint ? "Project access required" : null,
     acceptEdits:        "editing",
-    plan:               analysisHint ? "Analyze · /work to edit" : "plan",
+    plan:               "Read only",
     bypassPermissions:  "bypass",
   }
   const modeColor: Record<PermissionMode, string> = {
+    auto:               c.text.muted,
     default:            c.text.faint,
     acceptEdits:        c.text.muted,
     plan:               c.accent,

@@ -931,12 +931,6 @@
     }
     const skipped = skippedSummary(meta.skipped)
     if (skipped) parts.push(`skipped ${skipped}`)
-    if (typeof meta.todoCount === "number" && Number.isFinite(meta.todoCount)) {
-      parts.push(`todos ${fmtNum(Math.max(0, meta.todoCount))}`)
-    }
-    if (typeof meta.inProgressCount === "number" && Number.isFinite(meta.inProgressCount)) {
-      parts.push(`in_progress ${fmtNum(Math.max(0, meta.inProgressCount))}`)
-    }
     return parts.length ? `(${parts.join("; ")})` : ""
   }
 

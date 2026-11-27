@@ -26,7 +26,7 @@ import { buildToolGrantRules } from "../tool-grants.js"
 import { commandInput } from "./controlled-input.js"
 import { describeCapabilityPatterns } from "../capabilities.js"
 
-interface Props { onCancel: () => void; availableTools: string[] }
+interface Props { onCancel: () => void; availableTools: string[]; onProjectAccess?: () => void }
 
 function scopeOf(group: AnnotatedRuleGroup): RuleRemovalScope {
   if (group.label === "project grants") return "project-grants"
@@ -51,7 +51,7 @@ function flattenRules(groups: AnnotatedRuleGroup[]): FlatRule[] {
   return out
 }
 
-export function PermissionsDialog({ onCancel, availableTools }: Props) {
+export function PermissionsDialog({ onCancel, availableTools, onProjectAccess }: Props) {
   useHideNativeCursor()
   const [tick, setTick] = useState(0)
   const [grantOpen, setGrantOpen] = useState(false)
@@ -75,6 +75,7 @@ export function PermissionsDialog({ onCancel, availableTools }: Props) {
       onCancel(); return
     }
     if (cmd === "a") { setGrantOpen(true); return }
+    if (cmd === "p" && onProjectAccess) { onProjectAccess(); return }
     if (total === 0) return
 
     if (key.upArrow) {
@@ -149,7 +150,7 @@ export function PermissionsDialog({ onCancel, availableTools }: Props) {
         {!!error && <Text color={c.error}>{error}</Text>}
         <Text color={c.text.ghost}>Press a to add tool authorization.</Text>
         <Box paddingX={1} marginTop={1}>
-          <Text color={c.text.faint}>a add authorization · esc close</Text>
+          <Text color={c.text.faint}>a add authorization{onProjectAccess ? " · p project access" : ""} · esc close</Text>
         </Box>
       </Box>
     )
@@ -206,7 +207,7 @@ export function PermissionsDialog({ onCancel, availableTools }: Props) {
         {confirmingClear ? (
           <Text color={c.error}>Press c again to remove ALL persisted rules (session rules untouched)</Text>
         ) : (
-          <Text color={c.text.faint}>↑↓ navigate  ·  d delete  ·  c clear all  ·  a add authorization · esc close</Text>
+          <Text color={c.text.faint}>↑↓ navigate · d delete · c clear all · a add authorization{onProjectAccess ? " · p project access" : ""} · esc close</Text>
         )}
       </Box>
     </Box>

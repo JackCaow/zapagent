@@ -18,7 +18,7 @@ import { resolveModelImageTokenContext } from "../provider-metadata.js"
 import { TokenCounter } from "../../zapsdk/context/token-counter.js"
 import type { OutputThroughputSample } from "../agent/outputThroughput.js"
 import { useState, useCallback, useRef, useEffect, useMemo, useSyncExternalStore, type MutableRefObject } from "react"
-import { SessionHostRuntime, type LoopAgentResult, type Todo, type TodoStore, type ProviderRequestEvent } from "../../zapsdk/index.js"
+import { SessionHostRuntime, type LoopAgentResult, type ProviderRequestEvent } from "../../zapsdk/index.js"
 import { AgentLogger } from "../../zapsdk/debug/agent-logger.js"
 import type { CheckpointManager } from "../../zapsdk/checkpoint/index.js"
 import { AutoMemory } from "../../zapsdk/memory/auto-memory.js"
@@ -36,7 +36,7 @@ import {
   buildMemoryQueryForRun,
   buildPerTurnAttachments,
   makeContextBuilders,
-  makeTurnEndGuard,
+  reviewFailedTools,
   MEMORY_QUERY_HISTORY_LIMIT,
   memoryQueryHistoryText,
   type MemoryQueryHistoryLog,
@@ -310,12 +310,7 @@ interface UseAgentRunnerOptions {
   replaceLog: (id: number, type: LogType, text: string, tool?: ToolCallInfo, agentPath?: string[]) => void
   peekNextLogId: () => number
   compactLogs: (summary: string, before: number, after: number, files: string[]) => void
-  /** Ref to current todos — read fresh before each LLM call so the active_plan
-   *  reflects mid-run updates from todo_write. Using a ref (not a plain value)
-   *  avoids re-running the hook on every todo change. */
-  todosRef?: React.MutableRefObject<Todo[]>
   checkpoint: CheckpointManager | null
-  todoStore: TodoStore
   /** journalLogIndex captured BEFORE this turn's first log was written.
    *  App.tsx sets this at handleSubmit / command-entry points. Passed
    *  to checkpoint.makeSnapshot so rewind can slice logs back to the
@@ -355,10 +350,8 @@ export function useAgentRunner({
   addLog,
   replaceLog,
   peekNextLogId,
-  todosRef,
   checkpoint,
   compactLogs,
-  todoStore,
   turnStartLogIndexRef,
   turnStartUiLogIndexRef,
   availableSkills,
@@ -369,8 +362,6 @@ export function useAgentRunner({
   const [status, setStatus] = useState("ready")
   const [goalRunning, setGoalRunning] = useState(false)
   const { view: goalStatus, select: selectGoalView, update: updateGoalView, clear: resetGoalView } = useGoalView(currentSessionId, cwd, goalRunning, undefined, appLogger)
-  const [goalTodoId, setGoalTodoId] = useState<string>()
-  useEffect(() => { setGoalTodoId(undefined) }, [currentSessionId])
   const [startupModel, setStartupModel] = useState<{ path: string; identity: ExternalModelIdentity }>()
   const [reportedModel, setReportedModel] = useState<{ scope: string; identity: ExternalModelIdentity }>()
   const [remoteContext, setRemoteContext] = useState<{ used: number; size: number }>()
@@ -594,7 +585,7 @@ export function useAgentRunner({
       "onInputAccepted" | "hasSteering" | "takeSteering" | "onSteeringAccepted">,
   ): Promise<LoopAgentResult | undefined> => {
     const turnConfig = invocation?.permissionMode ? { ...config, permissionMode: invocation.permissionMode } : config
-    if (!invocation?.goalTurn) { resetGoalView(true); setGoalTodoId(undefined) }
+    if (!invocation?.goalTurn) resetGoalView(true)
     // Background notifications are not the user answering; a decline stands.
     if (!invocation?.keepTurnDenials) permissionManager.startTurn()
     running.current = true
@@ -912,7 +903,6 @@ export function useAgentRunner({
         journalLogIndex: turnStartLogIndexRef.current,
         uiLogIndex: turnStartUiLogIndexRef.current,
       }),
-      todoStore,
       subAgentEventHandler: handlers.subAgentEventHandler,
       onUpdateConfig,
     })
@@ -930,12 +920,7 @@ export function useAgentRunner({
       if (invocation?.goalTurn) agent.on("*", invocation.goalTurn.onEvent)
 
     // ── Per-turn context attachments + turn-end guard ──
-      const { contextPrefix, contextDelta, contextDiagnostics } = makeContextBuilders({
-      attachments,
-      getTodos: () => todosRef?.current ?? [],
-      modelId: currentConfig.active.model,
-    })
-      const turnEndGuard = makeTurnEndGuard(() => todosRef?.current ?? [])
+      const { contextPrefix, contextDiagnostics } = makeContextBuilders({ attachments })
       const detachHostRuntime = await hostSessionRef.current?.attach(agent)
 
       try {
@@ -943,9 +928,8 @@ export function useAgentRunner({
         signal: controller.signal,
         images,
         contextPrefix,
-        contextDelta,
         contextDiagnostics,
-        turnEndGuard,
+        turnEndGuard: reviewFailedTools,
         onInputAccepted: invocation?.onInputAccepted,
         hasSteering: invocation?.hasSteering,
         takeSteering: invocation?.takeSteering,
@@ -1078,8 +1062,6 @@ export function useAgentRunner({
     registerStaticFlushCallback,
     resetGoalView,
     replaceLog,
-    todoStore,
-    todosRef,
     turnStartLogIndexRef,
     turnStartUiLogIndexRef,
   ])
@@ -1090,16 +1072,13 @@ export function useAgentRunner({
     try {
       return await executeGoalCommand(args, cwd, {
         compact: true,
-        onSelected: goal => { selectGoalView(goal); setGoalTodoId(previous => previous === goal.id ? previous : undefined) },
+        onSelected: selectGoalView,
         runTurn: async input => {
           presentation?.finish()
           let outcome: AgentOutcomeV1 | undefined
           try {
             const result = await runAgent(input.prompt, undefined, undefined, input.prompt, {
-              signal: input.signal, goalTurn: { ...input, onEvent: event => {
-                input.onEvent(event)
-                if (!event.path?.length && event.type === "content_final" && event.kind === "tool_result" && event.toolName === "todo_write" && event.result.success) setGoalTodoId(input.goalId)
-              } }, goalController: controller, onOutcome: value => { outcome = value }, resultSchema: "outcome-v1", propagateErrors: true,
+              signal: input.signal, goalTurn: input, goalController: controller, onOutcome: value => { outcome = value }, resultSchema: "outcome-v1", propagateErrors: true,
             })
             if (!result || !outcome) throw new Error("GOAL_TURN_OUTCOME_MISSING")
             return { text: result.text, outcome, toolCalls: result.toolResults.length, sessionId: getCurrentSessionId() }
@@ -1180,7 +1159,6 @@ export function useAgentRunner({
     runGoalCommand,
     goalRunning,
     goalStatus,
-    goalTodoId,
     resetGoalView,
     running,
     abortRef,

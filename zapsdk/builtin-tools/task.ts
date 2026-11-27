@@ -103,7 +103,7 @@ export function taskStatusTool(options: TaskToolsOptions): Tool {
         runtime: { taskObservation: { tasks: tasks.map(task => ({ taskId: task.taskId, status: statusOf(task) })) } },
         output: JSON.stringify({
           tasks: views,
-          guidance: "Do not repeatedly poll unchanged tasks. Continue independent work, or wait for the same task when its result is required. A wait timeout does not mean the task stopped. Unobserved completion is sent automatically. Exit status describes the process only; verify the requested artifact or behavior before completing its todo.",
+          guidance: "Do not repeatedly poll unchanged tasks. Continue independent work, or wait for the same task when its result is required. A wait timeout does not mean the task stopped. Unobserved completion is sent automatically. Exit status describes the process only; verify the requested artifact or behavior before reporting completion.",
         }, null, 2),
       }
     },

@@ -28,6 +28,7 @@ interface Options {
   signal: AbortSignal
   approve?: ApprovalCallback
   workspaceCommand?: WorkspaceCommand
+  appInstructions?: string
   onEvent: (event: AgentEvent) => void
   onModel?: (identity: ExternalModelIdentity) => void
   onAccepted?: () => void
@@ -92,6 +93,7 @@ async function runClaudeCode(options: Options, sessionId: string, shell?: Return
     "--permission-prompt-tool", "stdio", "--permission-mode", options.plan ? "plan" : "manual",
     options.resume ? "--resume" : "--session-id", sessionId]
   if (options.model) args.push(`--model=${options.model}`)
+  if (options.appInstructions) args.push("--append-system-prompt", options.appInstructions)
   if (options.plan) args.push("--tools", "Read,Grep,Glob")
   if (shell) args.push(...shell.args)
   const images = await Promise.all((options.images ?? []).map(async image => ({ type: "image", source: {

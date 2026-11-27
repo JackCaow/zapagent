@@ -9,7 +9,7 @@ import {
   pasteImageFromClipboard,
 } from "../../zapsdk/utils/clipboard-image.js"
 import { loadImageFromFile } from "../../zapsdk/utils/image.js"
-import type { Todo, ImageContent } from "../../zapsdk/index.js"
+import type { ImageContent } from "../../zapsdk/index.js"
 import type { LogEntry } from "../ui/types.js"
 import type { SlashEntry } from "../ui/slash-palette.js"
 import type { ApprovalChoice } from "../ui/dialog-approval.js"
