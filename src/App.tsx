@@ -1257,7 +1257,7 @@ export function App() {
         if (persistence.pendingWrites || persistence.lastFailure) throw new Error("Save the current session successfully before updating.")
       }} onCancel={closeDialog} onRestart={request => { readCurrentSessionLogs(); requestUpdateRestart(request); exit() }} />}
       {dialog === "connect"     && <ConnectDialog     config={config} onAgentSelected={addToast} onSave={updateConfig} onCommit={commitConfig} onCancel={closeDialog} />}
-      {dialog === "model"       && <ModelDialog       config={config} claudeModel={claudeModel} onSave={updateConfig} onCommit={commitConfig} onCancel={closeDialog} />}
+      {dialog === "model"       && <ModelDialog       config={config} includeClaude claudeModel={claudeModel} onSave={updateConfig} onCommit={commitConfig} onCancel={closeDialog} />}
       {dialog === "workspace-access" && <WorkspaceAccessDialog cwd={process.cwd()} remembered={access.remembered()} onChoose={chooseWorkspaceAccess} onCancel={closeDialog} />}
       {dialog === "mode"        && <ModeDialog        config={config} onCommit={commitConfig} onCancel={closeDialog} />}
       {dialog === "effort"      && <EffortDialog      config={config} onCommit={commitConfig} onCancel={closeDialog} />}

@@ -232,6 +232,8 @@ export interface AppConfig {
   activeAgent?: string
   /** Preferred native conversation runtime selected in /connect. */
   subscriptionAgent?: "claude-code"
+  /** Model choice forwarded to the local Claude Code CLI. */
+  claudeModelPreference?: string
   permissionMode: PermissionMode
   followUpMode?: "queue" | "steer"
   /** Where project shell commands run. "local" (default) uses the host OS
@@ -611,6 +613,8 @@ export function loadAppConfig(configPath: string): AppConfig {
       permissionMode: "default",   // session-scoped
       activeAgent: undefined,      // session-scoped
       subscriptionAgent: parsed.subscriptionAgent === "claude-code" ? "claude-code" : undefined,
+      claudeModelPreference: typeof parsed.claudeModelPreference === "string" && parsed.claudeModelPreference.trim()
+        && !/^-|[\x00-\x1f\x7f-\x9f]/.test(parsed.claudeModelPreference.trim()) ? parsed.claudeModelPreference.trim() : undefined,
     }
     if (process.env.ZAP_DISABLE_FILE_CHECKPOINTING === "1") {
       merged.fileCheckpointingEnabled = false
