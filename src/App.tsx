@@ -1007,7 +1007,8 @@ export function App() {
     const persistedMatchesActiveModel = !!persisted && (
       !persisted.cacheScope || samePromptCacheScope(persisted.cacheScope, activeCacheScope)
     )
-    if (persisted && persistedMatchesActiveModel) {
+    // Native agents resume with a fresh window; their saved usage sums every request in a turn.
+    if (persisted && persistedMatchesActiveModel && !conversationAgentId(config)) {
       const restoredUsage = resolveRestoredUsageContext(
         persisted,
         conversation.estimatedTokens,

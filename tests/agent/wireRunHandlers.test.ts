@@ -56,6 +56,26 @@ describe("contextTokensFromRunUsage", () => {
 })
 
 describe("createRunHandlers context diagnostics", () => {
+  it("preserves multi-request agent totals without triggering a host compaction warning", () => {
+    const agent = new FakeAgent()
+    const logs: string[] = [], context: number[] = [], totals: number[] = []
+    const before = tokenAccounting.promptOverhead
+    createRunHandlers({
+      externalContext: true,
+      currentConfig: { providers: [], active: { providerId: "", model: "" }, serperKey: "", maxTokens: 100,
+        maxSteps: 10, customSystemPrompt: "", compaction: { auto: true, prune: true, reserved: 0 }, mcpServers: [], permissionMode: "default" },
+      controller: new AbortController(), preview: {} as any,
+      setStatus() {}, setStep() {}, setActiveTool() {}, setActiveToolBytes() {}, setContextPending() {},
+      setContextTokens: value => context.push(value), appendUsage: total => { totals.push(total) },
+      addLog: (_, msg) => { logs.push(msg) }, replaceLog() {}, peekNextLogId: () => 1, compactLogs() {},
+    }).wire(agent as any)
+    agent.emit({ type: "run_usage", step: 7, inputTokens: 40_000, cacheReadInputTokens: 400_000, outputTokens: 50 })
+    expect(totals).toEqual([440_000])
+    expect(context).toEqual([])
+    expect(tokenAccounting.promptOverhead).toBe(before)
+    expect(logs.join("\n")).not.toContain("auto-compact")
+  })
+
   it("uses complete compact request estimates without double overhead and exposes lossy/soft-target status", () => {
     const agent = new FakeAgent(), values: number[] = [], logs: string[] = []
     const previous = tokenAccounting.promptOverhead

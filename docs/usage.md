@@ -195,7 +195,7 @@ also skip CI, headless output and ACP; explicit `zap update` still checks.
 | `/supertask` | Start, resume, abort, status, or watch a long-horizon task |
 | `/exit` | Exit zapAgent (`/quit` and `/q` also work) |
 
-The footer shows output speed as `105.4 token/s` for the latest root model request. `~` marks a live estimate (streamed characters ÷ 4); provider-reported output usage calibrates the final rate. Timing starts at first output and excludes tool execution. Missing usage keeps the estimate; non-streaming or very short responses may have no rate.
+The footer shows output speed as `105.4 token/s` for the latest root model request. `~` marks a live estimate (streamed characters ÷ 4); provider-reported output usage calibrates the final rate. Timing starts at first output and excludes tool execution. Missing usage keeps the estimate; non-streaming or very short responses may have no rate. In a local agent session, streamed chunks show an estimated rate. Buffered replies with reported output tokens show `avg` over the full turn, including tool time. When the agent reports its context window, the footer shows used tokens, capacity and percent occupied.
 
 `/model` opens on the current provider and model. Use **← / →** to switch
 provider tabs, **↑ / ↓** to highlight a model, and **Enter** to activate it.
