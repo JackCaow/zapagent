@@ -179,8 +179,14 @@ export function contentText(block: ContentBlock | undefined | null): string {
 /** Usage from a prompt response or `_meta`, in zap's shape. */
 export function acpUsage(usage: Usage | null | undefined): TokenUsage | undefined {
   if (!usage) return undefined;
+  // Some ACP agents include cached tokens in inputTokens. Codex ACP reports
+  // disjoint fresh/read/write counts, whose sum reconciles with totalTokens.
+  const cached = (usage.cachedReadTokens ?? 0) + (usage.cachedWriteTokens ?? 0);
+  const sum = usage.inputTokens + cached + usage.outputTokens;
+  const disjoint = usage.inputTokens < cached || usage.totalTokens === sum
+    || usage.totalTokens === sum + (usage.thoughtTokens ?? 0);
   return {
-    inputTokens: Math.max(0, usage.inputTokens - (usage.cachedReadTokens ?? 0)),
+    inputTokens: disjoint ? usage.inputTokens : Math.max(0, usage.inputTokens - cached),
     outputTokens: usage.outputTokens,
     cacheReadInputTokens: usage.cachedReadTokens ?? undefined,
     cacheCreationInputTokens: usage.cachedWriteTokens ?? undefined,

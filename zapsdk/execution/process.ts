@@ -1,4 +1,5 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { join } from "node:path";
+import { spawnSync, spawn, type ChildProcess } from "node:child_process";
 import { localExecutionShell } from "./shell.js";
 import { readProcessTable, snapshotDescendants } from "./process-tree.js";
 import type {
@@ -135,7 +136,13 @@ export function terminateProcessTree(
   let delivered = false;
   const killChild = () => child.exitCode === null && child.signalCode === null && child.kill(signal);
   try {
-    if (process.platform === "win32" || !child.pid) delivered = killChild();
+    if (process.platform === "win32" && (signal === "SIGTERM" || signal === "SIGKILL") && child.pid && child.exitCode === null && child.signalCode === null) {
+      const systemRoot = process.env.SystemRoot ?? "C:\\Windows";
+      const result = spawnSync(join(systemRoot, "System32", "taskkill.exe"), ["/PID", String(child.pid), "/T", "/F"], {
+        stdio: "ignore", windowsHide: true, timeout: 3000,
+      });
+      delivered = result.status === 0 || killChild();
+    } else if (!child.pid || process.platform === "win32") delivered = killChild();
     // The group can outlive its leader and keep stdout/stderr open. A leader's
     // exit must not suppress escalation to surviving descendants.
     else delivered = process.kill(-child.pid, signal);

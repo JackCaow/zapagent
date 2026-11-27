@@ -230,6 +230,8 @@ export interface AppConfig {
   /** Session-scoped: id of the external ACP agent driving the conversation
    *  (`/agent <id>`). Undefined means zap's own model. Never persisted. */
   activeAgent?: string
+  /** Preferred native conversation runtime selected in /connect. */
+  subscriptionAgent?: "claude-code"
   permissionMode: PermissionMode
   followUpMode?: "queue" | "steer"
   /** Where project shell commands run. "local" (default) uses the host OS
@@ -475,8 +477,8 @@ function normalizeProvider(value: unknown, index: number): Provider | null {
     ...value,
     id: typeof value.id === "string" && value.id.trim() ? value.id : `sp_${Date.now()}_${index}`,
     name: typeof value.name === "string" ? value.name : "",
-    baseURL: typeof value.baseURL === "string" ? value.baseURL : "",
-    apiKey: typeof value.apiKey === "string" ? value.apiKey : "",
+    baseURL: value.authMode === "codex-oauth" ? "codex://local" : typeof value.baseURL === "string" ? value.baseURL : "",
+    apiKey: value.authMode === "codex-oauth" ? "" : typeof value.apiKey === "string" ? value.apiKey : "",
     authMode: value.authMode === "codex-oauth" ? "codex-oauth" : value.authMode === "none" ? "none" : value.authMode === "api-key" ? "api-key" : undefined,
     catalogProviderId: typeof value.catalogProviderId === "string" ? value.catalogProviderId : undefined,
     contextWindow: positiveIntegerOrDefault(value.contextWindow, 128000),
@@ -608,6 +610,7 @@ export function loadAppConfig(configPath: string): AppConfig {
       mcpServers: Array.isArray(parsed.mcpServers) ? parsed.mcpServers : [],
       permissionMode: "default",   // session-scoped
       activeAgent: undefined,      // session-scoped
+      subscriptionAgent: parsed.subscriptionAgent === "claude-code" ? "claude-code" : undefined,
     }
     if (process.env.ZAP_DISABLE_FILE_CHECKPOINTING === "1") {
       merged.fileCheckpointingEnabled = false
@@ -788,6 +791,17 @@ export function hasApiKey(config: AppConfig): boolean {
   return Boolean(p.apiKey.trim())
 }
 
+/** Legacy subscription connections are now conversations owned by Codex. */
+export function conversationAgentId(config: AppConfig): string | undefined {
+  return config.activeAgent ?? config.subscriptionAgent ?? (getActiveProvider(config)?.authMode === "codex-oauth" ? "codex" : undefined)
+}
+
+/** External agents without a bound provider select their own model and effort. */
+export function agentManagingModel(config: AppConfig): string | undefined {
+  const agent = conversationAgentId(config)
+  return agent === "codex" && getActiveProvider(config)?.authMode === "codex-oauth" ? undefined : agent
+}
+
 // ── Provider mutations (pure — all return new configs) ─────────────────────
 
 export function upsertProvider(config: AppConfig, provider: Provider): AppConfig {
@@ -809,7 +823,7 @@ export function removeProvider(config: AppConfig, id: string): AppConfig {
 }
 
 export function setActive(config: AppConfig, providerId: string, model: string): AppConfig {
-  return normalize({ ...config, active: { providerId, model } })
+  return normalize({ ...config, activeAgent: undefined, subscriptionAgent: undefined, active: { providerId, model } })
 }
 
 /** Append a model to a provider's models[]. If `makeActive` is true, also
@@ -823,7 +837,7 @@ export function addModelToProvider(config: AppConfig, providerId: string, model:
     return { ...p, models: [...p.models, trimmed] }
   })
   const next = { ...config, providers }
-  return normalize(makeActive ? { ...next, active: { providerId, model: trimmed } } : next)
+  return makeActive ? setActive(next, providerId, trimmed) : normalize(next)
 }
 
 /** Remove a model from a provider. If it was active, the active model

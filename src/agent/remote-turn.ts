@@ -6,10 +6,12 @@ import type { ConversationManager } from "../../zapsdk/memory/conversation.js"
 import type { AcpAgentSpec } from "../../zapsdk/acp-client/types.js"
 import type { StreamingPreview } from "./streamingPreview.js"
 import { createRunHandlers, type RunHandlersDeps } from "./wireRunHandlers.js"
+import { promptClaudeCode } from "./claude-code.js"
 import { remoteAgents } from "./remote-agent.js"
 
 export interface RemoteTurnDeps extends Omit<RunHandlersDeps, "preview" | "setContextTokens" | "setContextPending" | "currentConfig"> {
   currentConfig: RunHandlersDeps["currentConfig"]
+  nativeClaude?: boolean
   spec: AcpAgentSpec
   cwd: string
   conversation: ConversationManager
@@ -21,6 +23,8 @@ export interface RemoteTurnDeps extends Omit<RunHandlersDeps, "preview" | "setCo
    * so /rewind attributes the agent's fs writes to this turn. */
   checkpointTurn?: { begin: () => Promise<unknown>; end: () => Promise<unknown> }
 }
+
+const claudeSessions = new WeakMap<ConversationManager, { tip: unknown; sessionId: string; epoch: number; cwd: string }>()
 
 /** One user turn handled by an external ACP agent instead of zap's loop.
  * Rendering reuses the regular run handlers, so the transcript looks the
@@ -34,7 +38,16 @@ export async function runRemoteTurn(deps: RemoteTurnDeps, task: string, images?:
   const { spec, controller } = deps
   await deps.checkpointTurn?.begin().catch(() => {})
   try {
-    const turn = await remoteAgents.prompt(spec, deps.cwd, task, images, {
+    if (remoteAgents.host.blocked) throw new Error(remoteAgents.host.blocked)
+    const previous = claudeSessions.get(deps.conversation)
+    claudeSessions.delete(deps.conversation)
+    const epoch = remoteAgents.epoch
+    const turn = deps.nativeClaude ? await promptClaudeCode({
+      command: spec.command, args: spec.args, cwd: deps.cwd, text: task, images, signal: controller.signal,
+      plan: deps.currentConfig.permissionMode === "plan", approve: remoteAgents.host.approve,
+      resume: previous?.cwd === deps.cwd && previous.epoch === epoch && previous.tip === deps.conversation.getTurns().at(-1) ? previous.sessionId : undefined,
+      onEvent: event => emitter.emit(event), onAccepted: deps.onInputAccepted,
+    }) : await remoteAgents.prompt(spec, deps.cwd, task, images, {
       signal: controller.signal,
       onEvent: event => emitter.emit(event),
       onAccepted: deps.onInputAccepted,
@@ -43,7 +56,9 @@ export async function runRemoteTurn(deps: RemoteTurnDeps, task: string, images?:
       },
     })
     deps.conversation.add({ role: "user", content: task })
-    deps.conversation.add({ role: "assistant", content: `[${spec.id} via ACP] ${turn.report || "(no message)"}` })
+    deps.conversation.add({ role: "assistant", content: `[${spec.id}] ${turn.report || "(no message)"}` })
+    if ("sessionId" in turn) claudeSessions.set(deps.conversation, { tip: deps.conversation.getTurns().at(-1), epoch, cwd: deps.cwd, sessionId: turn.sessionId })
+    if (turn.usage) emitter.emit({ type: "run_usage", step: turn.toolCalls, ...turn.usage })
     if (turn.plan.length) deps.addLog("system", formatPlan(spec.id, turn.plan))
     if (turn.stopReason !== "end_turn" && turn.stopReason !== "cancelled") deps.addLog("system", `${spec.id} stopped: ${turn.stopReason}`)
     if (turn.report) deps.saveLastOutput(turn.report)

@@ -323,6 +323,15 @@ export async function runHeadless(args: HeadlessArgs, host: HeadlessHost = {}): 
   config = ov.config
   const cacheScope = makePromptCacheScope(config.active.providerId, config.active.model)
 
+  if (config.subscriptionAgent === "claude-code") {
+    process.stderr.write("Claude Code runs in the interactive Zap UI. Select an API provider for Zap headless, or use claude --print.\n")
+    return EXIT_NO_PROVIDER
+  }
+  if (getActiveProvider(config)?.authMode === "codex-oauth") {
+    process.stderr.write("Codex subscriptions run inside the interactive Zap UI with codex-acp. For Zap headless, select an API provider or use codex exec for a native Codex run.\n")
+    return EXIT_NO_PROVIDER
+  }
+
   if (!hasApiKey(config)) {
     process.stderr.write(
       "no provider configured. Run `zap` interactively once to set one up with /connect.\n",

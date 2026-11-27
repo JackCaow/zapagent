@@ -1,3 +1,4 @@
+import { agentInstallHint, codexConversationSpec, nativeCommand } from "../agent/official-agents.js"
 import { goalTurnMeter, type GoalTurnInput } from "../goal-turn.js"
 import { RetryProvider } from "../../zapsdk/core/retry.js"
 import type { AgentOutcomeV1 } from "../../zapsdk/runtime/outcome.js"
@@ -19,7 +20,7 @@ import type { CheckpointManager } from "../../zapsdk/checkpoint/index.js"
 import { AutoMemory } from "../../zapsdk/memory/auto-memory.js"
 import type { ConversationManager } from "../../zapsdk/index.js"
 import { extractFilesFromSummary } from "../ui/compact-utils.js"
-import { buildCustomSystemPrompt, buildSystemPrompt, deriveCompaction, getActiveProvider } from "../config.js"
+import { buildCustomSystemPrompt, buildSystemPrompt, deriveCompaction, conversationAgentId, getActiveProvider } from "../config.js"
 import { appendUsage, saveLastOutput, getCurrentSessionId } from "../session.js"
 import type { AppConfig } from "../config.js"
 import type { LogType, ToolCallInfo, UserImageRef } from "../ui/types.js"
@@ -47,7 +48,7 @@ import { runRemoteTurn } from "../agent/remote-turn.js"
 import { appendCacheableSystemSection, buildRuntimePromptToolInputs } from "../agent/systemPrompt.js"
 import { createPromptSectionDiagnostics, buildPromptCacheDiagnostics, type PromptCacheDiagnostics } from "../agent/promptDiagnostics.js"
 import { persistRunUsage } from "../agent/usagePersistence.js"
-import { makePromptCacheScope, type PromptCacheScope } from "../agent/cacheScope.js"
+import { conversationCacheScope, makePromptCacheScope, type PromptCacheScope } from "../agent/cacheScope.js"
 import { appendCacheMemoryAudit } from "../agent/cacheMemoryAudit.js"
 import { compactFailureReason } from "../agent/compactDiagnostics.js"
 import {
@@ -591,20 +592,30 @@ export function useAgentRunner({
     let handlers: ReturnType<typeof createRunHandlers> | null = null
 
     // Session mode: an external ACP agent answers this turn instead of zap's loop.
-    const remoteSpec = config.activeAgent ? acpAgents.find(agent => agent.id === config.activeAgent) : undefined
-    if (config.activeAgent) {
+    const agentId = conversationAgentId(config)
+    const nativeClaude = agentId === "claude-code"
+    let remoteSpec
+    if (agentId) {
       try {
-        if (!remoteSpec) throw new Error(`ACP agent ${config.activeAgent} is not available; /agent zap switches back`)
+        if (nativeClaude) {
+          remoteSpec = { id: agentId, ...await nativeCommand("claude") }
+        } else if (agentId === "codex") {
+          remoteSpec = await codexConversationSpec(config, acpAgents.find(agent => agent.id === "codex"))
+        } else {
+          remoteSpec = acpAgents.find(agent => agent.id === agentId)
+        }
+        if (!remoteSpec) throw new Error(`Agent ${agentId} is unavailable. ${agentInstallHint(agentId)}`)
         if (invocation?.goalTurn) throw new Error("/goal runs on zap's own model; /agent zap switches back")
         if (systemPrompt) throw new Error("This command runs on zap's own model; /agent zap switches back")
         completedResult = await runRemoteTurn({
-          spec: remoteSpec, cwd, conversation, currentConfig: config, controller,
+          spec: remoteSpec, nativeClaude, cwd, conversation, currentConfig: config, controller,
           createPreview: () => {
             const next = createStreamingPreview({ addLog, setStreamingText, setIsStreaming, setThinkingText, setIsThinking, getIsFrozen: getIsFrozen ?? (() => false) })
             registerStaticFlushCallback?.(() => next.onStaticFlushed())
             return next
           },
           saveLastOutput,
+          onRunUsage: usage => recordUsage(usage, undefined, conversationCacheScope(config)),
           onInputAccepted: invocation?.onInputAccepted,
           checkpointTurn: checkpoint ? (() => {
             const turnStartIndex = conversation.getAllMessages().length

@@ -19,7 +19,7 @@ import type { PromptCacheDiagnostics } from "../agent/promptDiagnostics.js"
 import type { CacheMemoryAuditEntry } from "../agent/cacheMemoryAudit.js"
 import { readProjectGuidelines } from "../prompts/sections/agents-md.js"
 import {
-  makePromptCacheScope,
+  conversationCacheScope,
   samePromptCacheScope,
   type PromptCacheScope,
 } from "../agent/cacheScope.js"
@@ -27,7 +27,7 @@ import {
   getActiveProvider,
   getEffort,
   getProviderDisplayName,
-  hasApiKey,
+  conversationAgentId, hasApiKey,
   type AppConfig,
 } from "../config.js"
 import { getCurrentSessionId } from "../session.js"
@@ -166,9 +166,11 @@ export function buildStatusText(
   suppliedContextBudget?: ContextBudgetSnapshot,
 ): string {
   const provider = getActiveProvider(config)
-  const providerLabel = provider ? getProviderDisplayName(config) : "(none)"
-  const model = config.active.model || "(no model selected)"
-  const effort = provider ? getEffort(config, provider.id) : null
+  const agentId = conversationAgentId(config)
+  const providerLabel = agentId === "claude-code" ? "Claude Code" : agentId ? `ACP/${agentId}` : provider ? getProviderDisplayName(config) : "(none)"
+  const localModel = agentId && !(agentId === "codex" && provider?.authMode === "codex-oauth")
+  const model = localModel ? "selected by local agent" : config.active.model || "(no model selected)"
+  const effort = provider && !localModel ? getEffort(config, provider.id) : null
   const contextBudget = suppliedContextBudget ?? buildContextBudgetSnapshot(
     config,
     legacyContextUsage(tokenUsage, contextPending),
@@ -182,12 +184,12 @@ export function buildStatusText(
     : 0
   const agentsDoc = detectAgentsDoc(cwd)
   const sessionId = getCurrentSessionId()
-  const keyStatus = hasApiKey(config) ? "configured" : "missing — run /connect"
+  const keyStatus = agentId ? "managed by local agent" : hasApiKey(config) ? "configured" : "missing — run /connect"
 
   const mgr = getMCPManager()
   const mcpSummary = mgr ? summariseMCP(mgr.snapshots()) : "(unavailable)"
   const effectiveContextHistory = appendCurrentContextHistory(contextHistory, context)
-  const currentCacheScope = makePromptCacheScope(config.active.providerId, config.active.model)
+  const currentCacheScope = conversationCacheScope(config)
   const unscopedUsageHistory = appendCurrentUsageHistory(usageHistory, usage)
   const effectiveUsageHistory = selectUsageForCacheScope(unscopedUsageHistory, currentCacheScope)
   const scopedUsage = usage && usageMatchesCacheScope(usage, currentCacheScope) ? usage : undefined

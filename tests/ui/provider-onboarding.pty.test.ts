@@ -48,16 +48,13 @@ ptyTest("real App guides connection creation into model selection, skip and repa
   const key = async (...keys: string[]) => { tmux("send-keys", "-t", "setup", ...keys); await sleep(180) }
   const literal = async (value: string) => { tmux("send-keys", "-t", "setup", "-l", value); await sleep(180) }
   const command = async (value: string) => {
-    // Finish a slash token before Enter so completion cannot consume submit.
-    await literal(value.startsWith("/") ? `${value} ` : value)
-    if (value.startsWith("/")) await visible(value)
+    // Match the live composer: earlier invocations can remain in scrollback.
+    await literal(value)
+    if (value.startsWith("/")) {
+      await settle(screen => screen.split("\n").some(line => ["❯ ", "! "].some(prefix => line.trim() === prefix + value)))
+    }
     await sleep(250)
     await key("Enter")
-    // A completion/focus transition may consume the first Enter. Retry only
-    // while the original slash command is still in the composer, not a dialog.
-    if (value.startsWith("/") && capture().split("\n").some(line => ["! ", "❯ "].some(prefix => line.trimStart().startsWith(prefix + value.trim())))) {
-      await key("Enter")
-    }
   }
   const openConnect = async () => { await command("/connect"); await visible("Connections · /connect") }
   const newConnection = async (name: string, path = "/v1", withKey = false, manualContext?: string) => {
@@ -197,6 +194,16 @@ ptyTest("real App guides connection creation into model selection, skip and repa
     expect(config().providers[0]?.models).toEqual(["alpha-model"])
     expect(requests.some(path => path.startsWith("/failure"))).toBe(true)
     expect(requests.every(path => path.endsWith("/models"))).toBe(true)
+
+    await openConnect()
+    for (const _ of config().providers) await key("Down")
+    await key("Enter"); await visible("Provider directory · models.dev")
+    await key("Down", "Down"); await key("Enter"); await closed()
+    expect(config().subscriptionAgent).toBe("claude-code")
+    await openConnect(); await visible("Claude Code · active local CLI"); await key("Escape")
+    await command("/model")
+    const nativeModel = await visible("Current: Claude Code")
+    expect(nativeModel).not.toContain(" (current)")
   } finally {
     if (process.env.ZAPCODE_PROVIDER_EVIDENCE_DIR) writeFileAtomic(join(process.env.ZAPCODE_PROVIDER_EVIDENCE_DIR, "provider-onboarding.json"), JSON.stringify({ frames, requests }, null, 2))
     spawnSync("tmux", ["-L", socket, "kill-server"])

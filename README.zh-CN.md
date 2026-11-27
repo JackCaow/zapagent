@@ -68,9 +68,7 @@ zap --watch
 
 **3. 连接模型，描述任务**
 
-首次使用时，输入 `/connect`，按界面引导连接你的模型服务。使用 ChatGPT 账号时，选择 **New connection → OpenAI Codex (ChatGPT)**，支持浏览器 OAuth 和设备码登录，登录后选择模型。然后直接告诉它你要完成什么，例如：“阅读这个文件夹里的资料，整理重点并生成一份报告。”
-
-可以使用模型服务账号和 API Key，也可以通过 OAuth 登录 ChatGPT 账号使用 Codex；可用模型和用量取决于所选服务及账号。[连接指南](docs/usage.md#getting-started)。
+首次使用时输入 `/connect`。选择 API Key 连接可使用 Zap 自己的工具和 `/goal`。选择 **OpenAI Codex (ChatGPT)** 或 **Claude Code**，即可在 Zap 终端内与本机安装的官方 agent 对话。登录凭据和模型请求由对应 CLI 处理。[安装与连接指南](docs/usage.md#local-codex-and-claude-code-sessions)。
 
 在终端执行 `zap update` 检查并确认更新；脚本中可用 `zap update --yes` 跳过交互确认。
 

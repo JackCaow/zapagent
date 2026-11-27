@@ -7,7 +7,7 @@ import { modelReasoningFor } from "../../zapsdk/core/reasoning-effort.js"
 import { useEffect, useState } from "react"
 import { discoverCodexModels } from "../codex-provider.js"
 import {
-  effortModel,
+  agentManagingModel, effortModel,
   upsertProvider,
   getActiveProvider,
   getEffort,
@@ -53,6 +53,8 @@ export function ModeDialog({ config, onCommit, onCancel }: DialogProps) {
 // ── Effort picker ────────────────────────────────────────────────────────
 export function EffortDialog({ config, onCommit, onCancel }: DialogProps) {
   const provider = getActiveProvider(config)
+  const agent = agentManagingModel(config)
+  if (agent) return <PickerDialog title="Reasoning effort" options={[{ id: "agent", label: `Managed by ${agent}`, disabled: true }]} onCancel={onCancel} onSelect={onCancel} />
   // A changed connection remounts the fetch and picker, including its cursor.
   return <ModelEffortDialog key={provider ? `${provider.id}:${effortModel(config, provider)}` : "none"}
     config={config} onCommit={onCommit} onCancel={onCancel} />

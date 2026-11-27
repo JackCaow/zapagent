@@ -2,7 +2,7 @@
 import { useRef, useState } from "react"
 import { Box, Text, useInput } from "ink"
 import { randomUUID } from "node:crypto"
-import { buildConnectedProvider, inferLegacyContextWindowMode, presetForConnection, removeProvider, upsertProvider,
+import { conversationAgentId, buildConnectedProvider, inferLegacyContextWindowMode, presetForConnection, removeProvider, upsertProvider,
   type AppConfig, type ContextWindowMode, type Provider, type ProviderProtocol } from "../config.js"
 import { ProviderDirectory } from "./provider-directory.js"
 import { DialogFrame } from "./dialog-frame.js"
@@ -15,7 +15,7 @@ import { ContextWindowDialog } from "./dialog-context-window.js"
 import { CodexLoginDialog } from "./dialog-codex-login.js"
 import { connectCodexProvider } from "../codex-provider.js"
 
-interface Props { config: AppConfig; onSave: (next: AppConfig) => void; onCommit: (next: AppConfig) => void; onCancel: () => void }
+interface Props { onAgentSelected?: (message: string) => void; config: AppConfig; onSave: (next: AppConfig) => void; onCommit: (next: AppConfig) => void; onCancel: () => void }
 type Draft = { name: string; baseURL: string; apiKey: string; protocol: ProviderProtocol;
   authMode: "none" | "api-key"; catalogProviderId?: string; existing?: Provider;
   contextWindow?: number; contextWindowMode?: ContextWindowMode }
@@ -46,7 +46,7 @@ export function saveConnection(config: AppConfig, draft: Draft): AppConfig {
 }
 
 /** Persist the connection first, then guide new connections through model selection. */
-export function ConnectDialog({ config, onSave, onCommit, onCancel }: Props) {
+export function ConnectDialog({ onAgentSelected, config, onSave, onCommit, onCancel }: Props) {
   const [step, setStep] = useState<Step>("connections")
   const [index, setIndex] = useState(0)
   const [deleting, setDeleting] = useState(false)
@@ -91,9 +91,10 @@ export function ConnectDialog({ config, onSave, onCommit, onCancel }: Props) {
     hint={deleting ? "d confirm removal · esc cancel" : "↑↓ navigate · enter/e edit · m models · d remove · esc close"}>
     <Text color={c.text.faint}>Add a connection, then choose its model. Press m to manage models for an existing connection.</Text>
     <Box flexDirection="column" marginTop={1}>
+      {conversationAgentId(config) === "claude-code" && <Text color={c.accent}>Claude Code · active local CLI</Text>}
       {config.providers.map((provider, i) => <Box key={provider.id} flexDirection="column">
         <Text color={i === index ? c.accent : c.text.primary}>{`${i === index ? "›" : " "} ${provider.name || "Unnamed connection"}`}</Text>
-        <Text color={c.text.faint}>{`  ${provider.authMode === "codex-oauth" ? "Codex Responses · ChatGPT OAuth" : `${provider.protocol ?? "openai"} · ${provider.apiKey ? "API key stored" : "no key"}`} · ${provider.models.length} saved models`}</Text>
+        <Text color={c.text.faint}>{`  ${provider.authMode === "codex-oauth" ? "Official Codex agent · local CLI login" : `${provider.protocol ?? "openai"} · ${provider.apiKey ? "API key stored" : "no key"}`} · ${provider.models.length} saved models`}</Text>
         <Text color={c.text.faint}>{`  ${provider.baseURL}`}</Text>
       </Box>)}
       <Text color={index === config.providers.length ? c.accent : c.text.primary}>{`${index === config.providers.length ? "›" : " "} + New connection`}</Text>
@@ -107,7 +108,10 @@ export function ConnectDialog({ config, onSave, onCommit, onCancel }: Props) {
     setModelTarget({ id: result.provider.id, setup: true })
   }} />
 
-  if (step === "preset") return <ProviderDirectory onCodex={() => setStep("codex")}
+  if (step === "preset") return <ProviderDirectory onCodex={() => setStep("codex")} onClaude={() => {
+    onCommit({ ...config, activeAgent: undefined, subscriptionAgent: "claude-code" })
+    onAgentSelected?.("agent → Claude Code")
+  }}
     onCancel={() => setStep("connections")} onSelect={provider => {
       setDraft({ catalogProviderId: provider?.id, name: provider?.name ?? "", baseURL: provider?.api ?? "", apiKey: "",
         protocol: provider?.protocol ?? "openai", authMode: "api-key" })

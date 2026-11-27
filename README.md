@@ -70,9 +70,7 @@ Interact in the terminal and follow task progress in the live browser view.
 
 On first use, enter `/connect` and follow the setup prompts to connect your model service. Then describe what you want: “Read the materials in this folder, summarize the key points, and write a report.”
 
-Use your model service account and API key, or select **OpenAI Codex (ChatGPT)**
-to sign in with a ChatGPT account using OAuth. Codex connections also support image generation: ask Zap to create an image and save it to a new `.png` file. [Image generation](docs/usage.md#image-generation-with-codex). Usage and model access depend on
-your provider/account. [Connection guide](docs/usage.md#getting-started).
+Use an API key for Zap's own agent, or choose **OpenAI Codex (ChatGPT)** or **Claude Code** to run the installed agent inside Zap. The local CLI handles authentication and model requests. [Connection guide](docs/usage.md#local-codex-and-claude-code-sessions).
 
 Update from your terminal with `zap update` (or `zap update --yes` for unattended installation).
 
@@ -97,7 +95,7 @@ Git workspaces also require [Git](https://git-scm.com).
 | Linux | [ARM64](https://github.com/JackCaow/zapagent/releases/latest/download/zap-linux-arm64) · [x64](https://github.com/JackCaow/zapagent/releases/latest/download/zap-linux-x64) |
 | Windows | [x64](https://github.com/JackCaow/zapagent/releases/latest/download/zap-windows-x64.exe) |
 
-**Model configuration** — use `/model` to choose a model and `/effort` to adjust supported reasoning settings. For custom services, enter the Base URL and API key in `/connect` and select the service's API protocol; choose **OpenAI Responses** for a Responses endpoint. [Responses configuration](docs/usage.md#openai-responses-api). Codex OAuth reads reasoning levels, descriptions and the default from the current model’s authenticated catalog. Choices are saved per model; **default** (or `/effort off`) lets the server choose. Saved capabilities remain available offline. [Terminal recording](docs/recordings/model-effort.cast).
+**Model configuration** — use `/model` to choose a model and `/effort` to adjust supported reasoning settings. For custom services, enter the Base URL and API key in `/connect` and select the service's API protocol; choose **OpenAI Responses** for a Responses endpoint. [Responses configuration](docs/usage.md#openai-responses-api). Zap reads Codex reasoning levels and defaults from the local CLI catalog. Choices are saved per model; **default** (or `/effort off`) lets the server choose. Saved capabilities remain available offline. [Terminal recording](docs/recordings/model-effort.cast).
 
 **From source** — the repository pins Bun 1.3.14:
 

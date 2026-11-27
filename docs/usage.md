@@ -75,68 +75,42 @@ Supported providers:
 - OpenAI Responses (`/responses`)
 - Compatible endpoints using either OpenAI protocol
 
-### Codex with a ChatGPT account
+### Local Codex and Claude Code sessions
 
-In `/connect`, select **New connection → OpenAI Codex (ChatGPT)**, then choose
-browser login or device code. After authorization, select a model from the
-account catalog or enter an exact model ID in `/model`. A completed inference
-request verifies access to that model.
+In the Zap terminal, open `/connect → New connection` and choose **OpenAI Codex
+(ChatGPT)** or **Claude Code**. Each turn runs in the local agent. Zap displays
+its messages, tool events and permission requests. The CLI owns its credentials,
+model requests, available tools and account usage.
 
-The same login is available from the command line (use `zapdev` for this source checkout):
+* **Codex.** Install the official CLI and the ACP adapter with
+  `npm install -g @openai/codex @agentclientprotocol/codex-acp`. Run `codex login`
+  or use Zap's Codex login picker, then choose a model with `/model`. The adapter
+  starts Codex app-server locally. Zap requests its read-only sandbox in default
+  and plan modes. With `/mode acceptEdits` or bypass mode, Codex can write in its
+  workspace. An escalation request goes through Zap's approval gate.
+  Existing Zap Codex connections automatically use this route. If only Zap held
+  a login before upgrading, sign in once with the official CLI. Zap ignores its
+  old credential file. `zap auth status codex` checks the native login.
+  **`zap auth logout codex` signs the local Codex CLI out too** and removes the
+  old Zap credential file after successful logout.
+* **Claude Code.** Install Anthropic's CLI and sign in directly using
+  `claude auth login`. Select **Claude Code** in Zap or use `/agent claude-code`
+  for this session. Zap starts the installed `claude` executable in stream-JSON
+  mode and resumes its native session for follow-ups. Each user authenticates
+  directly with Anthropic. [Claude Code authentication](https://code.claude.com/docs/en/authentication)
+  · [Anthropic's conditions for embedding Claude Code](https://code.claude.com/docs/en/legal-and-compliance).
 
-```bash
-zapdev auth login codex
-zapdev auth login codex --device-code
-zapdev auth status codex
-zapdev auth logout codex
-```
+External agents run on the host and can perform actions under their own permission
+rules. Zap checkpoints cover writes through its file handlers. Setting
+`allowUnsandboxedCommands` to `false` blocks both agents. Zap saves the displayed
+transcript. Restoring that transcript, starting a new conversation, or switching
+agents starts a fresh native context. Changing the Codex sandbox, model or reasoning effort
+also starts a new native session.
 
-Browser login uses localhost port 1455. Use device code for SSH sessions or a
-busy callback port. Zap saves OAuth credentials separately in `codex-oauth.json`
-under its data directory (`ZAPCODE_DATA_DIR` can override it), with owner-only
-file permissions, and refreshes expiring tokens automatically. Logout removes
-Zap's credentials. Saved connections use `authMode: "codex-oauth"` and
-`protocol: "openai-responses"`; the API key stays empty. This is the native-client
-Codex OAuth flow, similar to OpenCode's legacy Codex login, and requires no
-local Codex CLI installation.
-
-### Image generation with Codex
-
-After connecting a Codex OAuth account, ask Zap to create an image, for example:
-
-```text
-Create a simple blue-and-white illustration for my landing page and save it to assets/hero.png.
-```
-
-The agent calls `generate_image` with a visual prompt and a new `.png`
-`output_path`. The tool supports `quality` (`auto`, `low`, `medium`, `high`),
-`size` (`auto`, `1024x1024`, `1536x1024`, `1024x1536`) and `background`
-(`auto`, `opaque`, `transparent`). The service may return different pixel
-sizes; Zap reports the actual dimensions. This tool creates new images; PNG
-is its output format.
-
-Generation uses the connected account's image usage limits. Ordinary tool
-approval, plan mode, workspace write grants and protected paths apply. Existing
-files are never replaced. The TUI displays a thumbnail and saved path; ACP clients
-receive image content, and headless JSON/stream-JSON returns a `generatedImage`
-artifact with paths, dimensions, byte count and digest.
-
-Completed images are also retained in `generated-images/<sha256>.png` under
-`ZAPCODE_DATA_DIR` (or the normal Zap data directory). If the workspace write
-fails, the result includes this recovery path; copy that image instead of
-regenerating it. These artifacts are not automatically pruned. Removing that
-directory manually frees its storage; workspace image files remain. Session
-restore verifies cached images by digest and restores up to four recent images
-within a 16 MiB total budget. Missing/corrupt artifacts retain their history text.
-
-The host-owned Codex image request uses a fixed authenticated endpoint, no
-transparent retries, a five-minute timeout, a 32 MiB response bound and an
-8 MiB PNG bound (up to 4096 pixels on each side). This provider request has a
-separate byte budget from ordinary HTTP tools; workspace writes still use the
-execution broker's file budget. Image capabilities depend on the selected Codex
-model and account. Other provider connections do not register this tool.
-
-[Terminal recording](recordings/image-generation.cast).
+For Zap's own tools, `/goal`, and `zap -p`, select an API connection in `/model`.
+For noninteractive native usage, run `codex exec` or `claude --print`.
+Image generation in a subscription session depends on the native agent's tools.
+Previously saved image artifacts remain available in Zap history.
 
 ### OpenAI Responses API
 
@@ -198,7 +172,7 @@ also skip CI, headless output and ACP; explicit `zap update` still checks.
 | `/connect` | Set up provider & API key |
 | `/model` | Search and switch models across all configured connections |
 | `/effort` | Set reasoning effort (`off`, `cycle`, or a provider value) |
-| `/agent` | List external ACP agents (`agy`, `codex`); `/agent <id>` sends messages to that agent, `/agent zap` switches back |
+| `/agent` | List conversation agents (`agy`, `codex`, `claude-code`); `/agent <id>` sends messages to that agent, `/agent zap` switches back |
 | `/mode` | Set permission mode (`default`, `acceptEdits`, `plan`, `bypass`) or a preset: `strict`, `balanced`, `autonomous` |
 | `/permissions` | Manage active permission rules |
 | `/sessions` | Browse saved sessions |

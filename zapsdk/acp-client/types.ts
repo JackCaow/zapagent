@@ -26,6 +26,8 @@ export interface AcpAgentSpec {
   model?: string;
   /** Session mode to select after session/new (`session/set_mode`). */
   mode?: string;
+  /** Reject the session if a requested mode, model or config option is refused. */
+  requireSettings?: boolean;
   /** Session config options to apply after session/new
    * (`session/set_config_option`), e.g. `{ thought_level: "high" }`. */
   config?: Record<string, string>;

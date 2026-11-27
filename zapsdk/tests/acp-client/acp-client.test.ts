@@ -7,7 +7,7 @@ import { spawn } from "node:child_process";
 import type { RequestPermissionResponse } from "@agentclientprotocol/sdk";
 import type { AgentEvent } from "../../agent/events.js";
 import type { ApprovalCallback } from "../../tools/executor.js";
-import { AcpEventMapper } from "../../acp-client/event-mapper.js";
+import { acpUsage, AcpEventMapper } from "../../acp-client/event-mapper.js";
 import { inProcessTransport, stdioTransport } from "../../acp-client/connection.js";
 import { createAcpHostHandlers } from "../../acp-client/host-handlers.js";
 import { runAcpTask } from "../../acp-client/run.js";
@@ -31,6 +31,14 @@ function approver(decide: (name: string, args: Record<string, unknown>) => boole
 }
 
 describe("AcpEventMapper", () => {
+  it("preserves both disjoint and inclusive ACP cache counters", () => {
+    const counts = { totalTokens: 104, outputTokens: 4, cachedReadTokens: 88, cachedWriteTokens: 9 };
+    expect(acpUsage({ ...counts, inputTokens: 103, totalTokens: 229, thoughtTokens: 25 })?.inputTokens).toBe(103);
+    expect(acpUsage({ ...counts, inputTokens: 3, totalTokens: 999 })?.inputTokens).toBe(3);
+    for (const inputTokens of [3, 100]) expect(acpUsage({ ...counts, inputTokens })).toMatchObject({
+      inputTokens: 3, outputTokens: 4, cacheReadInputTokens: 88, cacheCreationInputTokens: 9,
+    });
+  });
   it("streams thinking and text, seals in order, and pairs tool calls", () => {
     const mapper = new AcpEventMapper(["sub"]);
     const events = [
@@ -153,6 +161,21 @@ describe("runAcpTask (in-process agent)", () => {
     } finally { await rm(cwd, { recursive: true, force: true }); }
   });
 
+  it("declines declared mutations of workspace controls before requesting approval", async () => {
+    const cwd = await tempDir();
+    try {
+      const { approve, calls } = approver(() => true);
+      const handlers = createAcpHostHandlers({ agentId: "fake", cwd, approve });
+      for (const kind of ["edit", "move", "delete"] as const) {
+        const result = await handlers.requestPermission!({
+          sessionId: "test", toolCall: { toolCallId: "change", kind, locations: [{ path: join(cwd, ".zapcode", "settings.json") }] },
+          options: [{ optionId: "no", kind: "reject_once", name: "Reject" }],
+        }, new AbortController().signal);
+        expect(result.outcome).toEqual({ outcome: "selected", optionId: "no" });
+      }
+      expect(calls).toHaveLength(0);
+    } finally { await rm(cwd, { recursive: true, force: true }); }
+  });
   it("maps permission requests: commands become bash, others are namespaced; zap never grants 'always'", async () => {
     const cwd = await tempDir();
     try {
