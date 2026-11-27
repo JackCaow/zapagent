@@ -796,6 +796,11 @@ export function conversationAgentId(config: AppConfig): string | undefined {
   return config.activeAgent ?? config.subscriptionAgent ?? (getActiveProvider(config)?.authMode === "codex-oauth" ? "codex" : undefined)
 }
 
+export function codexSandboxMode(mode: PermissionMode, configuredMode?: string): "workspace-write" | "read-only" {
+  const allowsEdits = mode === "acceptEdits" || mode === "bypassPermissions"
+  return allowsEdits && configuredMode !== "read-only" ? "workspace-write" : "read-only"
+}
+
 /** External agents without a bound provider select their own model and effort. */
 export function agentManagingModel(config: AppConfig): string | undefined {
   const agent = conversationAgentId(config)

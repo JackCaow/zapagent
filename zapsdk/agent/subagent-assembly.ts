@@ -30,6 +30,7 @@ export function assembleSubagentTool(input: AssemblyInput): { registry: ToolRegi
     maxDepth: config.maxDepth,
     onApproval: executor.onApproval,
     executorOptions: {
+      actor: executor.actor,
       timeoutMs: executor.timeoutMs,
       checkpointMode: executor.checkpointMode,
       postProcess: executor.postProcess,

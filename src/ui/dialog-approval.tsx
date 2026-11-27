@@ -52,6 +52,7 @@ interface Props {
   repeats?: number
   availableTools?: string[]
   cwd?: string
+  requester?: string
   workspaceRoot?: string
   onGrant?: (request: ToolGrantRequest, availableTools: string[], reviewedRules?: readonly PermissionRule[]) => string | void
 }
@@ -61,7 +62,7 @@ interface Option {
   label: string
 }
 
-export function ApprovalBar({ toolName, args, onChoose, rulePreview, unsandboxed: escape, allowScope = true, repeats = 0, availableTools = [], cwd, workspaceRoot, onGrant }: Props) {
+export function ApprovalBar({ toolName, args, onChoose, rulePreview, unsandboxed: escape, allowScope = true, repeats = 0, availableTools = [], cwd, workspaceRoot, requester, onGrant }: Props) {
   useHideNativeCursor()
   // Three accept tiers ("once" / session-scoped "always" / persistent
   // "forever") + deny. Both persistent consent and ordinary tool grants
@@ -134,7 +135,7 @@ export function ApprovalBar({ toolName, args, onChoose, rulePreview, unsandboxed
           ? <Text key={field} color={c.warning}>{label}: {JSON.stringify(args[field])}</Text> : null)}
       {request && typeof args.reason === "string" && <Text color={c.text.secondary} wrap="truncate-end">{`Reason: ${args.reason.replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ")}`}</Text>}
       {unsandboxed && <Text color={c.error}>Runs outside the OS sandbox: full access to your files and network.</Text>}
-      <Text color={c.warning} bold>Approve?</Text>
+      <Text color={c.warning} bold>{requester ? `Approve request from ${requester}?` : "Approve?"}</Text>
       <Box flexDirection="column">
         {options.map((opt, i) => {
           const active = i === idx

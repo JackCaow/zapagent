@@ -1,7 +1,7 @@
 import { readFile, realpath } from "node:fs/promises"
 import { basename, dirname, join, resolve } from "node:path"
 import type { AcpAgentSpec } from "../../zapsdk/acp-client/types.js"
-import { getActiveProvider, getEffort, type AppConfig } from "../config.js"
+import { codexSandboxMode, getActiveProvider, getEffort, type AppConfig } from "../config.js"
 import { which } from "../../zapsdk/builtin-tools/delegate-detect.js"
 
 const packages = {
@@ -71,12 +71,11 @@ export async function codexConversationSpec(config: AppConfig, detected?: AcpAge
   const custom = subscription ? undefined : config.acpAgents?.find(agent => agent.id === "codex")
   const spec = custom ? detected : undefined
   const cli = spec && custom?.command !== "codex-acp" ? spec : await nativeCommand("codex-acp")
-  const allowEdits = config.permissionMode === "acceptEdits" || config.permissionMode === "bypassPermissions"
   const effort = subscription ? getEffort(config, provider.id) : undefined
   return {
     ...spec, id: "codex", command: cli.command,
     args: cli === spec ? cli.args : [...(cli.args ?? []), ...(spec?.args ?? [])],
-    requireSettings: true, mode: allowEdits && spec?.mode !== "read-only" ? "workspace-write" : "read-only",
+    requireSettings: true, mode: codexSandboxMode(config.permissionMode, spec?.mode),
     model: subscription ? config.active.model || undefined : spec?.model,
     config: effort ? { reasoning_effort: effort } : spec?.config,
   }

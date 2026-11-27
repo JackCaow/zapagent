@@ -18,14 +18,15 @@ export function mergeAgentArtifactsTool(options: MergeAgentArtifactsToolOptions)
         artifact_ids: z.array(z.string()).min(1).max(16),
       }),
       permission: "confirm",
-      resolveEffects: () => ({
-        filesystem: [],
-        network: [],
-        process: [],
-        external: [],
-        workspace: { mode: "root-integration" },
-        confidence: "declared",
-      }),
+      resolveEffects: args => {
+        const paths = options.coordinator.ordinaryEditPaths(args.artifact_ids as string[]);
+        return {
+          filesystem: paths.length ? [{ kind: "filesystem", operation: "modify", paths }] : [],
+          network: [], process: [], external: [],
+          workspace: { mode: "root-integration" },
+          confidence: "declared",
+        };
+      },
     },
     handler: async (args) => {
       const artifactIds = args.artifact_ids as string[];

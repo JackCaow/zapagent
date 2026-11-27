@@ -33,12 +33,13 @@ interface LiveSession {
  * conversation is reset, after a failed turn, and at exit. */
 export class RemoteAgentManager {
   private live?: LiveSession
-  private starting?: { key: string; promise: Promise<LiveSession> }
   /** Bumped by reset(); a start that outlives its generation is discarded. */
   private generation = 0
   private readonly transports = new Set<AcpTransport>()
   /** Signal of the turn in flight; approval prompts close when it aborts. */
+  private busy = false
   private turnSignal?: AbortSignal
+  private readonly inactive = AbortSignal.abort()
   readonly host: RemoteAgentHost = {}
 
   constructor(private readonly transportFor: (spec: AcpAgentSpec, cwd: string) => AcpTransport = spawnTransport) {}
@@ -57,28 +58,39 @@ export class RemoteAgentManager {
     /** Called once the agent is ready and the prompt is about to be sent. */
     onAccepted?: () => void
   }): Promise<AcpTurnResult & { session: AcpAgentSession }> {
-    const live = await this.ensure(spec, cwd, options.signal, options.onStarted)
-    const content: ContentBlock[] = [{ type: "text", text }]
-    if (images?.length) {
-      if (!live.session.supportsImages) throw new Error(`${spec.id} does not accept images`)
-      for (const image of images) {
-        const data = image.base64 ?? (await readFile(image.filePath)).toString("base64")
-        content.push({ type: "image", data, mimeType: image.mediaType })
-      }
-    }
-    options.onAccepted?.()
-    this.turnSignal = options.signal
+    if (this.busy) throw new Error("An external agent turn is already in progress")
+    this.busy = true
+    const turn = new AbortController()
+    let live: LiveSession | undefined
+    let sent = false
     try {
+      options.signal.throwIfAborted()
+      live = await this.ensure(spec, cwd, options.signal, options.onStarted)
+      const content: ContentBlock[] = [{ type: "text", text }]
+      if (images?.length) {
+        if (!live.session.supportsImages) throw new Error(`${spec.id} does not accept images`)
+        for (const image of images) {
+          const data = image.base64 ?? (await readFile(image.filePath)).toString("base64")
+          content.push({ type: "image", data, mimeType: image.mediaType })
+        }
+      }
+      options.signal.throwIfAborted()
+      if (this.live !== live) throw new Error(`${spec.id} session was closed`)
+      this.turnSignal = AbortSignal.any([options.signal, turn.signal])
+      options.onAccepted?.()
+      sent = true
       const result = await live.session.prompt(content, { signal: options.signal, onEvent: options.onEvent, onContextUsage: options.onContextUsage })
       return { ...result, session: live.session }
     } catch (error) {
       // A cooperative cancel resolves with stopReason "cancelled"; a throw
       // means the agent died, failed, or ignored cancellation and may still
       // be working. Never reuse it for the next turn.
-      if (this.live === live) await this.reset()
+      if (sent && live && this.live === live) await this.reset()
       throw error
     } finally {
+      turn.abort()
       this.turnSignal = undefined
+      this.busy = false
     }
   }
 
@@ -87,7 +99,6 @@ export class RemoteAgentManager {
     this.generation += 1
     const live = this.live
     this.live = undefined
-    this.starting = undefined
     await live?.session.close().catch(() => {})
   }
 
@@ -98,44 +109,50 @@ export class RemoteAgentManager {
 
   private async ensure(spec: AcpAgentSpec, cwd: string, signal: AbortSignal, onStarted?: (session: AcpAgentSession) => void): Promise<LiveSession> {
     if (this.host.blocked) throw new Error(this.host.blocked)
-    const key = JSON.stringify([spec.id, spec.command, spec.args ?? [], spec.requireSettings, spec.mode, spec.model, spec.config, cwd])
-    // Let a start for another agent settle (and be replaced) first.
-    while (this.starting && this.starting.key !== key) await this.starting.promise.catch(() => {})
-    if (this.live?.key === key) return this.live
-    if (this.starting) return this.starting.promise
+    const key = JSON.stringify([spec.id, spec.command, spec.args ?? [], spec.requireSettings, spec.env, spec.model, spec.config, cwd])
+    const live = this.live
+    if (live?.key === key) {
+      if (live.spec.mode === spec.mode && (!spec.mode || live.session.currentModeId === spec.mode)) return live
+      if (spec.mode) {
+        try {
+          await live.session.setMode(spec.mode, { signal, timeoutMs: 60_000 })
+        } catch (error) {
+          // A lost acknowledgement leaves the native session's permissions unknown.
+          if (this.live === live) await this.reset()
+          throw error
+        }
+        live.spec = spec
+        return live
+      }
+      // ACP has no operation to restore an agent's unspecified startup mode.
+    }
     if (this.live) await this.reset()
     const generation = this.generation
-    const promise = (async () => {
-      const handlers = createAcpHostHandlers({
-        agentId: spec.id, cwd,
-        approve: Object.assign(
-          (name: string, args: Record<string, unknown>, s?: AbortSignal, context?: Readonly<ApprovalContext>) => this.host.approve
-            ? this.host.approve(name, args, s, context)
-            : Promise.resolve({ approved: false as const, source: "policy" as const, reason: "no approval handler" }),
-          { precheck: (name: string, args: Record<string, unknown>, context?: Readonly<ApprovalContext>) =>
-            this.host.approve?.precheck?.(name, args, context) },
-        ),
-        trackEdit: paths => this.host.trackEdit?.(paths) ?? Promise.resolve(),
-        signal: () => this.turnSignal,
-      })
-      const transport = this.transportFor(spec, cwd)
-      this.transports.add(transport)
-      void transport.exited.then(() => this.transports.delete(transport))
-      const session = await AcpAgentSession.start({ spec, cwd, transport, handlers, signal, clientVersion: VERSION })
-      if (generation !== this.generation) {
-        // reset() ran while the agent was starting (/agent, /new, abort).
-        await session.close().catch(() => {})
-        throw new Error(`${spec.id} start was cancelled`)
-      }
-      const live = { key, spec, session, handlers }
-      this.live = live
-      onStarted?.(session)
-      return live
-    })()
-    const starting = { key, promise }
-    this.starting = starting
-    try { return await promise }
-    finally { if (this.starting === starting) this.starting = undefined }
+    const handlers = createAcpHostHandlers({
+      agentId: spec.id, cwd,
+      approve: Object.assign(
+        (name: string, args: Record<string, unknown>, s?: AbortSignal, context?: Readonly<ApprovalContext>) => this.host.approve
+          ? this.host.approve(name, args, s, context)
+          : Promise.resolve({ approved: false as const, source: "policy" as const, reason: "no approval handler" }),
+        { precheck: (name: string, args: Record<string, unknown>, context?: Readonly<ApprovalContext>) =>
+          this.host.approve?.precheck?.(name, args, context) },
+      ),
+      trackEdit: paths => this.host.trackEdit?.(paths) ?? Promise.resolve(),
+      signal: () => generation === this.generation && this.turnSignal ? this.turnSignal : this.inactive,
+    })
+    const transport = this.transportFor(spec, cwd)
+    this.transports.add(transport)
+    void transport.exited.then(() => this.transports.delete(transport))
+    const session = await AcpAgentSession.start({ spec, cwd, transport, handlers, signal, clientVersion: VERSION })
+    if (generation !== this.generation) {
+      // reset() ran while the agent was starting (/agent, /new, abort).
+      await session.close().catch(() => {})
+      throw new Error(`${spec.id} start was cancelled`)
+    }
+    const started = { key, spec, session, handlers }
+    this.live = started
+    onStarted?.(session)
+    return started
   }
 }
 

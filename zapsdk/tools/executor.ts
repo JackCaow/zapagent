@@ -44,6 +44,7 @@ export type ApprovalResponse = boolean | ApprovalDenial;
 /** Executor-owned path facts, separate from model-authored tool arguments.
  * These are host workspace paths; they do not describe a remote filesystem. */
 export interface ApprovalContext {
+  readonly actor?: Readonly<AgentIdentity>;
   readonly cwd: string;
   readonly workspaceRoot: string;
   readonly shell: Readonly<ShellExecutionEnvironment>;
@@ -303,6 +304,8 @@ export class ToolExecutor {
   get policyEngine(): ToolPolicyEngine { return this._policyEngine; }
   get executionBroker(): ExecutionBroker { return this._executionBroker; }
   get executionAdmission(): ToolExecutorOptions["admitExecution"] { return this._admitExecution; }
+  get actor(): Readonly<AgentIdentity> | undefined { return this._actor; }
+  withActor(actor: AgentIdentity): ToolExecutor { return this.clone(this.registry, { actor: Object.freeze({ ...actor }) }); }
   get workspaceGate(): WorkspaceExecutionGate | undefined { return this._workspaceGate; }
   get workspace(): Readonly<WorkspaceIdentity> { return { ...this._workspace,
     ...(this._workspace.protectedWorkspacePaths ? { protectedWorkspacePaths: [...this._workspace.protectedWorkspacePaths] } : {}) }; }
@@ -910,7 +913,7 @@ export class ToolExecutor {
       shell = this._executionBroker.shellEnvironment?.({ name, executionLocation: tool.definition.executionLocation }) ?? shell;
     } catch { /* Unavailable facts do not imply a host filesystem. */ }
     const approvalContext = Object.freeze({
-      cwd: this._cwd, workspaceRoot: this._workspace.root, shell: Object.freeze({ ...shell }),
+      actor: this._actor, cwd: this._cwd, workspaceRoot: this._workspace.root, shell: Object.freeze({ ...shell }),
       authorization: resolveToolApprovalFacts(tool.definition, parsedArgs, effects),
     });
     const approvalId = context?.toolCallId

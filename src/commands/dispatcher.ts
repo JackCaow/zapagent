@@ -88,6 +88,7 @@ export type DialogId =
   | "update"
   | "connect"
   | "model"
+  | "workspace-access"
   | "mode"
   | "effort"
   | "sessions"
@@ -118,6 +119,7 @@ export interface DispatchSlashCommandDeps {
   setDialog: (id: DialogId) => void
   addLog: AddLog
   configRef: React.MutableRefObject<AppConfig>
+  openWorkspaceAccess?: (task: string) => void
   updateConfig: (next: AppConfig) => void
   addToast: (text: string, options?: ToastOptions) => void
   /** Current in-memory transcript. Used by /copy-input to copy the latest
@@ -397,6 +399,7 @@ export function dispatchSlashCommand(
     case "open_update":      deps.setDialog("update");      return true
     case "open_connect":     deps.setDialog("connect");     return true
     case "open_model_picker":deps.setDialog("model");       return true
+    case "open_workspace_access": deps.openWorkspaceAccess?.(cmd.value ?? ""); return true
     case "open_mode_picker": deps.setDialog("mode");        return true
     case "open_sessions":    deps.setDialog("sessions");    return true
     case "open_queue":       deps.setDialog("queue");       return true

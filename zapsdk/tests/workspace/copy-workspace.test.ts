@@ -44,6 +44,8 @@ describe("non-Git writing workspaces", () => {
     writeFileSync(join(lease.path, "requirements.txt"), "packaging==24.2\n");
     const artifact = (await manager.finalize(lease))!;
     expect(artifact.changedPaths).toEqual(["requirements.txt"]);
+    expect(manager.ordinaryArtifactPaths([artifact.artifactId])).toEqual([join(manager.rootRepoPath(), "requirements.txt")]);
+    expect(manager.ordinaryArtifactPaths([artifact.artifactId, "unknown"])).toEqual([]);
     expect((await new MergeCoordinator(manager).merge([artifact.artifactId])).success).toBe(true);
     expect(existsSync(join(root, ".venv", "bin", "python"))).toBe(true);
     expect(existsSync(join(lease.path, "custom-env", "bin", "python"))).toBe(true);
@@ -158,6 +160,7 @@ describe("non-Git writing workspaces", () => {
     writeFileSync(join(lease.path, "replace"), "now a file");
     const artifact = (await manager.finalize(lease))!;
     expect((await new MergeCoordinator(manager).merge([artifact.artifactId])).success).toBe(true);
+    expect(manager.ordinaryArtifactPaths([artifact.artifactId])).toEqual([]);
     expect(readFileSync(join(root, "replace"), "utf8")).toBe("now a file");
     expect(existsSync(join(root, "remove"))).toBe(false);
   });

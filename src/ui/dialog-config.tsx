@@ -18,6 +18,8 @@ import {
 } from "../config.js"
 import { PickerDialog, type PickerOption } from "./dialog-picker.js"
 
+import type { WorkspaceChoice } from "../workspace-access.js"
+
 interface DialogProps {
   config: AppConfig
   onCommit: (next: AppConfig) => void
@@ -26,28 +28,30 @@ interface DialogProps {
 
 // ── Mode picker ──────────────────────────────────────────────────────────
 const MODES: { id: PermissionMode; label: string; meta: string }[] = [
-  { id: "default",           label: "default",            meta: "strict: ask before write/edit/exec" },
-  { id: "acceptEdits",       label: "acceptEdits",        meta: "balanced: auto-approve file edits" },
-  { id: "plan",              label: "plan",               meta: "research only — no edits or commands" },
-  { id: "bypassPermissions", label: "bypassPermissions",  meta: "autonomous: auto-approve everything (use with care)" },
+  { id: "default",           label: "default",            meta: "use access granted for this task or project" },
+  { id: "acceptEdits",       label: "acceptEdits",        meta: "approve file edits automatically" },
+  { id: "plan",              label: "plan",               meta: "read-only research" },
+  { id: "bypassPermissions", label: "bypassPermissions",  meta: "approve ordinary requests automatically" },
 ]
 
 export function ModeDialog({ config, onCommit, onCancel }: DialogProps) {
-  const options: PickerOption[] = MODES.map(m => ({
-    id: m.id,
-    label: m.label,
-    meta: m.id === config.permissionMode ? `${m.meta} (current)` : m.meta,
-  }))
-  const initial = MODES.findIndex(m => m.id === config.permissionMode)
-  return (
-    <PickerDialog
-      title="Permission mode"
-      options={options}
-      initialIndex={Math.max(0, initial)}
-      onCancel={onCancel}
-      onSelect={(id) => onCommit({ ...config, permissionMode: id as PermissionMode })}
-    />
-  )
+  const options = MODES.map(mode => mode.id === config.permissionMode ? { ...mode, meta: mode.meta + " (current)" } : mode)
+  return <PickerDialog title="Permission mode" options={options}
+    initialIndex={MODES.findIndex(m => m.id === config.permissionMode)} onCancel={onCancel}
+    onSelect={id => onCommit({ ...config, permissionMode: id as PermissionMode })} />
+}
+
+export function WorkspaceAccessDialog({ cwd, remembered, onChoose, onCancel }: {
+  cwd: string; remembered: boolean; onChoose: (choice: WorkspaceChoice) => void; onCancel: () => void
+}) {
+  const options: PickerOption[] = [
+    { id: "task", label: "Start implementation", meta: "edit files and run project commands for this task" },
+    { id: "project", label: "Always allow work in this project" },
+    { id: "analyze", label: "Only analyze", meta: "keep project files unchanged" },
+  ]
+  if (remembered) options.push({ id: "revoke", label: "Forget project access and return to analysis" })
+  return <PickerDialog title={`Work in ${cwd}?`} options={options} onCancel={onCancel}
+    onSelect={id => onChoose(id as WorkspaceChoice)} />
 }
 
 // ── Effort picker ────────────────────────────────────────────────────────

@@ -6,6 +6,7 @@ import type { ConversationManager } from "../../zapsdk/memory/conversation.js"
 import type { AcpAgentSpec } from "../../zapsdk/acp-client/types.js"
 import type { StreamingPreview } from "./streamingPreview.js"
 import { createRunHandlers, type RunHandlersDeps } from "./wireRunHandlers.js"
+import type { WorkspaceCommand } from "./claude-workspace-shell.js"
 import { promptClaudeCode } from "./claude-code.js"
 import { AgentOutputThroughput } from "./outputThroughput.js"
 import { remoteAgents } from "./remote-agent.js"
@@ -13,6 +14,7 @@ import { remoteAgents } from "./remote-agent.js"
 export interface RemoteTurnDeps extends Omit<RunHandlersDeps, "preview" | "setContextTokens" | "setContextPending" | "currentConfig"> {
   currentConfig: RunHandlersDeps["currentConfig"]
   setRemoteContext: (usage: { used: number; size: number } | undefined) => void
+  workspaceCommand?: WorkspaceCommand
   nativeClaude?: boolean
   spec: AcpAgentSpec
   cwd: string
@@ -59,10 +61,13 @@ export async function runRemoteTurn(deps: RemoteTurnDeps, task: string, images?:
     }
     const turn = deps.nativeClaude ? await promptClaudeCode({
       command: spec.command, args: spec.args, cwd: deps.cwd, text: task, images, signal: controller.signal,
+      workspaceCommand: deps.workspaceCommand,
       plan: deps.currentConfig.permissionMode === "plan", approve: remoteAgents.host.approve,
       resume: previous?.cwd === deps.cwd && previous.epoch === epoch && previous.tip === deps.conversation.getTurns().at(-1) ? previous.sessionId : undefined,
       onEvent, onAccepted,
-    }) : await remoteAgents.prompt(spec, deps.cwd, task, images, {
+    }) : await remoteAgents.prompt(spec, deps.cwd,
+      spec.id === "codex" && deps.currentConfig.permissionMode === "plan"
+        ? `Answer the following request in analysis-only mode. Do not modify files or request write access in this turn.\n\n${task}` : task, images, {
       signal: controller.signal,
       onEvent,
       onAccepted,

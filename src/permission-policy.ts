@@ -2,6 +2,7 @@ import type { PermissionMode } from "./config.js"
 import { PermissionManager, isPathReadTool } from "./permissions.js"
 import type { ApprovalContext } from "../zapsdk/tools/executor.js"
 import { approvalFacts, isAcpAgentRequest } from "./approval-facts.js"
+import { splitShellSubcommands } from "../zapsdk/utils/shell.js"
 import { matchDangerousToolCall } from "../zapsdk/utils/safety.js"
 import { REQUEST_CAPABILITIES_TOOL, parseCapabilityRequest } from "./capabilities.js"
 
@@ -70,6 +71,10 @@ function decide(manager: PermissionManager, name: string, args: Record<string, u
   if (facts.shellCommands) {
     const danger = facts.shellCommands.map(command => matchDangerousToolCall({ ...args, command, check_steps: undefined }, options.context?.workspaceRoot ?? options.cwd, options.context?.cwd ?? options.cwd, options.context?.shell)).find(Boolean)
     if (danger) return result("ask", `dangerous bash (${danger.id})`, "dangerous")
+    if (options.mode === "acceptEdits" && facts.shellCommands.some(command =>
+      splitShellSubcommands(command, options.context?.shell.syntax).some(part => /^(?:git\s+push|(?:npm|pnpm|bun)\s+publish|gh\s+(?:release|pr)\s+create)(?:\s|$)/.test(part.trim())))) {
+      return result("ask", "publishing changes needs approval for this invocation")
+    }
   }
   const ask = rule.decision === "ask" && rule.rule ? rule : sandbox?.decision === "ask" && sandbox.rule ? sandbox : undefined
   if (ask) return result("ask", ask.reason ?? `ask rule ${ask.rule?.pattern}`, "rule")
@@ -98,6 +103,6 @@ function decide(manager: PermissionManager, name: string, args: Record<string, u
   // filesystem confinement remains the executor/backend's responsibility.
   if (isPathReadTool(name) && facts.readOnly) return result("allow", "read-only filesystem access")
   if (options.mode === "bypassPermissions") return result("allow", "bypassPermissions mode")
-  if (options.mode === "acceptEdits" && facts.editOnly) return result("allow", "acceptEdits mode")
+  if (options.mode === "acceptEdits" && facts.editOnly && manager.changesOnlyWorkspaceFiles(name, args, options.context)) return result("allow", "approved workspace edit")
   return result("ask", "no rule, prompting user", "fallback", true)
 }

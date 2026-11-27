@@ -30,6 +30,7 @@ export interface CommandResult {
     | "supertask_watch"
     | "run_skill"
     | "show_permissions"
+    | "open_workspace_access"
     | "open_mode_picker"
     | "set_permission_mode"
     | "clear_todos"
@@ -109,6 +110,7 @@ export function parseCommand(input: string): CommandResult | null {
           "",
           "  Permissions:",
           "  /permissions     — Manage active permission rules (interactive)",
+          "  /work [task]     — Start implementation in this project or manage access",
           "  /mode [name]     — Set permission mode (default | acceptEdits | plan | bypass; presets strict | balanced | autonomous)",
           "",
           "  Todos:",
@@ -206,6 +208,7 @@ export function parseCommand(input: string): CommandResult | null {
     case "agent":
       return { type: "set_agent", value: rest.trim() }
 
+    case "work": return { type: "open_workspace_access", value: rest.trim() }
     case "mode":
       if (!rest.trim()) return { type: "open_mode_picker" }
       return { type: "set_permission_mode", value: rest.trim() }

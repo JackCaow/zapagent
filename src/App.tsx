@@ -116,7 +116,8 @@ import { ConversationSurface } from "./ui/conversation-surface.js"
 import { SlashPalette } from "./ui/slash-palette.js"
 import { FilePalette } from "./ui/file-palette.js"
 import { ConnectDialog } from "./ui/dialog-connect.js"
-import { ModeDialog, EffortDialog } from "./ui/dialog-config.js"
+import { WorkspaceAccess, type WorkspaceChoice } from "./workspace-access.js"
+import { ModeDialog, WorkspaceAccessDialog, EffortDialog } from "./ui/dialog-config.js"
 import { ModelDialog } from "./ui/dialog-model.js"
 import { StatusDialog } from "./ui/dialog-status.js"
 import { loadSessionForDialog, type DialogSessionRestore, commitSessionForDialog, replaceConversationMessages, SessionsDialog } from "./ui/dialog-sessions.js"
@@ -260,6 +261,9 @@ export function App() {
   }
 
   // ── Config ──
+  const [access] = useState(() => new WorkspaceAccess(process.cwd()))
+  const workPrompt = useRef("")
+  const [rememberedAccess, setRememberedAccess] = useState(() => access.remembered())
   const [config, setConfig] = useState<AppConfig>(() => loadAppConfig(configPath))
   const configRef = useRef(config)
   useEffect(() => { configRef.current = config }, [config])
@@ -330,7 +334,8 @@ export function App() {
   // ── Permission approval callback (executor → UI Promise → user choice) ──
   // Lifted up here (above MCP + palettes) so the sampling handler can use
   // it as the approval gate.
-  const { onApproval, pendingApproval } = usePermissionApproval({ configRef, addLog })
+  const effectiveMode = useCallback((actorRun?: string) => access.mode(configRef.current.permissionMode, getCurrentSessionId(), actorRun), [access])
+  const { onApproval, pendingApproval } = usePermissionApproval({ configRef, addLog, effectiveMode })
 
   // ── MCP subsystem (manager + bridged tools + per-server snapshots) ──
   // Sits above palettes so MCP prompts/resources can flow into the slash +
@@ -486,7 +491,9 @@ export function App() {
   const systemInboxSize = useSyncExternalStore(subscribeToSystemInbox, getSystemInboxLength, getSystemInboxLength)
 
   // ── Plan-mode state machine ──
-  const { planCallbacks, pendingPlan } = usePlanMode({ configRef, setConfig })
+  const grantCurrentTask = useCallback(() => access.approvePlan(getCurrentSessionId()), [access])
+  const getPlanRun = useCallback(() => access.activeRun, [access])
+  const { planCallbacks, pendingPlan } = usePlanMode({ configRef, setConfig, effectiveMode, getPlanRun, grantTask: grantCurrentTask })
   const { askUserCallbacks, pendingQuestions } = useAskUser()
 
   // ── Agent objects (rebuilt on config change + MCP tool surface) ──
@@ -707,6 +714,7 @@ export function App() {
       /** Optional compact text used only for memory recall/query ranking. */
       memoryQueryText?: string,
       onAccepted?: () => void,
+      entryId?: string,
     ): Promise<unknown> => {
       turnStartLogIndexRef.current = peekJournalLogIndex()
       turnStartUiLogIndexRef.current = getUiLogCount()
@@ -719,8 +727,15 @@ export function App() {
           undefined, full !== undefined ? { restoreText: full } : undefined)
       }
       try {
+        access.begin(getCurrentSessionId(), runId, !silent, text, entryId, configRef.current.permissionMode === "default" ? () => {
+          setRememberedAccess(false)
+          abortRef.current?.abort()
+          addLog("system", "Project access was revoked. Returning to analysis.")
+        } : undefined)
         return await runAgent(text, systemPrompt, images, memoryQueryText ?? displayText ?? text, {
-          propagateErrors: true,
+          workspaceRun: { id: runId, assertActive: () => {
+            if (access.activeRun !== runId) throw new Error("The workspace task has ended")
+          }, assertProjectCommandAllowed: () => access.assertProjectCommandAllowed(configRef.current.permissionMode, getCurrentSessionId(), runId) }, permissionMode: effectiveMode(), propagateErrors: true,
           keepTurnDenials: silent,
           onInputAccepted: () => {
             onAccepted?.()
@@ -746,11 +761,12 @@ export function App() {
           },
         })
       } finally {
+        access.end(runId)
         try { queue.endRun(runId) }
         catch (error) { addLog("error", `Queue run cleanup failed: ${String(error)}`) }
       }
     },
-    [addLog, getUiLogCount, runAgent],
+    [access, effectiveMode, addLog, getUiLogCount, runAgent],
   )
 
   const precheckProvider = useCallback(
@@ -781,6 +797,7 @@ export function App() {
         addLog,
         configRef,
         updateConfig,
+        openWorkspaceAccess: task => { workPrompt.current = task; setDialog("workspace-access") },
         addToast,
         getLogs: () => logsRef.current,
         compactLogs,
@@ -826,12 +843,16 @@ export function App() {
   )
 
   // ── Turn dispatcher (unified handleSubmit + drain) ──
+  const bindWorkSubmission = useCallback((entry: QueueEntry) => {
+    access.bindSubmission(entry.sessionId, entry.id, entry.text, entry.displayForm)
+  }, [access])
   const { handleSubmit } = useTurnDispatcher({
+    onEnqueued: bindWorkSubmission,
     getTodos: () => todosRef.current,
     // Pending delivery is busy for UI/controls, but must not block the
     // dispatcher effect that starts that very delivery.
     isRunning: isAgentRunning,
-    paused: dialog === "rewind" || dialog === "update" || dialog === "restoring",
+    paused: dialog === "workspace-access" || dialog === "rewind" || dialog === "update" || dialog === "restoring",
     inputQueue,
     systemInboxSize,
     followUpMode: config.followUpMode ?? "queue",
@@ -868,6 +889,24 @@ export function App() {
   const submitInputDeferred = useCallback((value: string) => {
     setTimeout(() => { void handleSubmit(value) }, 0)
   }, [handleSubmit])
+
+  function chooseWorkspaceAccess(choice: WorkspaceChoice) {
+    const writing = choice === "task" || choice === "project"
+    if (isRunning && writing) {
+      addToast("Finish the current task before starting another.", { variant: "warning" })
+      return
+    }
+    const prompt = workPrompt.current || (conversation.getTurns().length ? "Implement the plan we just discussed and verify the changes." : "")
+    try { access.choose(choice, getCurrentSessionId(), prompt || undefined) }
+    catch (error) { addToast(String(error), { variant: "error" }); return }
+    setRememberedAccess(access.remembered())
+    if (!writing && isRunning) abortRef.current?.abort()
+    updateConfig({ ...configRef.current, permissionMode: writing ? "default" : "plan" })
+    setDialog(null)
+    workPrompt.current = ""
+    if (writing && prompt) submitInputDeferred(prompt)
+    else addToast(writing ? "Ready to work. Enter your task." : isRunning ? "Stopping the current task. Future turns will only analyze." : "Analysis only.")
+  }
 
   // ── /clear-style reset (also bound to Ctrl+L) ──
   const onClearScreen = useCallback(() => {
@@ -1127,6 +1166,8 @@ export function App() {
         thinkingChars={thinkingText.length}
         status={turnActivity.status}
         providerRequest={providerRequest}
+        externalAgent={agentLabel}
+        awaitingApproval={!!pendingApproval}
         activeTool={activeTool}
         activeToolBytes={activeToolBytes}
         termWidth={termWidth}
@@ -1153,6 +1194,7 @@ export function App() {
           rulePreview={inferInvocationRules(pendingApproval.name, pendingApproval.args, process.cwd(), pendingApproval.context).map(rule => rule.pattern).join(", ") || null}
           cwd={pendingApproval.context?.cwd}
           workspaceRoot={pendingApproval.context?.workspaceRoot}
+          requester={pendingApproval.context?.actor?.kind === "root" ? undefined : pendingApproval.context?.actor?.id}
         />
       )}
       {!inModal && pendingPlan && <PlanApprovalBar plan={pendingPlan.plan} onChoose={pendingPlan.resolve} />}
@@ -1215,6 +1257,7 @@ export function App() {
       }} onCancel={closeDialog} onRestart={request => { readCurrentSessionLogs(); requestUpdateRestart(request); exit() }} />}
       {dialog === "connect"     && <ConnectDialog     config={config} onAgentSelected={addToast} onSave={updateConfig} onCommit={commitConfig} onCancel={closeDialog} />}
       {dialog === "model"       && <ModelDialog       config={config} onSave={updateConfig} onCommit={commitConfig} onCancel={closeDialog} />}
+      {dialog === "workspace-access" && <WorkspaceAccessDialog cwd={process.cwd()} remembered={access.remembered()} onChoose={chooseWorkspaceAccess} onCancel={closeDialog} />}
       {dialog === "mode"        && <ModeDialog        config={config} onCommit={commitConfig} onCancel={closeDialog} />}
       {dialog === "effort"      && <EffortDialog      config={config} onCommit={commitConfig} onCancel={closeDialog} />}
       {dialog === "status"      && (
@@ -1354,7 +1397,8 @@ export function App() {
           hasApiKey={hasKey}
           showWelcome={logs.length === 0 && !isRunning && !isStreaming}
           shellMode={isShellMode()}
-          permissionMode={config.permissionMode}
+          permissionMode={effectiveMode()}
+          analysisHint={config.permissionMode === "plan" || (config.permissionMode === "default" && !access.canWork(getCurrentSessionId(), rememberedAccess))}
           termWidth={termWidth}
           mcp={mcpFooterSummary}
         />

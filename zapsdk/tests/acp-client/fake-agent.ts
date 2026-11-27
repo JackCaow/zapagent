@@ -13,6 +13,7 @@ export interface FakeAgentTurn {
 
 export interface FakeAgentOptions {
   loadSession?: boolean;
+  rejectMode?: string;
   script(turn: FakeAgentTurn): Promise<StopReason | void>;
 }
 
@@ -41,6 +42,7 @@ export function fakeAgent(options: FakeAgentOptions): { app: AgentApp; log: Fake
     })
     .onRequest("session/set_mode", ({ params }) => {
       log.calls.push({ method: "session/set_mode", params: params as Record<string, unknown> });
+      if (params.modeId === options.rejectMode) throw new Error("Mode unavailable");
       return {};
     })
     .onRequest("session/set_config_option", ({ params }) => {

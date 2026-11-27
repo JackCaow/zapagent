@@ -414,7 +414,7 @@ export function useAgentRunner({
   useEffect(() => {
     setRemoteContext(undefined)
     setOutputThroughput(undefined)
-  }, [remoteAgentId, currentSessionId, imageTokenScope, config.permissionMode])
+  }, [remoteAgentId, currentSessionId, imageTokenScope])
   const contextScopeRef = useRef(imageTokenScope)
   useEffect(() => {
     const nextScope = imageTokenScope
@@ -555,9 +555,10 @@ export function useAgentRunner({
     systemPrompt?: string,
     images?: import("../../zapsdk/core/types.js").ImageContent[],
     memoryQueryText?: string,
-    invocation?: { keepTurnDenials?: boolean; goalTurn?: GoalTurnInput; goalController?: AbortController; onOutcome?: (outcome: AgentOutcomeV1) => void; signal?: AbortSignal; propagateErrors?: boolean; resultSchema?: "outcome-v1" | "legacy" } & Pick<import("../../zapsdk/agent/loop.js").RunOptions,
+    invocation?: { workspaceRun?: { id: string; assertActive: () => void; assertProjectCommandAllowed: () => void }; permissionMode?: AppConfig["permissionMode"]; keepTurnDenials?: boolean; goalTurn?: GoalTurnInput; goalController?: AbortController; onOutcome?: (outcome: AgentOutcomeV1) => void; signal?: AbortSignal; propagateErrors?: boolean; resultSchema?: "outcome-v1" | "legacy" } & Pick<import("../../zapsdk/agent/loop.js").RunOptions,
       "onInputAccepted" | "hasSteering" | "takeSteering" | "onSteeringAccepted">,
   ): Promise<LoopAgentResult | undefined> => {
+    const turnConfig = invocation?.permissionMode ? { ...config, permissionMode: invocation.permissionMode } : config
     if (!invocation?.goalTurn) { resetGoalView(true); setGoalTodoId(undefined) }
     // Background notifications are not the user answering; a decline stands.
     if (!invocation?.keepTurnDenials) permissionManager.startTurn()
@@ -598,6 +599,12 @@ export function useAgentRunner({
     let preview: ReturnType<typeof createStreamingPreview> | null = null
     let handlers: ReturnType<typeof createRunHandlers> | null = null
 
+    const objects = agentRef.current
+    const rootExecutor = invocation?.workspaceRun
+      ? objects.executor.withActor({ id: getCurrentSessionId(), kind: "root", runId: invocation.workspaceRun.id })
+        .withExecutionAdmission(invocation.workspaceRun.assertActive)
+      : objects.executor
+
     // Session mode: an external ACP agent answers this turn instead of zap's loop.
     const agentId = conversationAgentId(config)
     const nativeClaude = agentId === "claude-code"
@@ -607,15 +614,23 @@ export function useAgentRunner({
         if (nativeClaude) {
           remoteSpec = { id: agentId, ...await nativeCommand("claude") }
         } else if (agentId === "codex") {
-          remoteSpec = await codexConversationSpec(config, acpAgents.find(agent => agent.id === "codex"))
+          remoteSpec = await codexConversationSpec(turnConfig, acpAgents.find(agent => agent.id === "codex"))
         } else {
           remoteSpec = acpAgents.find(agent => agent.id === agentId)
+          if (remoteSpec?.selfGoverned && turnConfig.permissionMode === "plan") {
+            remoteSpec = undefined
+            throw new Error(`${agentId} executes its own tools and cannot guarantee an analysis-only session. Choose Zap, Codex or Claude Code for analysis.`)
+          }
         }
         if (!remoteSpec) throw new Error(`Agent ${agentId} is unavailable. ${agentInstallHint(agentId)}`)
         if (invocation?.goalTurn) throw new Error("/goal runs on zap's own model; /agent zap switches back")
         if (systemPrompt) throw new Error("This command runs on zap's own model; /agent zap switches back")
+        const work = invocation?.workspaceRun
+        const projectShell = nativeClaude && work && turnConfig.permissionMode === "acceptEdits" && objects.sandboxConfined
+          ? rootExecutor.withExecutionAdmission(work.assertProjectCommandAllowed) : undefined
         completedResult = await runRemoteTurn({
-          spec: remoteSpec, nativeClaude, setRemoteContext, cwd, conversation, currentConfig: config, controller,
+          spec: remoteSpec, nativeClaude, setRemoteContext, cwd, conversation, currentConfig: turnConfig, controller,
+          workspaceCommand: projectShell ? (args, signal) => projectShell.execute("bash", args, signal) : undefined,
           createPreview: () => {
             const next = createStreamingPreview({ addLog, setStreamingText, setIsStreaming, setThinkingText, setIsThinking, getIsFrozen: getIsFrozen ?? (() => false) })
             registerStaticFlushCallback?.(() => next.onStaticFlushed())
@@ -657,12 +672,11 @@ export function useAgentRunner({
     }
 
     try {
-      const objects = agentRef.current
       const { registry, createRegistryForCwd, executionFacts, executionCapacity } = objects
       goalMeter = invocation?.goalTurn ? goalTurnMeter(invocation.goalTurn) : undefined
       const provider = goalMeter ? objects.provider instanceof RetryProvider
         ? objects.provider.withInnerAdapter(goalMeter.providerAdapter) : goalMeter.providerAdapter(objects.provider) : objects.provider
-      const executor = goalMeter ? objects.executor.withExecutionAdmission(goalMeter.admitToolExecution) : objects.executor
+      const executor = goalMeter ? rootExecutor.withExecutionAdmission(goalMeter.admitToolExecution) : rootExecutor
       const currentConfig = config
       const cacheScope = makePromptCacheScope(
         currentConfig.active.providerId,
@@ -716,7 +730,7 @@ export function useAgentRunner({
           `CWD: ${cwd}`,
         ])
       : buildSystemPrompt(
-          currentConfig,
+          turnConfig,
           cwd,
           runtimeTools.toolPrompts,
           runtimeTools.enabledToolNames,
