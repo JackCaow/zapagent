@@ -6,18 +6,18 @@ import type { ConversationManager } from "../../zapsdk/memory/conversation.js"
 import type { AcpAgentSpec } from "../../zapsdk/acp-client/types.js"
 import type { StreamingPreview } from "./streamingPreview.js"
 import { createRunHandlers, type RunHandlersDeps } from "./wireRunHandlers.js"
-import type { WorkspaceCommand } from "./claude-workspace-shell.js"
 import { promptClaudeCode } from "./claude-code.js"
 import type { ExternalModelIdentity } from "./startup-model-cache.js"
 import { codexModelIdentity } from "./codex-model.js"
 import { AgentOutputThroughput } from "./outputThroughput.js"
 import { remoteAgents } from "./remote-agent.js"
+import type { ApprovalCallback } from "../../zapsdk/tools/executor.js"
 
 export interface RemoteTurnDeps extends Omit<RunHandlersDeps, "preview" | "setContextTokens" | "setContextPending" | "currentConfig"> {
   currentConfig: RunHandlersDeps["currentConfig"]
   onModel: (identity: ExternalModelIdentity) => void
   setRemoteContext: (usage: { used: number; size: number } | undefined) => void
-  workspaceCommand?: WorkspaceCommand
+  approve?: ApprovalCallback
   nativeClaude?: boolean
   spec: AcpAgentSpec
   cwd: string
@@ -69,15 +69,15 @@ export async function runRemoteTurn(deps: RemoteTurnDeps, task: string, images?:
     const nativeInstructions = readOnly ? zapInstructions + "\n" + readOnlyInstructions : zapInstructions
     const turn = deps.nativeClaude ? await promptClaudeCode({
       command: spec.command, args: spec.args, cwd: deps.cwd, text: task, images, signal: controller.signal,
-      workspaceCommand: deps.workspaceCommand,
       model: deps.currentConfig.claudeModelPreference,
       onModel: identity => { if (!controller.signal.aborted && remoteAgents.epoch === epoch) deps.onModel(identity) },
-      plan: readOnly, approve: remoteAgents.host.approve, appInstructions: nativeInstructions,
+      plan: readOnly, approve: deps.approve, appInstructions: nativeInstructions,
       resume: previous?.cwd === deps.cwd && previous.epoch === epoch && previous.tip === deps.conversation.getTurns().at(-1) ? previous.sessionId : undefined,
       onEvent, onAccepted,
     }) : await remoteAgents.prompt(spec, deps.cwd,
       spec.id === "codex" ? `${nativeInstructions}\n\nUser request:\n${task}` : task, images, {
       signal: controller.signal,
+      approve: deps.approve,
       onEvent,
       onAccepted,
       onModelId: spec.id === "codex" ? model => {

@@ -2,7 +2,6 @@ import { describe, expect, it } from "bun:test"
 import { ApprovalBar, approvalChoiceForInput } from "../../src/ui/dialog-approval.js"
 import { createElement } from "react"
 import { renderToString } from "ink"
-import { planIdleActionForInput } from "../../src/ui/dialog-plan-approval.js"
 
 describe("approvalChoiceForInput", () => {
   it("shows external path grants even when only one-time approval is offered", () => {
@@ -35,24 +34,5 @@ describe("approvalChoiceForInput", () => {
 
   it("treats escape as deny", () => {
     expect(approvalChoiceForInput("", { escape: true }, 0)).toBe("deny")
-  })
-})
-
-describe("planIdleActionForInput", () => {
-  it("approves on bare return", () => {
-    expect(planIdleActionForInput("\r", {})).toEqual({ kind: "approve" })
-    expect(planIdleActionForInput("", { return: true })).toEqual({ kind: "approve" })
-  })
-
-  it("honors coalesced shortcuts before raw return", () => {
-    expect(planIdleActionForInput("n\r", {})).toEqual({ kind: "reject" })
-    expect(planIdleActionForInput("2\r", {})).toEqual({ kind: "reject" })
-    expect(planIdleActionForInput("r\r", {})).toEqual({ kind: "start_reason" })
-  })
-
-  it("keeps normal one-key shortcuts", () => {
-    expect(planIdleActionForInput("y", {})).toEqual({ kind: "approve" })
-    expect(planIdleActionForInput("n", {})).toEqual({ kind: "reject" })
-    expect(planIdleActionForInput("r", {})).toEqual({ kind: "start_reason" })
   })
 })

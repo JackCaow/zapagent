@@ -103,9 +103,8 @@ export function createAcpHostHandlers(policy: AcpHostPolicy): AcpHostHandlers {
       const response = paths.some(path => workspace.protectsWrite(path))
         ? false : await approve(permissionTarget(policy.agentId, request, workspace), live);
       if (live.aborted) return { outcome: { outcome: "cancelled" } };
-      const allowed = response === true;
-      decisions.push({ title, kind: tool.kind ?? undefined, allowed });
-      const option = pickOption(request.options, allowed);
+      const option = pickOption(request.options, response === true);
+      decisions.push({ title, kind: tool.kind ?? undefined, allowed: option?.kind === "allow_once" });
       return option ? { outcome: { outcome: "selected", optionId: option.optionId } } : { outcome: { outcome: "cancelled" } };
     },
 
@@ -122,6 +121,7 @@ export function createAcpHostHandlers(policy: AcpHostPolicy): AcpHostHandlers {
       if (!info.isFile()) throw RequestError.invalidParams(undefined, "not a regular file");
       if (info.size > READ_MAX_BYTES) throw RequestError.invalidParams(undefined, `file exceeds ${READ_MAX_BYTES} bytes`);
       let content = (await readFile(path)).toString("utf8");
+      live.throwIfAborted();
       if (request.line != null || request.limit != null) {
         const lines = content.split("\n");
         const start = Math.max(0, Math.floor(request.line ?? 1) - 1);
@@ -229,12 +229,8 @@ function quoteArg(arg: string): string {
 
 function pickOption(options: PermissionOption[], allowed: boolean): PermissionOption | undefined {
   // Never persist a grant inside the external agent: zap owns "always".
-  const order = allowed ? ["allow_once", "allow_always"] : ["reject_once", "reject_always"];
-  for (const kind of order) {
-    const match = options.find(option => option.kind === kind);
-    if (match) return match;
-  }
-  return undefined;
+  if (allowed) return options.find(option => option.kind === "allow_once");
+  return options.find(option => option.kind === "reject_once") ?? options.find(option => option.kind === "reject_always");
 }
 
 function denialText(response: ApprovalResponse): string {

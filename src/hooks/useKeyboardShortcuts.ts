@@ -23,10 +23,6 @@ interface PendingApproval {
   args: Record<string, unknown>
   resolve: (choice: ApprovalChoice) => void
 }
-interface PendingPlan {
-  plan: string
-  resolve: (choice: { kind: "approve" } | { kind: "reject"; reason?: string }) => void
-}
 
 export interface ToastOptions {
   variant?: "success" | "warning" | "error"
@@ -47,7 +43,6 @@ export interface UseKeyboardShortcutsOptions {
   // ── Modal state ──
   dialog: DialogId
   pendingApproval: PendingApproval | null
-  pendingPlan: PendingPlan | null
   /** An ask_user_question bar is open and owns the keyboard. */
   questionOpen?: boolean
 
@@ -147,11 +142,11 @@ export function useKeyboardShortcuts(opts: UseKeyboardShortcutsOptions): void {
     if (!opts.isRunning) lastInterruptEscRef.current = 0
   }, [opts.isRunning])
 
-  useEffect(() => { lastIdleEscRef.current = 0 }, [opts.dialog, opts.isRunning, opts.pendingApproval, opts.pendingPlan, opts.questionOpen])
+  useEffect(() => { lastIdleEscRef.current = 0 }, [opts.dialog, opts.isRunning, opts.pendingApproval, opts.questionOpen])
 
   useInput((rawInput, key) => {
-    const ownsComposer = opts.dialog === null && !opts.pendingApproval && !opts.pendingPlan && !opts.questionOpen
-    if (key.ctrl && rawInput === "q" && opts.dialog === null && !opts.pendingApproval && !opts.pendingPlan && !opts.questionOpen) {
+    const ownsComposer = opts.dialog === null && !opts.pendingApproval && !opts.questionOpen
+    if (key.ctrl && rawInput === "q" && opts.dialog === null && !opts.pendingApproval && !opts.questionOpen) {
       opts.openQueue?.()
       return
     }
@@ -215,10 +210,8 @@ export function useKeyboardShortcuts(opts: UseKeyboardShortcutsOptions): void {
       }
     }
 
-    // Esc — context-sensitive dismissal. Skip when a dialog / approval /
-    // plan-approval is open; those own Esc for their own semantics, and
-    // Ink fans the event out to all useInput listeners, so stacking
-    // actions would mean "close dialog AND kill agent" on a single press.
+    // Dialogs and prompts handle Esc themselves. Ink sends the key to every
+    // listener, so also handling it here would interrupt the agent.
     if (key.escape) {
       if (ownsComposer && !opts.isRunning && !opts.fileOpen && !opts.slashOpen && !opts.pendingImages.length && !opts.editingMessageId && opts.inputQueue.length === 0) {
         const now = Date.now();
@@ -234,7 +227,7 @@ export function useKeyboardShortcuts(opts: UseKeyboardShortcutsOptions): void {
         lastIdleEscRef.current = now;
       }
       const action = resolveEscapeAction({
-        dialogActive: opts.dialog !== null || opts.pendingApproval !== null || opts.pendingPlan !== null || opts.questionOpen === true,
+        dialogActive: opts.dialog !== null || opts.pendingApproval !== null || opts.questionOpen === true,
         fileOpen: opts.fileOpen,
         slashOpen: opts.slashOpen,
         queueLength: opts.inputQueue.length,

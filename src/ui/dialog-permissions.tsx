@@ -17,6 +17,7 @@
 import { useMemo, useState } from "react"
 import { Box, Text, useInput } from "ink"
 import { permissionManager, appLogger } from "../singletons.js"
+import { SANDBOX_ESCAPE_RULE } from "../permissions.js"
 import type { AnnotatedRuleGroup, RuleRemovalScope } from "../permissions.js"
 import { useHideNativeCursor } from "./dialog-frame.js"
 import { c } from "./theme.js"
@@ -56,7 +57,9 @@ export function PermissionsDialog({ onCancel, availableTools, onProjectAccess }:
   const [tick, setTick] = useState(0)
   const [grantOpen, setGrantOpen] = useState(false)
   const [error, setError] = useState("")
-  const groups = useMemo(() => permissionManager.getSummaryAnnotated(), [tick])
+  const groups = useMemo(() => permissionManager.getSummaryAnnotated()
+    .map(group => ({ ...group, rules: group.rules.filter(({ rule }) => rule.pattern !== SANDBOX_ESCAPE_RULE) }))
+    .filter(group => group.rules.length), [tick])
   const flatRules = useMemo(() => flattenRules(groups), [groups])
   const total = flatRules.length
 

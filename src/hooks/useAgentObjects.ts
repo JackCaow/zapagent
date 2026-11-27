@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import type { AppConfig } from "../config.js"
 import type { CheckpointManager } from "../../zapsdk/checkpoint/index.js"
-import type { AskUserCallbacks, PlanModeCallbacks, Tool } from "../../zapsdk/index.js"
+import type { AskUserCallbacks, Tool } from "../../zapsdk/index.js"
 import type { ApprovalCallback } from "../../zapsdk/tools/executor.js"
 import type { SkillDefinition } from "../../zapsdk/skills/types.js"
 import { buildAgentObjects } from "../agent-factory.js"
@@ -14,7 +14,6 @@ import { requestCapabilitiesTool } from "../request-capabilities-tool.js"
 export interface UseAgentObjectsOptions {
   config: AppConfig
   onApproval: ApprovalCallback
-  planCallbacks?: PlanModeCallbacks
   askUserCallbacks?: AskUserCallbacks
   checkpoint: CheckpointManager
   skillsRef: React.MutableRefObject<Map<string, SkillDefinition>>
@@ -33,7 +32,7 @@ export interface UseAgentObjectsResult {
  * Owns the per-config-change rebuild of provider/registry/executor objects.
  *
  * Three distinct invalidations rebuild agent objects:
- *   1. (config, onApproval, planCallbacks) change → user toggled something
+ *   1. (config, onApproval, askUserCallbacks) change → user toggled something
  *   2. delegateProvidersReady resolved → PATH probe for claude/codex CLIs
  *      finished. The initial buildAgentObjects almost always races that probe
  *      and sees `delegateProviders === []` → delegate_agent tool doesn't get
@@ -52,20 +51,14 @@ export function useAgentObjects(opts: UseAgentObjectsOptions & {
    *  notably useSamplingHandler, which is consumed by the MCP manager. */
   externalRef?: React.MutableRefObject<AgentObjects | null>
 }): UseAgentObjectsResult {
-  const { config, onApproval, planCallbacks, askUserCallbacks, checkpoint, skillsRef, mcpTools, externalRef } = opts
+  const { config, onApproval, askUserCallbacks, checkpoint, skillsRef, mcpTools, externalRef } = opts
 
   const build = () => {
-    const objs = buildAgentObjects(config, onApproval, planCallbacks, checkpoint, skillsRef.current, undefined, undefined, undefined, undefined, askUserCallbacks)
-    // The live ACP session (session mode) asks through the current gates.
-    remoteAgents.host.approve = onApproval
+    const objs = buildAgentObjects(config, onApproval, checkpoint, skillsRef.current, undefined, "disabled", undefined, undefined, askUserCallbacks)
     remoteAgents.host.trackEdit = checkpoint?.createEditTracker()
-    // Agents run on the host, outside zap's OS sandbox.
     remoteAgents.host.blocked = config.allowUnsandboxedCommands === false
-      ? "External agents run outside zap's OS sandbox, which allowUnsandboxedCommands: false forbids. /agent zap switches back."
+      ? "External agents require local command access, which is disabled by your configuration."
       : undefined
-    permissionManager.setSandboxConfined(objs.sandboxConfined, config.autoAllowSandboxedCommands !== false)
-    permissionManager.setSandboxNetworkPolicy(objs.sandboxNetworkPolicy)
-    permissionManager.setSandboxExcludedCommands(config.allowUnsandboxedCommands !== false ? config.sandboxExcludedCommands : undefined)
     permissionManager.setProjectMemoryLookup(name => !!mdStore.get(`${name}.md`))
     objs.registry.register(requestCapabilitiesTool(args => permissionManager.checkPermission(REQUEST_CAPABILITIES_TOOL, args).decision === "allow"))
     for (const tool of mcpTools) {
@@ -101,7 +94,7 @@ export function useAgentObjects(opts: UseAgentObjectsOptions & {
     if (externalRef) externalRef.current = agentRef.current
   // skillsRef + checkpoint are stable refs/values for this session.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config, onApproval, planCallbacks, askUserCallbacks, delegateRebuildKey, mcpTools])
+  }, [config, onApproval, askUserCallbacks, delegateRebuildKey, mcpTools])
 
   return { agentRef: agentRef as React.MutableRefObject<AgentObjects> }
 }

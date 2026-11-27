@@ -26,12 +26,12 @@ afterEach(() => { if (previous === undefined) delete process.env.ZAPCODE_DATA_DI
 it("leaves subscription image generation to the native runtime in parent and child registries", () => {
   const connected = connectCodexProvider(getDefaultConfig())
   const config = selectCatalogModel(connected.config, connected.provider.id, { id: "account-model", source: "manual" })
-  const objects = buildAgentObjects(config, undefined, undefined, undefined, undefined, root, "disabled")
+  const objects = buildAgentObjects(config, undefined, undefined, undefined, root, "disabled")
   expect(objects.registry.has("generate_image")).toBe(false)
   const child = objects.createRegistryForCwd!(join(root, "child"))
   expect(child.has("generate_image")).toBe(false)
   config.providers[0].authMode = "none"
-  expect(buildAgentObjects(config, undefined, undefined, undefined, undefined, root, "disabled").registry.has("generate_image")).toBe(false)
+  expect(buildAgentObjects(config, undefined, undefined, undefined, root, "disabled").registry.has("generate_image")).toBe(false)
 })
 
 it("restores generated pixels only from digest-verified host cache, preserving image metadata and failure state", async () => {

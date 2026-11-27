@@ -32,7 +32,7 @@ describe("Agent / execution environment boundary", () => {
   it("inherits the local network policy in isolated-workspace registries", async () => {
     delete process.env.ZAPCODE_RESIDENT_AGENT
     const environment = createExecutionEnvironment(root, "required", "local")
-    const agent = buildAgentObjects(getDefaultConfig(), undefined, undefined, null, undefined,
+    const agent = buildAgentObjects(getDefaultConfig(), undefined, null, undefined,
       root, "required", environment)
     for (const registry of [agent.registry, agent.createRegistryForCwd!(root)]) {
       const effects = await registry.get("bash")!.definition.resolveEffects!({ command: "curl https://registry.npmjs.org" }, { cwd: root, toolName: "bash" })
@@ -46,7 +46,7 @@ describe("Agent / execution environment boundary", () => {
       const environment = createExecutionEnvironment(root, mode, "local")
       const available = mode !== "disabled" && createPlatformSandbox().status().available
       expect(Boolean(environment.facts?.sandboxTemporaryDirectory)).toBe(available)
-      const agent = buildAgentObjects(config, undefined, undefined, null, undefined,
+      const agent = buildAgentObjects(config, undefined, null, undefined,
         root, mode, environment)
       for (const registry of [agent.registry, agent.createRegistryForCwd!(root)]) {
         const prompt = registry.get("bash")!.definition.prompt ?? ""
@@ -76,7 +76,7 @@ describe("Agent / execution environment boundary", () => {
     process.env.PSModulePath = "parent-terminal-powershell"
     const config = getDefaultConfig()
     const environment = createExecutionEnvironment(root, "disabled", "local")
-    const agent = buildAgentObjects(config, undefined, undefined, null, undefined,
+    const agent = buildAgentObjects(config, undefined, null, undefined,
       root, "disabled", environment)
     const shell = localExecutionShell().executable
     for (const registry of [agent.registry, agent.createRegistryForCwd!(root)]) {
@@ -102,7 +102,7 @@ describe("Agent / execution environment boundary", () => {
       if (setting === undefined) delete process.env.ZAPCODE_DISABLE_BACKGROUND_TASKS
       else process.env.ZAPCODE_DISABLE_BACKGROUND_TASKS = setting
       const environment = createExecutionEnvironment(root, "required", "local")
-      const agent = buildAgentObjects(getDefaultConfig(), undefined, undefined, null, undefined,
+      const agent = buildAgentObjects(getDefaultConfig(), undefined, null, undefined,
         root, "required", environment)
       const schema = z.toJSONSchema(agent.registry.get("bash")!.definition.parameters)
       expect(Boolean(schema.properties?.run_in_background)).toBe(setting !== "1")
@@ -115,7 +115,7 @@ describe("Agent / execution environment boundary", () => {
     process.env.ZAPCODE_RESIDENT_AGENT = "1"
     process.env.ZAPCODE_DISABLE_BACKGROUND_TASKS = "0"
     const environment = createExecutionEnvironment(root, "required", "local")
-    const agent = buildAgentObjects(getDefaultConfig(), undefined, undefined, null, undefined,
+    const agent = buildAgentObjects(getDefaultConfig(), undefined, null, undefined,
       root, "required", environment)
     const schema = z.toJSONSchema(agent.registry.get("bash")!.definition.parameters)
     expect(schema.properties?.run_in_background).toBeUndefined()
@@ -214,7 +214,7 @@ describe("Agent / execution environment boundary", () => {
       processPlatform: "linux", shell: "bash", workspace: "mapped",
       rootFilesystem: "read-only", temporaryStorage: "request", network: "off",
     }
-    const agent = buildAgentObjects(config, undefined, undefined, null, undefined,
+    const agent = buildAgentObjects(config, undefined, null, undefined,
       root, "required", { broker, commandOptions: {}, facts })
     expect(agent.executor.executionBroker).toBe(broker)
     expect(agent.modelId).toBe(config.active.model)

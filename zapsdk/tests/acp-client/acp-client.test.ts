@@ -190,8 +190,11 @@ describe("runAcpTask (in-process agent)", () => {
           { toolCallId: "a", title: "Run tests", kind: "execute" as const, rawInput: { command: ["bun", "test"] } },
           { toolCallId: "c", title: "ls", kind: "execute" as const, rawInput: { CommandLine: "ls -la" } },
           { toolCallId: "b", title: "Fetch docs", kind: "fetch" as const, rawInput: { url: "https://example.com" } },
+          { toolCallId: "d", title: "Run with durable permission only", kind: "execute" as const, rawInput: { command: "pwd" } },
         ]) {
-          const response = await turn.client.request<RequestPermissionResponse>("session/request_permission", { sessionId: turn.sessionId, toolCall, options });
+          const response = await turn.client.request<RequestPermissionResponse>("session/request_permission", {
+            sessionId: turn.sessionId, toolCall, options: toolCall.toolCallId === "d" ? [options[0]!] : options,
+          });
           outcomes.push(response.outcome);
         }
       } });
@@ -202,12 +205,17 @@ describe("runAcpTask (in-process agent)", () => {
         { name: "bash", args: { command: "bun test", description: "Run tests" } },
         { name: "bash", args: { command: "ls -la", description: "ls" } },
         { name: "acp_fake_fetch", args: { title: "Fetch docs", input: { url: "https://example.com" } } },
+        { name: "bash", args: { command: "pwd", description: "Run with durable permission only" } },
       ]);
-      expect(outcomes).toEqual([{ outcome: "selected", optionId: "once" }, { outcome: "selected", optionId: "once" }, { outcome: "selected", optionId: "no" }]);
+      expect(outcomes).toEqual([
+        { outcome: "selected", optionId: "once" }, { outcome: "selected", optionId: "once" },
+        { outcome: "selected", optionId: "no" }, { outcome: "cancelled" },
+      ]);
       expect(handlers.decisions).toEqual([
         { title: "Run tests", kind: "execute", allowed: true },
         { title: "ls", kind: "execute", allowed: true },
         { title: "Fetch docs", kind: "fetch", allowed: false },
+        { title: "Run with durable permission only", kind: "execute", allowed: false },
       ]);
     } finally { await rm(cwd, { recursive: true, force: true }); }
   });

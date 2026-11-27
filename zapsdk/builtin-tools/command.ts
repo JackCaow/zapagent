@@ -269,10 +269,10 @@ export function executeCommandTool(options: ExecuteCommandOptions = {}): Tool {
   promptLines.push(
     "",
     "Exit 0 reports final shell status only. Inspect stderr for warnings or masked failures; do not auto-replay side effects. Chain dependencies with &&. Pipelines report the last stage: check stages or use supported pipefail. Use check_steps for independent checks; each uses a fresh shell and stops on nonzero.",
-    "cwd selects the starting directory, not a narrower workspace. For external inputs/outputs declare read_paths/write_paths (relative to cwd); these need file authorization. A prior Read alone does not grant Bash access. Sandboxed .git/.zapcode remain read-only.",
+    "cwd selects the starting directory, not a narrower workspace. For external inputs/outputs declare read_paths/write_paths (relative to cwd); these need file authorization. A prior Read alone does not grant Bash access.",
   );
   if (options.sandboxGitIntegration) {
-    promptLines.push("For root-repository Git writes, use standalone Bash calls: git add <paths>, git commit -m <message>, git stash push/pop, git rebase <ref>. The Host runs supported commands using trusted Git inside the OS sandbox. Do not combine them with &&, cd, redirects, -c/-C or interactive options. Arbitrary shell writes to .git remain blocked; unsupported or executable Git config retains the normal approval path.");
+    promptLines.push("For root-repository Git writes, use standalone Bash calls: git add <paths>, git commit -m <message>, git stash push/pop, git rebase <ref>. The Host runs supported commands using trusted Git inside the OS sandbox. Do not combine them with &&, cd, redirects, -c/-C or interactive options. Sandboxed .git/.zapcode remain read-only; unsupported or executable Git config retains the normal approval path.");
   }
   if (options.sandboxTemporaryDirectory) {
     promptLines.push(

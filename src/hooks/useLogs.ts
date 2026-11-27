@@ -29,7 +29,7 @@ export function useLogs() {
   // entries here instead of calling setLogs. Releasing the freeze (via
   // setFrozen(false)) drains the buffer in one setLogs call.
   //
-  // Why: ApprovalBar / PlanApprovalBar live in the dynamic frame. Every
+  // Why: ApprovalBar live in the dynamic frame. Every
   // Static commit while they are up triggers Ink's incremental
   // log.clear() → static write → re-draw path, which pushes overlay
   // content into terminal scrollback permanently — Ink's eraseLines can
@@ -72,7 +72,7 @@ export function useLogs() {
   }, [])
 
   /** Pause / resume Static commits. Pass true before mounting a tall
-   *  dynamic-frame dialog (ApprovalBar, PlanApprovalBar). Pass false on
+   *  dynamic-frame dialog (ApprovalBar). Pass false on
    *  dismiss — buffered entries flush in one setLogs call. */
   const setStaticCommitFrozen = useCallback((frozen: boolean) => {
     if (frozenRef.current === frozen) return

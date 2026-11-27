@@ -36,7 +36,7 @@ export type ExecutionBackend = "local" | "vm"
 export const VM_EXECUTION_ENABLED = false
 
 export const VM_EXECUTION_DISABLED_NOTICE =
-  "zapVM execution is disabled in this version of zap; commands run on the local backend (OS sandbox). The \"vm\" setting and ZAPCODE_EXECUTION=vm are ignored."
+  "zapVM execution is disabled in this version of zap; commands run on the local backend. The \"vm\" setting and ZAPCODE_EXECUTION=vm are ignored."
 
 /** The backend the user asked for (ZAPCODE_EXECUTION wins over settings). */
 export function requestedExecutionBackend(configured?: ExecutionBackend): ExecutionBackend {
@@ -147,7 +147,7 @@ export function createExecutionEnvironment(
   }
   const local = new DefaultExecutionBroker({
     services: serviceOwner,
-    sandbox: createPlatformSandbox({
+    sandbox: sandboxMode === "disabled" ? undefined : createPlatformSandbox({
       rootWorkspaceGitWrites: true,
       workspaceStateRoot: resident || installation || cloud ? undefined : join(getAppDataDir(), "sandbox", "workspaces"),
       // Trusted outer mounts/egress are enforcement details, not Agent policy.
@@ -162,8 +162,8 @@ export function createExecutionEnvironment(
   })
   // A VM or resident boundary has no host sandbox to step out of, and a VM
   // failure must never fall back to an arbitrary host shell.
-  const hostSandboxed = !installation && !cloud && !resident
-  const networkPolicy = hostSandboxed && sandboxMode !== "disabled" && local.sandboxStatus().available ? sandboxNetworkPolicy(sandboxNetwork) : undefined
+  const hostSandboxed = sandboxMode !== "disabled" && !installation && !cloud && !resident
+  const networkPolicy = hostSandboxed && local.sandboxStatus().available ? sandboxNetworkPolicy(sandboxNetwork) : undefined
   return {
     ...(serviceOwner ? { workspaceId: serviceOwner.capabilities.workspaceId } : {}),
     facts: describeExecutionEnvironment(runtime, sandboxMode !== "disabled" && local.sandboxStatus().available),
@@ -176,7 +176,7 @@ export function createExecutionEnvironment(
       vm: cloud ? createZapVmCloudExecutionBroker(cloud) : undefined,
     }),
     commandOptions: {
-      sandboxGitIntegration: hostSandboxed && sandboxMode !== "disabled" && local.sandboxStatus().available,
+      sandboxGitIntegration: hostSandboxed && local.sandboxStatus().available,
       // These transports cannot retain a detached child beyond its lease.
       // Other backends defer to the user's env setting instead of overriding it.
       disableBackgroundTasks: cloud !== undefined || resident ? true : undefined,

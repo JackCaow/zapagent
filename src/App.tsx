@@ -68,7 +68,6 @@ import { applyMetadataRefresh, refreshModelsDevMetadata } from "./provider-metad
 
 // ── New extracted modules (refactored out of this file) ──
 import { usePermissionApproval } from "./hooks/usePermissionApproval.js"
-import { usePlanMode } from "./hooks/usePlanMode.js"
 import { useAskUser } from "./hooks/useAskUser.js"
 import { usePalettes } from "./hooks/usePalettes.js"
 import { VM_EXECUTION_DISABLED_NOTICE, vmExecutionRequestedButDisabled } from "./execution-environment.js"
@@ -126,9 +125,7 @@ import { PermissionsDialog } from "./ui/dialog-permissions.js"
 import { RewindDialog, rewindDraft } from "./ui/dialog-rewind.js"
 import { RecoveryDialog } from "./ui/dialog-recovery.js"
 import { SupertaskWatchDialog } from "./ui/dialog-supertask-watch.js"
-import { approvalFacts } from "./approval-facts.js"
 import { ApprovalBar } from "./ui/dialog-approval.js"
-import { PlanApprovalBar } from "./ui/dialog-plan-approval.js"
 import { AskUserBar } from "./ui/dialog-ask-user.js"
 import { collectPendingTools, LiveActivity } from "./ui/live-activity.js"
 import { TokenWarning } from "./ui/token-warning.js"
@@ -336,7 +333,11 @@ export function App() {
   // Lifted up here (above MCP + palettes) so the sampling handler can use
   // it as the approval gate.
   const effectiveMode = useCallback((actorRun?: string) => access.mode(configRef.current.permissionMode, getCurrentSessionId(), actorRun), [access])
-  const { onApproval, pendingApproval } = usePermissionApproval({ configRef, addLog, effectiveMode })
+  const allowProjectCommands = useCallback(() => {
+    access.choose("project", getCurrentSessionId())
+    setRememberedAccess(true)
+  }, [access])
+  const { onApproval, pendingApproval } = usePermissionApproval({ configRef, addLog, effectiveMode, access, allowProjectCommands })
 
   // ── MCP subsystem (manager + bridged tools + per-server snapshots) ──
   // Sits above palettes so MCP prompts/resources can flow into the slash +
@@ -466,17 +467,12 @@ export function App() {
   useEffect(() => { if (vmIgnored) addLog("system", VM_EXECUTION_DISABLED_NOTICE) }, [vmIgnored, addLog])
   const systemInboxSize = useSyncExternalStore(subscribeToSystemInbox, getSystemInboxLength, getSystemInboxLength)
 
-  // ── Plan-mode state machine ──
-  const grantCurrentTask = useCallback(() => access.approvePlan(getCurrentSessionId()), [access])
-  const getPlanRun = useCallback(() => access.activeRun, [access])
-  const { planCallbacks, pendingPlan } = usePlanMode({ configRef, setConfig, effectiveMode, getPlanRun, grantTask: grantCurrentTask })
   const { askUserCallbacks, pendingQuestions } = useAskUser()
 
   // ── Agent objects (rebuilt on config change + MCP tool surface) ──
   const { agentRef } = useAgentObjects({
     config,
     onApproval,
-    planCallbacks: config.permissionMode === "plan" ? planCallbacks : undefined,
     askUserCallbacks,
     checkpoint,
     skillsRef,
@@ -486,7 +482,7 @@ export function App() {
 
   // Freeze Static commits only for INLINE overlays — those that share the
   // dynamic frame with a streaming agent reply. Two cases:
-  //   - approval bar / plan-approval bar — agent is running, addLog can fire
+  //   - approval bar / question prompt — agent is running, addLog can fire
   //     mid-frame; without freeze, eraseLines(H_old) misses the dialog height
   //     and burns into scrollback.
   //   - slash / file palette — same hazard: palette grows the dynamic frame
@@ -500,13 +496,12 @@ export function App() {
   useEffect(() => {
     setStaticCommitFrozen(
       pendingApproval !== null ||
-      pendingPlan !== null ||
       pendingQuestions !== null ||
       palettes.slashOpen ||
       palettes.fileOpen ||
       dialog === "queue",
     )
-  }, [pendingApproval, pendingPlan, pendingQuestions, palettes.slashOpen, palettes.fileOpen, dialog, setStaticCommitFrozen])
+  }, [pendingApproval, pendingQuestions, palettes.slashOpen, palettes.fileOpen, dialog, setStaticCommitFrozen])
 
   // ── One-shot disk hygiene ──
   // Prune ~/.zapcode/image-paste/ (clipboard pastes not referenced by
@@ -693,16 +688,10 @@ export function App() {
           undefined, full !== undefined ? { restoreText: full } : undefined)
       }
       try {
-        access.begin(getCurrentSessionId(), runId, configRef.current.permissionMode,
-          silent ? { kind: "task", ids: continuationTaskIds ?? [] } : { kind: "user" }, () => {
-          setRememberedAccess(false)
-          abortRef.current?.abort()
-          addLog("system", "Project access was revoked. Returning to analysis.")
-        })
+        const workspaceRun = access.begin(getCurrentSessionId(), runId, configRef.current.permissionMode,
+          silent ? { kind: "task", ids: continuationTaskIds ?? [] } : { kind: "user" })
         return await runAgent(text, systemPrompt, images, memoryQueryText ?? displayText ?? text, {
-          workspaceRun: { id: runId, assertActive: () => {
-            if (access.activeRun !== runId) throw new Error("The workspace task has ended")
-          }, assertProjectCommandAllowed: () => access.assertProjectCommandAllowed(configRef.current.permissionMode, getCurrentSessionId(), runId) }, permissionMode: effectiveMode(), propagateErrors: true,
+          workspaceRun, propagateErrors: true,
           keepTurnDenials: silent,
           onInputAccepted: () => {
             if (continuationTaskIds) access.consumeTasks(continuationTaskIds)
@@ -734,7 +723,7 @@ export function App() {
         catch (error) { addLog("error", `Queue run cleanup failed: ${String(error)}`) }
       }
     },
-    [access, effectiveMode, addLog, getUiLogCount, runAgent],
+    [access, addLog, getUiLogCount, runAgent],
   )
 
   const precheckProvider = useCallback(
@@ -810,7 +799,7 @@ export function App() {
   useEffect(() => {
     const onStarted = ({ task }: TaskStartedEvent) => {
       const signal = abortRef.current?.signal
-      if (!task.ownerAgentId && task.sessionId && signal && configRef.current.permissionMode === "auto") {
+      if (!task.ownerAgentId && task.sessionId && signal) {
         access.rememberTask(task.taskId, task.sessionId, signal)
       }
     }
@@ -859,17 +848,40 @@ export function App() {
     setTimeout(() => { void handleSubmit(value) }, 0)
   }, [handleSubmit])
 
-  function chooseWorkspaceAccess(choice: WorkspaceChoice) {
+  const returnToReadOnly = useCallback(async (session?: string) => {
+    setRememberedAccess(access.remembered())
+    updateConfig({ ...configRef.current, permissionMode: "plan" })
+    abortRef.current?.abort()
+    const owned = taskStore.list({ running: true })
+      .filter(task => task.sessionId && (session === undefined || task.sessionId === session))
+      .map(task => task.taskId)
+    await Promise.all([remoteAgents.reset(), taskStore.settle(owned)])
+    if (owned.some(id => taskStore.get(id)?.exitedAt === undefined)) {
+      addLog("error", "Could not confirm that every revoked background task stopped.")
+    }
+  }, [abortRef, access, addLog, updateConfig])
+
+  useEffect(() => {
+    if (!rememberedAccess) return
+    return access.watchProject(getCurrentSessionId, () => {
+      void returnToReadOnly()
+      addLog("system", "Project access was revoked. Future turns are read-only.")
+    })
+  }, [access, addLog, rememberedAccess, returnToReadOnly])
+
+  async function chooseWorkspaceAccess(choice: WorkspaceChoice) {
     const writing = choice === "project"
     if (isRunning && writing) {
       addToast("Finish the current task before starting another.", { variant: "warning" })
       return
     }
-    try { access.choose(choice, getCurrentSessionId()) }
-    catch (error) { addToast(String(error), { variant: "error" }); return }
-    setRememberedAccess(access.remembered())
-    if (!writing && isRunning) abortRef.current?.abort()
-    updateConfig({ ...configRef.current, permissionMode: writing ? "default" : "plan" })
+    const session = getCurrentSessionId()
+    try {
+      if (writing) allowProjectCommands()
+      else access.choose(choice, session)
+    } catch (error) { addToast(String(error), { variant: "error" }); return }
+    if (writing) updateConfig({ ...configRef.current, permissionMode: "default" })
+    else await returnToReadOnly(choice === "revoke" ? undefined : session)
     setDialog(null)
     addToast(writing ? "Project access saved." : isRunning ? "Stopping the current task. Future turns will be read-only." : "Read only. Choose Auto in /mode to resume work.")
   }
@@ -905,7 +917,6 @@ export function App() {
     setSlashIdx: palettes.setSlashIdx,
     dialog,
     pendingApproval,
-    pendingPlan,
     questionOpen: pendingQuestions !== null,
     inputQueue,
     openQueue,
@@ -1122,7 +1133,7 @@ export function App() {
         lastCompletedTool={lastCompletedTool}
         goal={goalStatus}
         goalAttached={goalRunning}
-        goalAwaitingInput={!!pendingApproval || !!pendingPlan || !!pendingQuestions}
+        goalAwaitingInput={!!pendingApproval || !!pendingQuestions}
         stopHint={inputQueue.length || editingMessageId || pendingImages.length || dialog || palettes.slashOpen || palettes.fileOpen ? "Ctrl+C to stop" : undefined}
       />}
 
@@ -1136,17 +1147,16 @@ export function App() {
           repeats={pendingApproval.repeats}
           onGrant={pendingApproval.grant}
           availableTools={agentRef.current.registry.definitions().filter(tool => tool.permission === "confirm").map(tool => tool.name)}
-          unsandboxed={approvalFacts(pendingApproval.name, pendingApproval.args, pendingApproval.context).sandboxEscape}
+          projectAccess={pendingApproval.projectAccess}
           rulePreview={inferInvocationRules(pendingApproval.name, pendingApproval.args, process.cwd(), pendingApproval.context).map(rule => rule.pattern).join(", ") || null}
           cwd={pendingApproval.context?.cwd}
           workspaceRoot={pendingApproval.context?.workspaceRoot}
           requester={pendingApproval.context?.actor?.kind === "root" ? undefined : pendingApproval.context?.actor?.id}
         />
       )}
-      {!inModal && pendingPlan && <PlanApprovalBar plan={pendingPlan.plan} onChoose={pendingPlan.resolve} />}
       {!inModal && pendingQuestions && <AskUserBar questions={pendingQuestions.questions} onDone={pendingQuestions.resolve} />}
 
-      {!inModal && !pendingApproval && !pendingPlan && !pendingQuestions && (
+      {!inModal && !pendingApproval && !pendingQuestions && (
         <Prompt
           config={config}
           providerLabel={agentLabel ?? `${providerDisplayName}/${config.active.model}`}
@@ -1181,11 +1191,11 @@ export function App() {
         />
       )}
 
-      {!inModal && !pendingApproval && !pendingPlan && !pendingQuestions && palettes.slashOpen && (
+      {!inModal && !pendingApproval && !pendingQuestions && palettes.slashOpen && (
         <SlashPalette entries={palettes.slashEntries} selected={palettes.slashIdx} />
       )}
 
-      {!inModal && !pendingApproval && !pendingPlan && !pendingQuestions && palettes.fileOpen && (
+      {!inModal && !pendingApproval && !pendingQuestions && palettes.fileOpen && (
         <FilePalette entries={palettes.fileEntries} selected={palettes.fileIdx} />
       )}
 
