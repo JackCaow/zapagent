@@ -1,5 +1,5 @@
 import { describe, expect, it, spyOn } from "bun:test"
-import { OutputThroughput } from "../../src/agent/outputThroughput.js"
+import { AgentOutputThroughput, OutputThroughput } from "../../src/agent/outputThroughput.js"
 import { ProviderRequest } from "../../zapsdk/core/provider-request.js"
 import type { ProviderRequestEvent } from "../../zapsdk/core/llm.js"
 
@@ -72,4 +72,20 @@ it("publishes bounded live snapshots before the provider finishes streaming", as
     expect(streaming[1]?.output?.textChars).toBe(6)
     expect(events.at(-1)?.output?.textChars).toBe(9)
   } finally { provider.close(); clock.mockRestore() }
+})
+
+it("measures ACP content segments without counting the tool wait or the buffered first chunk", () => {
+  const meter = new AgentOutputThroughput()
+  expect(meter.chunk("first", "buffered", 0)).toBeUndefined()
+  expect(meter.chunk("after-tool", "buffered again", 10_000)).toBeUndefined()
+  const streaming = meter.chunk("after-tool", "abcdefgh", 10_500)
+  expect(streaming).toEqual({ tokensPerSecond: 4, estimated: true })
+  expect(meter.finish(150, 12_000)).toEqual(streaming)
+})
+
+it("labels the turn average when ACP delivers a buffered reply", () => {
+  const meter = new AgentOutputThroughput()
+  meter.chunk("text", "hi", 1_000)
+  expect(meter.finish(12, 2_000)).toEqual({ tokensPerSecond: 6, estimated: false, turnAverage: true })
+  expect(meter.finish(undefined, 2_000)).toBeUndefined()
 })

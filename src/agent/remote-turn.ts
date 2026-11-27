@@ -1,5 +1,5 @@
 import type { PlanEntry } from "@agentclientprotocol/sdk"
-import { AgentEventEmitter } from "../../zapsdk/agent/events.js"
+import { AgentEventEmitter, type AgentEvent } from "../../zapsdk/agent/events.js"
 import type { LoopAgentResult } from "../../zapsdk/agent/loop.js"
 import type { ImageContent } from "../../zapsdk/core/types.js"
 import type { ConversationManager } from "../../zapsdk/memory/conversation.js"
@@ -7,10 +7,12 @@ import type { AcpAgentSpec } from "../../zapsdk/acp-client/types.js"
 import type { StreamingPreview } from "./streamingPreview.js"
 import { createRunHandlers, type RunHandlersDeps } from "./wireRunHandlers.js"
 import { promptClaudeCode } from "./claude-code.js"
+import { AgentOutputThroughput } from "./outputThroughput.js"
 import { remoteAgents } from "./remote-agent.js"
 
 export interface RemoteTurnDeps extends Omit<RunHandlersDeps, "preview" | "setContextTokens" | "setContextPending" | "currentConfig"> {
   currentConfig: RunHandlersDeps["currentConfig"]
+  setRemoteContext: (usage: { used: number; size: number } | undefined) => void
   nativeClaude?: boolean
   spec: AcpAgentSpec
   cwd: string
@@ -32,7 +34,7 @@ const claudeSessions = new WeakMap<ConversationManager, { tip: unknown; sessionI
  * keeps the context. Throws after reporting when the turn fails. */
 export async function runRemoteTurn(deps: RemoteTurnDeps, task: string, images?: ImageContent[]): Promise<LoopAgentResult> {
   const preview = deps.createPreview()
-  const handlers = createRunHandlers({ ...deps, preview, setContextTokens() {}, setContextPending() {} })
+  const handlers = createRunHandlers({ ...deps, externalContext: true, preview, setContextTokens() {}, setContextPending() {} })
   const emitter = new AgentEventEmitter()
   handlers.wire(emitter)
   const { spec, controller } = deps
@@ -42,23 +44,42 @@ export async function runRemoteTurn(deps: RemoteTurnDeps, task: string, images?:
     const previous = claudeSessions.get(deps.conversation)
     claudeSessions.delete(deps.conversation)
     const epoch = remoteAgents.epoch
+    const throughput = new AgentOutputThroughput()
+    const onEvent = (event: AgentEvent) => {
+      emitter.emit(event)
+      if (event.type === "content_delta" && !event.path?.length && !controller.signal.aborted && (event.kind === "thinking" || event.kind === "text")) {
+        const sample = throughput.chunk(event.id, event.text, performance.now())
+        if (sample) deps.setOutputThroughput?.(sample)
+      }
+    }
+    let acceptedAt: number | undefined
+    const onAccepted = () => {
+      acceptedAt = performance.now()
+      deps.onInputAccepted?.()
+    }
     const turn = deps.nativeClaude ? await promptClaudeCode({
       command: spec.command, args: spec.args, cwd: deps.cwd, text: task, images, signal: controller.signal,
       plan: deps.currentConfig.permissionMode === "plan", approve: remoteAgents.host.approve,
       resume: previous?.cwd === deps.cwd && previous.epoch === epoch && previous.tip === deps.conversation.getTurns().at(-1) ? previous.sessionId : undefined,
-      onEvent: event => emitter.emit(event), onAccepted: deps.onInputAccepted,
+      onEvent, onAccepted,
     }) : await remoteAgents.prompt(spec, deps.cwd, task, images, {
       signal: controller.signal,
-      onEvent: event => emitter.emit(event),
-      onAccepted: deps.onInputAccepted,
+      onEvent,
+      onAccepted,
+      onContextUsage: usage => { if (!controller.signal.aborted) deps.setRemoteContext(usage) },
       onStarted: session => {
+        deps.setRemoteContext(undefined)
         deps.addLog("system", `Connected to ${session.agentName} (${spec.id}) over ACP${session.warnings.length ? ` · ${session.warnings.join("; ")}` : ""}`)
       },
     })
+    const elapsedMs = acceptedAt === undefined ? 0 : performance.now() - acceptedAt
     deps.conversation.add({ role: "user", content: task })
     deps.conversation.add({ role: "assistant", content: `[${spec.id}] ${turn.report || "(no message)"}` })
     if ("sessionId" in turn) claudeSessions.set(deps.conversation, { tip: deps.conversation.getTurns().at(-1), epoch, cwd: deps.cwd, sessionId: turn.sessionId })
     if (turn.usage) emitter.emit({ type: "run_usage", step: turn.toolCalls, ...turn.usage })
+    if (!controller.signal.aborted) {
+      deps.setOutputThroughput?.(throughput.finish(turn.usage?.providerUsageReported === false ? undefined : turn.usage?.outputTokens, elapsedMs))
+    }
     if (turn.plan.length) deps.addLog("system", formatPlan(spec.id, turn.plan))
     if (turn.stopReason !== "end_turn" && turn.stopReason !== "cancelled") deps.addLog("system", `${spec.id} stopped: ${turn.stopReason}`)
     if (turn.report) deps.saveLastOutput(turn.report)

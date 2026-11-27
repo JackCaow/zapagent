@@ -47,6 +47,8 @@ type ReplaceLog = (
 ) => void
 
 export interface RunHandlersDeps {
+  /** External agents own their context and report aggregate, multi-request turn usage. */
+  externalContext?: boolean
   /** Live snapshot of the app config — read once at handler-creation time
    *  for warning thresholds. Doesn't need to be reactive: a handler set up
    *  for run N reads the config that was active when run N started. */
@@ -459,7 +461,7 @@ export function createRunHandlers(deps: RunHandlersDeps): RunHandlers {
       // against the context window, even though cache reads are billed
       // cheaper. Without this sum the Footer / TokenWarning silently
       // under-report usage by an order of magnitude in long sessions.
-      const used = contextTokensFromRunUsage(e)
+      const used = deps.externalContext ? null : contextTokensFromRunUsage(e)
       if (used !== null) deps.setContextTokens(used, "provider")
       deps.setContextPending(false)
       deps.onRunUsage?.({
@@ -495,7 +497,7 @@ export function createRunHandlers(deps: RunHandlersDeps): RunHandlers {
         }, {
           getLocalEstimate: () => localAtTime,
           appendUsage: deps.appendUsage ?? appendUsage,
-          setPromptOverhead: (overhead) => { tokenAccounting.promptOverhead = overhead },
+          setPromptOverhead: deps.externalContext ? undefined : (overhead) => { tokenAccounting.promptOverhead = overhead },
         })
         deps.onUsagePersistenceFailure?.(undefined)
       } catch (err) {

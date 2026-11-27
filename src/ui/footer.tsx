@@ -32,7 +32,7 @@ export function contextFooterText(contextBudget: ContextBudgetSnapshot): string 
 
 export function throughputFooterText(sample: OutputThroughputSample | undefined): string {
   if (!sample || !Number.isFinite(sample.tokensPerSecond) || sample.tokensPerSecond <= 0) return ""
-  return `${sample.estimated ? "~" : ""}${sample.tokensPerSecond.toFixed(1)} token/s`
+  return `${sample.turnAverage ? "avg " : ""}${sample.estimated ? "~" : ""}${sample.tokensPerSecond.toFixed(1)} token/s`
 }
 
 interface FooterProps {
@@ -45,8 +45,8 @@ interface FooterProps {
   step: number
   maxSteps: number
   contextBudget: ContextBudgetSnapshot
-  /** Hide zap's context gauge (an external ACP agent owns its own context). */
-  hideContext?: boolean
+  /** null while an external agent has not reported its window. */
+  remoteContext?: { used: number; size: number } | null
   hasApiKey: boolean
   showWelcome?: boolean
   shellMode?: boolean
@@ -68,7 +68,7 @@ export const Footer = memo(function Footer({
   effort,
   isRunning,
   contextBudget,
-  hideContext,
+  remoteContext,
   hasApiKey,
   showWelcome,
   shellMode,
@@ -81,9 +81,11 @@ export const Footer = memo(function Footer({
   // computed centrally against compactAt, so Footer, TokenWarning and /status
   // cannot drift into three different threshold systems.
   const tpsText = throughputFooterText(outputThroughput)
-  const ctxText = contextFooterText(contextBudget)
+  const ctxText = remoteContext === undefined ? contextFooterText(contextBudget)
+    : remoteContext ? `ctx ${formatTokensK(remoteContext.used)}/${formatTokensK(remoteContext.size)} (${Math.round(100 * remoteContext.used / remoteContext.size)}%)` : ""
   const ctxColor =
-    contextBudget.severity === "critical" ? c.error
+    remoteContext ? c.text.muted
+    : contextBudget.severity === "critical" ? c.error
     : contextBudget.severity === "warning" ? c.warning
     : contextBudget.severity === "notice" ? c.accent
     : c.text.faint
@@ -108,7 +110,7 @@ export const Footer = memo(function Footer({
   if (!hasApiKey && !showWelcome) rightSegments.push({ text: "! /connect", fg: c.warning, key: "connect" })
   if (showWelcome && !hasApiKey) rightSegments.push({ text: "/connect", fg: c.accent, key: "connect" })
   if (tpsText) rightSegments.push({ text: tpsText, fg: c.text.muted, key: "tps" })
-  if (ctxText && !hideContext) rightSegments.push({ text: ctxText, fg: ctxColor, key: "ctx" })
+  if (ctxText) rightSegments.push({ text: ctxText, fg: ctxColor, key: "ctx" })
   if (mcp && mcp.total > 0) {
     const hasError = mcp.error > 0 || mcp.needsAuth > 0
     const hasDegraded = mcp.degraded > 0 || mcp.ready < mcp.total - mcp.error - mcp.needsAuth
@@ -132,7 +134,7 @@ export const Footer = memo(function Footer({
   let rightWidth = computeRightWidth(rightSegments)
   const cwdWidth = displayWidth(cwd)
   for (const key of DROP_ORDER) {
-    if (cwdWidth + rightWidth + 1 <= safeWidth) break
+    if (Math.min(cwdWidth, 12) + rightWidth + 1 <= safeWidth) break
     const idx = rightSegments.findIndex(s => s.key === key)
     if (idx >= 0) {
       rightSegments.splice(idx, 1)

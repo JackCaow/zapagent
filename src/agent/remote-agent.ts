@@ -52,6 +52,7 @@ export class RemoteAgentManager {
   async prompt(spec: AcpAgentSpec, cwd: string, text: string, images: ImageContent[] | undefined, options: {
     signal: AbortSignal
     onEvent: (event: AgentEvent) => void
+    onContextUsage?: (usage: { used: number; size: number }) => void
     onStarted?: (session: AcpAgentSession) => void
     /** Called once the agent is ready and the prompt is about to be sent. */
     onAccepted?: () => void
@@ -68,7 +69,7 @@ export class RemoteAgentManager {
     options.onAccepted?.()
     this.turnSignal = options.signal
     try {
-      const result = await live.session.prompt(content, { signal: options.signal, onEvent: options.onEvent })
+      const result = await live.session.prompt(content, { signal: options.signal, onEvent: options.onEvent, onContextUsage: options.onContextUsage })
       return { ...result, session: live.session }
     } catch (error) {
       // A cooperative cancel resolves with stopReason "cancelled"; a throw

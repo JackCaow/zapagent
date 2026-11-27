@@ -551,6 +551,7 @@ export function App() {
     abortRef,
     status: runnerStatus,
     providerRequest,
+    remoteContext,
     outputThroughput,
     setStatus,
     step,
@@ -1006,7 +1007,8 @@ export function App() {
     const persistedMatchesActiveModel = !!persisted && (
       !persisted.cacheScope || samePromptCacheScope(persisted.cacheScope, activeCacheScope)
     )
-    if (persisted && persistedMatchesActiveModel) {
+    // Native agents resume with a fresh window; their saved usage sums every request in a turn.
+    if (persisted && persistedMatchesActiveModel && !conversationAgentId(config)) {
       const restoredUsage = resolveRestoredUsageContext(
         persisted,
         conversation.estimatedTokens,
@@ -1111,7 +1113,7 @@ export function App() {
           <ToastContainer toasts={toasts} />
           <UpdateNotice state={updateCheck} />
 
-          <TokenWarning contextBudget={contextBudget} />
+          {!agentId && <TokenWarning contextBudget={contextBudget} />}
 
           {dialog !== "queue" && <QueuePanel entries={inputQueue} mode={config.followUpMode ?? "queue"} active={isAgentRunning} foregroundId={turnActivity.foregroundId} />}
           {editingMessageId && <Text color={c.accent}>Editing queued message · Enter saves · Esc cancels · original draft is kept</Text>}
@@ -1348,7 +1350,7 @@ export function App() {
           step={step}
           maxSteps={config.maxSteps}
           contextBudget={contextBudget}
-          hideContext={!!agentId}
+          remoteContext={agentId ? remoteContext ?? null : undefined}
           hasApiKey={hasKey}
           showWelcome={logs.length === 0 && !isRunning && !isStreaming}
           shellMode={isShellMode()}

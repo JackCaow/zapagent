@@ -30,7 +30,7 @@ const fixture = String.raw`
     if (node?.type?.name === name) return node;
     if (node?.props) return find(node.props.children, name);
   };
-  render(); input("", { downArrow: true }); render(); input("", { return: true });
+  render(); input("", { rightArrow: true }); render(); input("", { return: true });
   const selected = committed.active;
   render(); input("c", {}); const context = render();
   const contextBefore = context.props.contextWindow;
@@ -39,11 +39,11 @@ const fixture = String.raw`
   render(); input("m", {}); const metadata = render();
   metadata.props.onSelect({ source: "models.dev", contextWindow: 500000, catalogRef: { providerId: "fixture", modelId: "meta" } });
   const metadataSaved = saved;
-  render(); input("t", {}); const picker = render();
+  render(); input("", { rightArrow: true }); render(); input("t", {}); const picker = render();
   const manualOptions = picker.props.options.map(option => option.id);
   picker.props.onSelect("provider:Beta"); const manual = render(); find(manual, "TextField").props.onSubmit("alias");
   const manualSaved = committed;
-  render(); input("c", {}); render();
+  slots = []; render(); input("", { rightArrow: true }); render(); input("c", {}); render();
   props = { ...props, config: { ...config, providers: [providers[0]] } };
   render(); input("", { escape: true }); const cancelledAfterRemoval = cancelled;
   slots = []; props = { ...props, config };
@@ -77,7 +77,7 @@ it("model dialog binds selection and edits to the highlighted connection, preser
     expect(result.cancelledAfterRemoval).toBe(1)
     expect(result.cancelledInPicker).toBe(2)
     expect(result.emptyEscWorks).toBe(true)
-    expect(result.setupText).toContain("Beta ·")
-    expect(result.setupText).not.toContain("Alpha ·")
+    expect(result.setupText).toContain("fixture.invalid/Beta")
+    expect(result.setupText).not.toContain("fixture.invalid/Alpha")
   } finally { rmSync(root, { recursive: true, force: true }) }
 })

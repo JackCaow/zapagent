@@ -195,18 +195,18 @@ also skip CI, headless output and ACP; explicit `zap update` still checks.
 | `/supertask` | Start, resume, abort, status, or watch a long-horizon task |
 | `/exit` | Exit zapAgent (`/quit` and `/q` also work) |
 
-The footer shows output speed as `105.4 token/s` for the latest root model request. `~` marks a live estimate (streamed characters ÷ 4); provider-reported output usage calibrates the final rate. Timing starts at first output and excludes tool execution. Missing usage keeps the estimate; non-streaming or very short responses may have no rate.
+The footer shows output speed as `105.4 token/s` for the latest root model request. `~` marks a live estimate (streamed characters ÷ 4); provider-reported output usage calibrates the final rate. Timing starts at first output and excludes tool execution. Missing usage keeps the estimate; non-streaming or very short responses may have no rate. In a local agent session, streamed chunks show an estimated rate. Buffered replies with reported output tokens show `avg` over the full turn, including tool time. When the agent reports its context window, the footer shows used tokens, capacity and percent occupied.
 
-`/model` combines saved and discovered models from every configured connection.
-Each row identifies its connection and endpoint; identical model IDs on different
-connections remain separate. Enter switches both the connection and model.
-Discovery settles independently per connection, preserving saved models offline
-and keeping the cursor on the same connection/model as results arrive.
-Press `/` to search model IDs, connection names or endpoints, or `p` to filter by
-connection and return to **All configured connections**. Metadata (`m`) and
-context (`c`) apply to the highlighted row's connection; manual entry (`t`)
-asks which connection to use. Model choice immediately after adding a connection
-stays scoped to that new connection. [Terminal recording](recordings/model-aggregation.cast).
+`/model` opens on the current provider and model. Use **← / →** to switch
+provider tabs, **↑ / ↓** to highlight a model, and **Enter** to activate it.
+Each tab remembers its highlighted model while the picker is open. The endpoint
+appears above the list and capabilities appear below it for the highlighted model.
+Press `/` to search the current tab. Choose **All** to search across connections,
+or `p` to jump directly to a provider. Discovery runs independently per connection,
+and saved IDs remain available offline. Metadata (`m`), context (`c`), and manual
+entry (`t`) use the selected connection. In **All**, manual entry asks for a
+connection first. During setup the picker stays on the new connection.
+[Terminal recording](recordings/model-aggregation.cast).
 
 ## Keyboard Shortcuts
 

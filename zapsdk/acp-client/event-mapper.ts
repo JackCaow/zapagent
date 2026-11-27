@@ -103,7 +103,8 @@ export class AcpEventMapper {
         this.plan = update.entries;
         break;
       case "usage_update":
-        this.contextUsage = { used: update.used, size: update.size };
+        this.contextUsage = Number.isSafeInteger(update.used) && update.used >= 0 && Number.isSafeInteger(update.size) && update.size > 0
+          ? { used: update.used, size: update.size } : undefined;
         break;
       default:
         break;

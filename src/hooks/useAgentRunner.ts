@@ -367,6 +367,7 @@ export function useAgentRunner({
   const { view: goalStatus, select: selectGoalView, update: updateGoalView, clear: resetGoalView } = useGoalView(currentSessionId, cwd, goalRunning, undefined, appLogger)
   const [goalTodoId, setGoalTodoId] = useState<string>()
   useEffect(() => { setGoalTodoId(undefined) }, [currentSessionId])
+  const [remoteContext, setRemoteContext] = useState<{ used: number; size: number }>()
   const [outputThroughput, setOutputThroughput] = useState<OutputThroughputSample>()
   const [providerRequest, setProviderRequest] = useState<ProviderRequestEvent>()
   const [step, setStep] = useState(0)
@@ -409,6 +410,11 @@ export function useAgentRunner({
   )
   const imageTokenContext = resolveModelImageTokenContext(getActiveProvider(config), config.active.model)
   const imageTokenScope = `${config.active.providerId}\0${config.active.model}\0${JSON.stringify(imageTokenContext)}`
+  const remoteAgentId = conversationAgentId(config)
+  useEffect(() => {
+    setRemoteContext(undefined)
+    setOutputThroughput(undefined)
+  }, [remoteAgentId, currentSessionId, imageTokenScope, config.permissionMode])
   const contextScopeRef = useRef(imageTokenScope)
   useEffect(() => {
     const nextScope = imageTokenScope
@@ -502,6 +508,7 @@ export function useAgentRunner({
   ) => {
     const next = buildResetRunDiagnosticsState(usage, context, restoredUsageHistory, restoredContextHistory, promptCache)
     setOutputThroughput(undefined)
+    setRemoteContext(undefined)
     setTokens(next.tokens)
     setUsageHistory(next.usageHistory)
     setContextDiagnostics(next.contextDiagnostics)
@@ -608,7 +615,7 @@ export function useAgentRunner({
         if (invocation?.goalTurn) throw new Error("/goal runs on zap's own model; /agent zap switches back")
         if (systemPrompt) throw new Error("This command runs on zap's own model; /agent zap switches back")
         completedResult = await runRemoteTurn({
-          spec: remoteSpec, nativeClaude, cwd, conversation, currentConfig: config, controller,
+          spec: remoteSpec, nativeClaude, setRemoteContext, cwd, conversation, currentConfig: config, controller,
           createPreview: () => {
             const next = createStreamingPreview({ addLog, setStreamingText, setIsStreaming, setThinkingText, setIsThinking, getIsFrozen: getIsFrozen ?? (() => false) })
             registerStaticFlushCallback?.(() => next.onStaticFlushed())
@@ -1124,6 +1131,7 @@ export function useAgentRunner({
     abortRef,
     status,
     providerRequest,
+    remoteContext,
     outputThroughput,
     setStatus,
     step,

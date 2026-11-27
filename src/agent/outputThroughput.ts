@@ -3,6 +3,8 @@ import type { ProviderRequestEvent } from "../../zapsdk/core/llm.js"
 export interface OutputThroughputSample {
   tokensPerSecond: number
   estimated: boolean
+  /** Output tokens over the full prompt turn, including tools and first-token latency. */
+  turnAverage?: boolean
 }
 
 /** Latest root request's decode throughput, excluding TTFT and tool time.
@@ -49,5 +51,30 @@ export class OutputThroughput {
     const tokensPerSecond = tokens * 1000 / duration
     if (!Number.isFinite(tokensPerSecond)) return
     return { tokensPerSecond, estimated }
+  }
+}
+
+/** ACP exposes message chunks and turn totals, but no per-request decode clock. */
+export class AgentOutputThroughput {
+  private segment?: { id: string; firstAt: number; charsAfterFirst: number }
+  private latest?: OutputThroughputSample
+
+  chunk(id: string, text: string, now: number): OutputThroughputSample | undefined {
+    if (!text) return
+    if (this.segment?.id !== id) {
+      this.segment = { id, firstAt: now, charsAfterFirst: 0 }
+      return
+    }
+    this.segment.charsAfterFirst += text.length
+    const elapsed = now - this.segment.firstAt
+    if (elapsed < 250) return
+    this.latest = { tokensPerSecond: this.segment.charsAfterFirst * 250 / elapsed, estimated: true }
+    return this.latest
+  }
+
+  finish(outputTokens: number | undefined, elapsedMs: number): OutputThroughputSample | undefined {
+    if (this.latest) return this.latest
+    if (!outputTokens || outputTokens <= 0 || !Number.isFinite(outputTokens) || elapsedMs <= 0) return
+    return { tokensPerSecond: outputTokens * 1000 / elapsedMs, estimated: false, turnAverage: true }
   }
 }
