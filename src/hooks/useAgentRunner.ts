@@ -1,4 +1,4 @@
-import { agentInstallHint, nativeCommand } from "../agent/official-agents.js"
+import { agentInstallHint, codexConversationSpec, nativeCommand } from "../agent/official-agents.js"
 import { goalTurnMeter, type GoalTurnInput } from "../goal-turn.js"
 import { RetryProvider } from "../../zapsdk/core/retry.js"
 import type { AgentOutcomeV1 } from "../../zapsdk/runtime/outcome.js"
@@ -20,7 +20,7 @@ import type { CheckpointManager } from "../../zapsdk/checkpoint/index.js"
 import { AutoMemory } from "../../zapsdk/memory/auto-memory.js"
 import type { ConversationManager } from "../../zapsdk/index.js"
 import { extractFilesFromSummary } from "../ui/compact-utils.js"
-import { buildCustomSystemPrompt, buildSystemPrompt, deriveCompaction, conversationAgentId, getEffort, getActiveProvider } from "../config.js"
+import { buildCustomSystemPrompt, buildSystemPrompt, deriveCompaction, conversationAgentId, getActiveProvider } from "../config.js"
 import { appendUsage, saveLastOutput, getCurrentSessionId } from "../session.js"
 import type { AppConfig } from "../config.js"
 import type { LogType, ToolCallInfo, UserImageRef } from "../ui/types.js"
@@ -597,15 +597,10 @@ export function useAgentRunner({
     let remoteSpec
     if (agentId) {
       try {
-        const provider = getActiveProvider(config)
         if (nativeClaude) {
           remoteSpec = { id: agentId, ...await nativeCommand("claude") }
-        } else if (agentId === "codex" && provider?.authMode === "codex-oauth") {
-          const effort = getEffort(config, provider.id)
-          const allowEdits = config.permissionMode === "acceptEdits" || config.permissionMode === "bypassPermissions"
-          remoteSpec = { id: agentId, ...await nativeCommand("codex-acp"), model: config.active.model || undefined,
-            requireSettings: true, mode: allowEdits ? "workspace-write" : "read-only",
-            config: effort ? { reasoning_effort: effort } : undefined }
+        } else if (agentId === "codex") {
+          remoteSpec = await codexConversationSpec(config, acpAgents.find(agent => agent.id === "codex"))
         } else {
           remoteSpec = acpAgents.find(agent => agent.id === agentId)
         }

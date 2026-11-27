@@ -18,6 +18,12 @@ async function run(input: string, activeAgent?: string) {
 }
 
 describe("zap-prompt commands in agent mode", () => {
+  it("leaves compaction and effort to agents that own their model", async () => {
+    for (const cmd of ["/compact", "/effort high"]) {
+      expect((await run(cmd, "claude-code")).logs.join(" ")).toContain("managed by claude-code")
+    }
+    expect((await run("/agent", "claude-code")).logs.join(" ")).toContain("› claude-code")
+  })
   it("refuses /review, /commit and /init instead of dropping their zap prompts", async () => {
     for (const command of ["/review", "/commit", "/init"]) {
       const { logs, turns } = await run(command, "agy")

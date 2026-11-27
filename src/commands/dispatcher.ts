@@ -7,7 +7,7 @@ import { spawnSync } from "node:child_process"
 import { parsePermissionMode, type AppConfig, type PermissionMode } from "../config.js"
 import {
   cycleEffort,
-  conversationAgentId, getActiveProvider,
+  agentManagingModel, conversationAgentId, getActiveProvider,
   resolveEffortInput,
   setEffort,
   validateConfig,
@@ -438,7 +438,7 @@ export function dispatchSlashCommand(
         const lines = acpAgents.length
           ? acpAgents.map(agent => `  ${agent.id === current ? "›" : " "} ${agent.id.padEnd(10)} ${agent.name ?? ""}${agent.selfGoverned ? " · edits files itself (no zap checkpoints)" : ""}`)
           : ["  (no ACP agents found on PATH or in acpAgents)"]
-        deps.addLog("system", [`Conversation agent: ${current ?? "zap"}`, `  ${current ? " " : "›"} zap        zap's own model`, "    claude-code  Local Claude Code CLI", ...lines,
+        deps.addLog("system", [`Conversation agent: ${current ?? "zap"}`, `  ${current ? " " : "›"} zap        zap's own model`, `  ${current === "claude-code" ? "›" : " "} claude-code  Local Claude Code CLI`, ...lines,
           "Switch with /agent <id>; /agent zap switches back."].join("\n"))
         return true
       }
@@ -457,7 +457,7 @@ export function dispatchSlashCommand(
       }
       const spec = value === "claude-code" ? { id: value, name: "Claude Code", selfGoverned: true } : acpAgents.find(agent => agent.id === value)
       if (!spec) {
-        deps.addLog("error", `Unknown ACP agent: ${value}. ${agentInstallHint(value)} Available: ${["zap", ...acpAgents.map(agent => agent.id)].join(", ")}`)
+        deps.addLog("error", `Unknown ACP agent: ${value}. ${agentInstallHint(value)} Available: ${["zap", "claude-code", ...acpAgents.map(agent => agent.id)].join(", ")}`)
         return true
       }
       if (value !== current) {
@@ -481,6 +481,11 @@ export function dispatchSlashCommand(
     }
 
     case "set_effort": {
+      const agent = agentManagingModel(deps.configRef.current)
+      if (agent) {
+        deps.addLog("system", `Reasoning effort is managed by ${agent}.`)
+        return true
+      }
       const provider = getActiveProvider(deps.configRef.current)
       if (!provider) {
         deps.addLog("error", "No active provider")
@@ -554,6 +559,11 @@ export function dispatchSlashCommand(
     }
 
     case "compact_session": {
+      const agent = conversationAgentId(deps.configRef.current)
+      if (agent) {
+        deps.addLog("system", `Context compaction is managed by ${agent}.`)
+        return true
+      }
       // Force-compact the conversation. Uses the current agent's provider as
       // summarizer (agent.run not needed — this is a one-shot LLM call via
       // conversation.compress).

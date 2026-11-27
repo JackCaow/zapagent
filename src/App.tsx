@@ -1211,7 +1211,7 @@ export function App() {
         const persistence = getSessionPersistenceStatus()
         if (persistence.pendingWrites || persistence.lastFailure) throw new Error("Save the current session successfully before updating.")
       }} onCancel={closeDialog} onRestart={request => { readCurrentSessionLogs(); requestUpdateRestart(request); exit() }} />}
-      {dialog === "connect"     && <ConnectDialog     config={config} onSave={updateConfig} onCommit={commitConfig} onCancel={closeDialog} />}
+      {dialog === "connect"     && <ConnectDialog     config={config} onAgentSelected={addToast} onSave={updateConfig} onCommit={commitConfig} onCancel={closeDialog} />}
       {dialog === "model"       && <ModelDialog       config={config} onSave={updateConfig} onCommit={commitConfig} onCancel={closeDialog} />}
       {dialog === "mode"        && <ModeDialog        config={config} onCommit={commitConfig} onCancel={closeDialog} />}
       {dialog === "effort"      && <EffortDialog      config={config} onCommit={commitConfig} onCancel={closeDialog} />}

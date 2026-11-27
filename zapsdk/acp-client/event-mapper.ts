@@ -182,7 +182,9 @@ export function acpUsage(usage: Usage | null | undefined): TokenUsage | undefine
   // Some ACP agents include cached tokens in inputTokens. Codex ACP reports
   // disjoint fresh/read/write counts, whose sum reconciles with totalTokens.
   const cached = (usage.cachedReadTokens ?? 0) + (usage.cachedWriteTokens ?? 0);
-  const disjoint = usage.totalTokens === usage.inputTokens + cached + usage.outputTokens;
+  const sum = usage.inputTokens + cached + usage.outputTokens;
+  const disjoint = usage.inputTokens < cached || usage.totalTokens === sum
+    || usage.totalTokens === sum + (usage.thoughtTokens ?? 0);
   return {
     inputTokens: disjoint ? usage.inputTokens : Math.max(0, usage.inputTokens - cached),
     outputTokens: usage.outputTokens,

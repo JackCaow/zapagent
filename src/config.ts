@@ -796,6 +796,12 @@ export function conversationAgentId(config: AppConfig): string | undefined {
   return config.activeAgent ?? config.subscriptionAgent ?? (getActiveProvider(config)?.authMode === "codex-oauth" ? "codex" : undefined)
 }
 
+/** External agents without a bound provider select their own model and effort. */
+export function agentManagingModel(config: AppConfig): string | undefined {
+  const agent = conversationAgentId(config)
+  return agent === "codex" && getActiveProvider(config)?.authMode === "codex-oauth" ? undefined : agent
+}
+
 // ── Provider mutations (pure — all return new configs) ─────────────────────
 
 export function upsertProvider(config: AppConfig, provider: Provider): AppConfig {

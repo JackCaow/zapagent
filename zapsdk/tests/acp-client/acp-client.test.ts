@@ -33,6 +33,8 @@ function approver(decide: (name: string, args: Record<string, unknown>) => boole
 describe("AcpEventMapper", () => {
   it("preserves both disjoint and inclusive ACP cache counters", () => {
     const counts = { totalTokens: 104, outputTokens: 4, cachedReadTokens: 88, cachedWriteTokens: 9 };
+    expect(acpUsage({ ...counts, inputTokens: 103, totalTokens: 229, thoughtTokens: 25 })?.inputTokens).toBe(103);
+    expect(acpUsage({ ...counts, inputTokens: 3, totalTokens: 999 })?.inputTokens).toBe(3);
     for (const inputTokens of [3, 100]) expect(acpUsage({ ...counts, inputTokens })).toMatchObject({
       inputTokens: 3, outputTokens: 4, cacheReadInputTokens: 88, cacheCreationInputTokens: 9,
     });

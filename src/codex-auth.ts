@@ -1,5 +1,5 @@
 import { nativeCommand } from "./agent/official-agents.js"
-import { spawn } from "node:child_process"
+import { createLocalProcessBroker } from "../zapsdk/execution/process.js"
 import { rm } from "node:fs/promises"
 import { join } from "node:path"
 import { getAppDataDir } from "../zapsdk/utils/platform.js"
@@ -15,14 +15,15 @@ export async function runCodexAuth(action: "login" | "logout" | "status", option
   if (action === "login" && options.device) args.push("--device-auth")
   const cli = await nativeCommand("codex")
   const status = await new Promise<number>((resolve, reject) => {
-    const child = spawn(cli.command, [...cli.args, ...args], { signal: options.signal, stdio: ["ignore", "pipe", "pipe"] })
-    for (const stream of [child.stdout, child.stderr]) {
+    const child = createLocalProcessBroker(options.signal).spawnCommand(cli.command, [...cli.args, ...args], { cwd: process.cwd(), hostHome: true })
+    for (const stream of [child.stdout!, child.stderr!]) {
       stream.setEncoding("utf8")
       stream.on("data", (text: string) => options.onOutput?.(text))
     }
     child.once("error", reject)
     child.once("close", code => resolve(code ?? 1))
   })
+  options.signal?.throwIfAborted()
   if (action === "logout" && status === 0) {
     await rm(join(getAppDataDir(), "codex-oauth.json"), { force: true })
   }

@@ -7,11 +7,10 @@ import { installCodexFixture } from "./fixtures/native-codex.js"
 import { normalizeModelReasoning, modelReasoningFor } from "../zapsdk/core/reasoning-effort.js"
 import { refreshModelsDevMetadata, applyMetadataRefresh } from "../src/provider-metadata.js"
 import { associateModelMetadata } from "../src/provider-catalog.js"
+import { codexConversationSpec } from "../src/agent/official-agents.js"
 import { connectCodexProvider } from "../src/codex-provider.js"
 import { conversationAgentId, getEffort, setEffort, setActive, cycleEffort, getEffortValuesForProvider, resolveEffortInput, getDefaultConfig, hasApiKey, loadAppConfig, saveAppConfig } from "../src/config.js"
 import { discoverProviderModels, selectCatalogModel } from "../src/provider-catalog.js"
-
-const nativeTest = process.platform === "win32" ? it.skip : it
 
 const initialPath = process.env.PATH
 let root: string
@@ -45,7 +44,7 @@ it("persists an OAuth connection without secrets and keeps it stable after reaut
   expect(again.provider.models).toEqual(["account-model"])
 })
 
-nativeTest("loads the native CLI catalog independent of the saved endpoint", async () => {
+it("loads the native CLI catalog independent of the saved endpoint", async () => {
   const { provider } = connectCodexProvider(getDefaultConfig())
   provider.baseURL = "https://unused.invalid"
   writeFileSync(join(root, "models"), JSON.stringify({ models: [
@@ -145,7 +144,7 @@ it("separates authoritative capabilities from public metadata associations and h
   expect(resolveEffortInput(empty, id, "high").ok).toBe(false)
 })
 
-nativeTest("refreshes native capabilities, retires missing levels, keeps offline data and rejects concurrent edits", async () => {
+it("refreshes native capabilities, retires missing levels, keeps offline data and rejects concurrent edits", async () => {
   const initial = effortConfig(), id = initial.active.providerId
   writeFileSync(join(root, "models"), JSON.stringify({ models: [{ slug: "full", supported_reasoning_levels: [{ effort: "low" }], default_reasoning_level: "low" }, { slug: "small" }] }))
   const refreshed = await refreshModelsDevMetadata(initial)
@@ -176,4 +175,19 @@ it("persists exact model IDs even when they coincide with object prototype keys"
   const loaded = loadAppConfig(file)
   expect(Object.hasOwn(loaded.providers[0].reasoningByModel!, "__proto__")).toBe(true)
   expect(Object.hasOwn(loaded.providers[0].effortByModel!, "__proto__")).toBe(true)
+})
+
+
+it("applies Zap's sandbox to /agent codex with an API provider and preserves configured adapter arguments", async () => {
+  const config = getDefaultConfig()
+  const spec = { id: "codex", command: "configured-wrapper", args: ["--local"], model: "native-choice" }
+  config.acpAgents = [spec]
+  config.activeAgent = "codex"
+  config.active.model = "unrelated-api-model"
+  for (const mode of ["plan", "default", "acceptEdits"] as const) {
+    expect(await codexConversationSpec({ ...config, permissionMode: mode }, spec)).toMatchObject({
+      command: spec.command, args: spec.args, model: spec.model, requireSettings: true,
+      mode: mode === "acceptEdits" ? "workspace-write" : "read-only",
+    })
+  }
 })

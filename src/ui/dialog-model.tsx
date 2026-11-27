@@ -1,7 +1,7 @@
 /** @jsxImportSource react */
 import { useEffect, useRef, useState } from "react"
 import { Box, Text, useInput } from "ink"
-import { inferLegacyContextWindowMode, resolveProviderContextWindow, upsertProvider, type AppConfig } from "../config.js"
+import { agentManagingModel, inferLegacyContextWindowMode, resolveProviderContextWindow, upsertProvider, type AppConfig } from "../config.js"
 import { associateModelMetadata, describeCatalogRow, selectCatalogModel } from "../provider-catalog.js"
 import { configuredModelRows, discoverConfiguredModels, modelCatalogKey, savedConnectionCatalogs, type ConnectionCatalog, type ConnectionModelRow } from "../model-catalog.js"
 import { DialogFrame } from "./dialog-frame.js"
@@ -96,8 +96,11 @@ export function ModelDialog({ config, initialProviderId, setup = false, onSave, 
     }
   })
 
+  const agent = agentManagingModel(config)
+  const agentModel = agent === "claude-code" ? "Claude Code · model selected by local CLI" : agent ? `${agent} · model selected by agent` : undefined
   if (!provider) return <DialogFrame title="Models · /model" hint="esc close">
-    <Text>No connection configured. Use /connect to create one first.</Text>
+    {agentModel && <Text>Current: {agentModel}</Text>}
+    <Text>No provider models configured. Use /connect to add a model provider.</Text>
   </DialogFrame>
   if (phase === "metadata" && target && targetProvider) return <ModelMetadataDialog modelId={target.id}
     onCancel={() => setPhase("models")} onSelect={metadata => {
@@ -141,7 +144,7 @@ export function ModelDialog({ config, initialProviderId, setup = false, onSave, 
   return <DialogFrame title={`${setup ? "Choose a model" : "Models"} · ${providerFilter === null ? "All connections" : provider.name || provider.baseURL}`}
     hint={setup ? "↑↓ navigate · enter select and finish · m metadata · c context · / filter · t manual · esc choose later" : "↑↓ navigate · enter select · / search · p filter connections · m metadata · c context · r refresh · t manual · esc close"}>
     {setup && <Text color={c.accent}>Connection saved. Choose a model to use it, or press esc to choose later with /model.</Text>}
-    <Text color={c.text.faint}>{truncateToWidth(`Current: ${config.active.model || "none"} · ${activeProvider?.name || "none"}`, width)}</Text>
+    <Text color={c.text.faint}>{truncateToWidth(`Current: ${agentModel ?? `${config.active.model || "none"} · ${activeProvider?.name || "none"}`}`, width)}</Text>
     <Text color={c.text.faint}>{truncateToWidth(`${shown.length} models · ${scopedCatalogs.length} connections${loading ? ` · ${loading} discovering…` : ""}${failed ? ` · ${failed} discovery unavailable` : ""}${query ? ` · filter: ${query}` : ""}`, width)}</Text>
     <Text color={c.text.faint}>{truncateToWidth((provider.contextWindowMode ?? inferLegacyContextWindowMode(provider)) === "manual"
       ? `${provider.name}: manual context ${provider.contextWindow.toLocaleString("en-US")} tokens · c to change`
@@ -149,7 +152,7 @@ export function ModelDialog({ config, initialProviderId, setup = false, onSave, 
     {error && <Text color={c.warning}>{truncateToWidth(`${provider.name}: ${error}`, width)}</Text>}
     <Box flexDirection="column" marginTop={1}>
       {shown.slice(start, start + count).map((row, i) => <Box key={modelCatalogKey(row.provider.id, row.id)} flexDirection="column">
-        <Text color={start + i === selectedIndex ? c.accent : c.text.primary} bold={start + i === selectedIndex}>{truncateToWidth(`${start + i === selectedIndex ? "›" : " "} ${row.id}${row.provider.id === config.active.providerId && row.id === config.active.model ? " (current)" : ""}`, width)}</Text>
+        <Text color={start + i === selectedIndex ? c.accent : c.text.primary} bold={start + i === selectedIndex}>{truncateToWidth(`${start + i === selectedIndex ? "›" : " "} ${row.id}${!agent && row.provider.id === config.active.providerId && row.id === config.active.model ? " (current)" : ""}`, width)}</Text>
         <Text color={c.text.faint}>{truncateToWidth(`  ${row.provider.name || row.provider.id} · ${row.provider.baseURL}`, width)}</Text>
         <Text color={c.text.faint}>{truncateToWidth(`  ${describeCatalogRow(row)}`, width)}</Text>
       </Box>)}

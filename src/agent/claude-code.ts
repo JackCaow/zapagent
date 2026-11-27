@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto"
+import { resolveToolPath } from "../../zapsdk/builtin-tools/filesystem.js"
 import { readFile } from "node:fs/promises"
 import { createInterface } from "node:readline"
 import type { ToolKind } from "@agentclientprotocol/sdk"
@@ -8,9 +9,9 @@ import { AcpWorkspace, permissionTarget } from "../../zapsdk/acp-client/host-han
 import { makeParserCtx, parseClaudeLine } from "../../zapsdk/builtin-tools/delegate-stream.js"
 import type { ImageContent, TokenUsage } from "../../zapsdk/core/types.js"
 import { createLocalProcessBroker, terminateProcessTree, terminateProcessTreeWithGrace } from "../../zapsdk/execution/process.js"
-import type { ApprovalCallback } from "../../zapsdk/tools/executor.js"
+import type { ApprovalCallback, ApprovalResponse } from "../../zapsdk/tools/executor.js"
 
-const toolKinds: Record<string, ToolKind> = { Bash: "execute", Write: "edit", Edit: "edit", Read: "read", Glob: "search", Grep: "search" }
+const toolKinds: Record<string, ToolKind> = { Bash: "execute", Write: "edit", Edit: "edit", MultiEdit: "edit", NotebookEdit: "edit", Read: "read", Glob: "search", Grep: "search" }
 
 interface Options {
   command: string
@@ -24,6 +25,34 @@ interface Options {
   approve?: ApprovalCallback
   onEvent: (event: AgentEvent) => void
   onAccepted?: () => void
+}
+
+async function approveClaudeTool(
+  name: string, input: Record<string, unknown>, workspace: AcpWorkspace, signal: AbortSignal,
+  approve?: ApprovalCallback,
+): Promise<ApprovalResponse> {
+  if (!approve || signal.aborted) return false
+  const kind = Object.hasOwn(toolKinds, name) ? toolKinds[name] : "other"
+  const file = name === "NotebookEdit" ? input.notebook_path : input.file_path
+  let path: string | undefined
+  if (kind === "edit" || kind === "read") {
+    if (typeof file !== "string" || !file.trim()) return { approved: false, source: "policy", reason: "Missing file path" }
+    const absolute = resolveToolPath(file, workspace.root)
+    path = workspace.resolve(absolute)
+    input[name === "NotebookEdit" ? "notebook_path" : "file_path"] = path
+    if (kind === "edit" && (workspace.isProtected(absolute) || workspace.isProtected(path))) {
+      return { approved: false, source: "policy", reason: "Writing to Zap or Git control files is prohibited" }
+    }
+  }
+  const target = permissionTarget("claude", { sessionId: "", options: [], toolCall: {
+    toolCallId: "", title: name, kind, rawInput: input, locations: path ? [{ path }] : [],
+  } }, workspace)
+  if (path && workspace.contains(path) && kind === "edit" && name !== "Write") {
+    target.name = name === "MultiEdit" ? "multi_edit" : "edit_file"
+    target.args = { ...input, path }
+  }
+  return approve.precheck?.(target.name, target.args, target.context)
+    ?? approve(target.name, target.args, signal, target.context)
 }
 
 /** Drive the end user's unmodified Claude Code CLI over its stdio protocol.
@@ -63,45 +92,43 @@ export async function promptClaudeCode(options: Options): Promise<AcpTurnResult 
   const send = (message: unknown) => stdin.write(JSON.stringify(message) + "\n")
   try {
     send({ type: "user", message: { role: "user", content: [{ type: "text", text: options.text }, ...images] } })
-    const blocks = new Map<number, { id: string; kind: "text" | "thinking" }>()
+    const blocks = new Map<number, { id: string; kind: "text" | "thinking"; streamed: boolean }>()
     const finalIds: { id: string; kind: "text" | "thinking" }[] = []
     for await (const line of createInterface({ input: child.stdout!, crlfDelay: Infinity })) {
       if (!line.trim()) continue
-      const event = JSON.parse(line)
+      let event
+      try { event = JSON.parse(line) } catch { continue }
+      if (!event || typeof event !== "object") continue
       if (!accepted && (event.type === "assistant" || event.type === "system" && event.subtype === "init")) {
         accepted = true
         options.onAccepted?.()
       }
       if (event.type === "control_request") {
         const request = event.request
-        let allowed = false
-        if (request?.subtype === "can_use_tool" && options.approve) {
-          const kind = Object.hasOwn(toolKinds, request.tool_name) ? toolKinds[request.tool_name] : "other"
-          const file = request.input?.file_path
-          const target = permissionTarget("claude", { sessionId, options: [], toolCall: {
-            toolCallId: String(event.request_id), title: String(request.tool_name), kind: kind ?? "other",
-            rawInput: request.input, locations: typeof file === "string" ? [{ path: file }] : [],
-          } }, workspace)
-          const decision = options.approve.precheck?.(target.name, target.args, target.context)
-            ?? await options.approve(target.name, target.args, signal, target.context)
-          allowed = decision === true && !signal.aborted
-        }
-        send({ type: "control_response", response: { subtype: "success", request_id: event.request_id,
-          response: allowed ? { behavior: "allow", updatedInput: request.input } : { behavior: "deny", message: "Permission denied" } } })
+        const input = request?.input ?? {}
+        const decision = request?.subtype === "can_use_tool"
+          ? await approveClaudeTool(request.tool_name, input, workspace, signal, options.approve) : false
+        const response = decision === true && !signal.aborted
+          ? { behavior: "allow", updatedInput: input }
+          : { behavior: "deny", message: typeof decision === "object" ? decision.reason : "Permission denied" }
+        send({ type: "control_response", response: { subtype: "success", request_id: event.request_id, response } })
         continue
       }
       if (event.type === "stream_event" && !event.parent_tool_use_id) {
         const part = event.event
         if (part.type === "message_start") { blocks.clear(); finalIds.length = 0 }
         if (part.type === "content_block_start" && ["text", "thinking"].includes(part.content_block.type)) {
-          const block = { id: nextContentId("claude"), kind: part.content_block.type as "text" | "thinking" }
+          const block = { id: nextContentId("claude"), streamed: false, kind: part.content_block.type as "text" | "thinking" }
           blocks.set(part.index, block)
-          finalIds.push(block)
         }
         const block = blocks.get(part.index)
         if (part.type === "content_block_delta" && block) {
           const text = block.kind === "text" ? part.delta.text : part.delta.thinking
-          if (typeof text === "string") options.onEvent({ type: "content_delta", ...block, text })
+          if (typeof text === "string" && text.length) {
+            if (!block.streamed) finalIds.push(block)
+            block.streamed = true
+            options.onEvent({ type: "content_delta", kind: block.kind, id: block.id, text })
+          }
         }
         continue
       }
@@ -123,7 +150,7 @@ export async function promptClaudeCode(options: Options): Promise<AcpTurnResult 
     }
     const code = await exited
     options.signal.throwIfAborted()
-    if (code !== 0 || !completed || failure) throw new Error(failure || stderr.trim() || "Claude Code exited before returning a result.")
+    if (code !== 0 || !completed || failure) throw new Error(failure || stderr.trim() || `Claude Code exited before returning a result (exit code ${code ?? "unknown"}).`)
     return { sessionId, stopReason: "end_turn", report: parser.finalText, toolCalls: parser.stepCounter.value, plan: [], usage }
   } finally {
     process.off("exit", onExit)
