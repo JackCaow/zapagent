@@ -1,5 +1,8 @@
 import { describe, expect, it } from "bun:test"
-import { contextFooterText } from "../../src/ui/footer.js"
+import { createElement } from "react"
+import { renderToString } from "ink"
+import { stripVTControlCharacters } from "node:util"
+import { Footer, contextFooterText } from "../../src/ui/footer.js"
 import type { ContextBudgetSnapshot } from "../../src/context-budget.js"
 
 function snapshot(
@@ -52,4 +55,19 @@ describe("output TPS footer", () => {
     expect(throughputFooterText(undefined)).toBe("")
     expect(throughputFooterText({ tokensPerSecond: Infinity, estimated: false })).toBe("")
   })
+})
+
+it("renders the agent's latest window beside TPS and hides Zap's local context while awaiting ACP usage", () => {
+  const props = {
+    cwd: "/long-project-path".repeat(6), provider: "Codex", model: "test",
+    isRunning: false, step: 0, maxSteps: 1, hasApiKey: true, termWidth: 80,
+    contextBudget: snapshot(900_000, "provider"),
+    outputThroughput: { tokensPerSecond: 12, estimated: false, turnAverage: true },
+  }
+  const render = (remoteContext: { used: number; size: number } | null) =>
+    stripVTControlCharacters(renderToString(createElement(Footer, { ...props, remoteContext }), { columns: 80 }))
+  const footer = render({ used: 30_800, size: 475_000 })
+  expect(footer).toContain("ctx 30.8K/475.0K (6%)")
+  expect(footer).toContain("avg 12.0 token/s")
+  expect(render(null)).not.toContain("900.0K")
 })

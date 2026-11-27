@@ -27,6 +27,7 @@ export interface AcpTurnOptions {
   /** Event path prefix for nested rendering (subagent path). */
   path?: string[];
   onEvent?: (event: AgentEvent) => void;
+  onContextUsage?: (usage: { used: number; size: number }) => void;
 }
 
 export interface AcpTurnResult {
@@ -101,7 +102,10 @@ export class AcpAgentSession {
   async prompt(content: string | ContentBlock[], options: AcpTurnOptions = {}): Promise<AcpTurnResult> {
     const mapper = new AcpEventMapper(options.path ?? []);
     const emit = (events: AgentEvent[]) => { for (const event of events) options.onEvent?.(event); };
-    this.turn = update => emit(mapper.map(update));
+    this.turn = update => {
+      emit(mapper.map(update));
+      if (update.sessionUpdate === "usage_update" && mapper.contextUsage) options.onContextUsage?.(mapper.contextUsage);
+    };
     const blocks = typeof content === "string" ? [{ type: "text" as const, text: content }] : content;
     let response;
     try {

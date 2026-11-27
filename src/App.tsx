@@ -551,6 +551,7 @@ export function App() {
     abortRef,
     status: runnerStatus,
     providerRequest,
+    remoteContext,
     outputThroughput,
     setStatus,
     step,
@@ -1111,7 +1112,7 @@ export function App() {
           <ToastContainer toasts={toasts} />
           <UpdateNotice state={updateCheck} />
 
-          <TokenWarning contextBudget={contextBudget} />
+          {!agentId && <TokenWarning contextBudget={contextBudget} />}
 
           {dialog !== "queue" && <QueuePanel entries={inputQueue} mode={config.followUpMode ?? "queue"} active={isAgentRunning} foregroundId={turnActivity.foregroundId} />}
           {editingMessageId && <Text color={c.accent}>Editing queued message · Enter saves · Esc cancels · original draft is kept</Text>}
@@ -1348,7 +1349,7 @@ export function App() {
           step={step}
           maxSteps={config.maxSteps}
           contextBudget={contextBudget}
-          hideContext={!!agentId}
+          remoteContext={agentId ? remoteContext ?? null : undefined}
           hasApiKey={hasKey}
           showWelcome={logs.length === 0 && !isRunning && !isStreaming}
           shellMode={isShellMode()}

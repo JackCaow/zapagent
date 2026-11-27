@@ -13,17 +13,21 @@ describe("RemoteAgentManager (session mode)", () => {
     let turns = 0
     const { app, log } = fakeAgent({ async script(turn) {
       turns += 1
+      await turn.update({ sessionUpdate: "usage_update", used: 125 * turns, size: 1000 })
       await turn.update(text(`turn ${turns}: ${turn.prompt[0]?.type === "text" ? turn.prompt[0].text : ""}`))
     } })
     let spawned = 0
     const manager = new RemoteAgentManager(() => { spawned += 1; return inProcessTransport(app) })
     const events: AgentEvent[] = []
+    const windows: { used: number; size: number }[] = []
     const started: string[] = []
     const run = (task: string) => manager.prompt(spec, "/w", task, undefined, {
+      onContextUsage: usage => windows.push(usage),
       signal: new AbortController().signal, onEvent: event => events.push(event), onStarted: session => started.push(session.agentName),
     })
     expect((await run("hello")).report).toBe("turn 1: hello")
     expect((await run("again")).report).toBe("turn 2: again")
+    expect(windows).toEqual([{ used: 125, size: 1000 }, { used: 250, size: 1000 }])
     expect(spawned).toBe(1)
     expect(started).toEqual(["fake-agent"])
     expect(log.calls.filter(call => call.method === "session/new")).toHaveLength(1)
