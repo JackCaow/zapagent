@@ -16,8 +16,10 @@ it("streams native Claude output, gates tool requests and binds follow-ups to th
       const say = o => console.log(JSON.stringify(o))
       require("node:readline").createInterface({input: process.stdin}).on("line", line => {
         const m = JSON.parse(line)
-        if (m.type === "user") {
-          say({ type: "system", subtype: "init", session_id: session })
+        if (m.type === "control_request") {
+          say({ type: "control_response", response: { request_id: m.request_id, subtype: "success", response: { account: { apiProvider: "bedrock" } } } })
+        } else if (m.type === "user") {
+          say({ type: "system", subtype: "init", session_id: session, model: "configured-model" })
           if (m.message.content[0].text === "hang") return
           if (m.message.content[0].text.startsWith("{")) {
             say({type:"control_request", request_id:"r", request:JSON.parse(m.message.content[0].text)})
@@ -31,6 +33,9 @@ it("streams native Claude output, gates tool requests and binds follow-ups to th
           say({ type: "stream_event", event: { type: "content_block_start", index: 1, content_block: { type: "text" } } })
           say({ type: "stream_event", event: { type: "content_block_delta", index: 1, delta: { type: "text_delta", text } } })
           say({ type: "assistant", message: { content: [{ type: "text", text: "" }, { type: "text", text }] } })
+          say({ type: "stream_event", event: { type: "message_start", message: { model: "actual-model" } } })
+          say({ type: "assistant", parent_tool_use_id: "child", message: { model: "child-model", content: [] } })
+          say({ type: "assistant", message: { model: "<synthetic>", content: [] } })
           say({ type: "result", subtype: "success", result: text, usage: { input_tokens: 7, output_tokens: 3, cache_read_input_tokens: 80 } })
         }
       })
@@ -38,7 +43,12 @@ it("streams native Claude output, gates tool requests and binds follow-ups to th
     const events: AgentEvent[] = []
     const options = { cwd, command: process.execPath, args: [cli], text: "hello", plan: false,
       signal: AbortSignal.timeout(5000), onEvent: (event: AgentEvent) => events.push(event) }
-    const first = await promptClaudeCode(options)
+    const models: unknown[] = []
+    const first = await promptClaudeCode({ ...options, onModel: model => models.push(model) })
+    expect(models).toEqual([
+      { provider: "Amazon Bedrock", model: "configured-model" },
+      { provider: "Amazon Bedrock", model: "actual-model" },
+    ])
     expect(first.report).toBe("new denyPermission denied")
     expect(first.usage).toMatchObject({ inputTokens: 7, cacheReadInputTokens: 80 })
     expect(events.map(event => event.type)).toEqual(["content_delta", "content_final"])

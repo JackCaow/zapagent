@@ -14,7 +14,9 @@ import { displayWidth, truncateToWidth } from "./truncate.js"
 import { ModelMetadataDialog } from "./dialog-model-metadata.js"
 import { ContextWindowDialog } from "./dialog-context-window.js"
 
-interface Props { config: AppConfig; initialProviderId?: string; setup?: boolean; onSave: (next: AppConfig) => void; onCommit: (next: AppConfig) => void; onCancel: () => void }
+import type { ClaudeModelIdentity } from "../agent/claude-code.js"
+
+interface Props { claudeModel?: ClaudeModelIdentity; config: AppConfig; initialProviderId?: string; setup?: boolean; onSave: (next: AppConfig) => void; onCommit: (next: AppConfig) => void; onCancel: () => void }
 
 interface ProviderTab { id: string | null; label: string }
 
@@ -47,7 +49,7 @@ function ProviderTabs({ tabs, index, width }: { tabs: ProviderTab[]; index: numb
   </Text>
 }
 
-export function ModelDialog({ config, initialProviderId, setup = false, onSave, onCommit, onCancel }: Props) {
+export function ModelDialog({ config, claudeModel, initialProviderId, setup = false, onSave, onCommit, onCancel }: Props) {
   const width = Math.max(10, useTermWidth() - 2)
   const [height, setHeight] = useState(process.stdout.rows ?? 24)
   useEffect(() => {
@@ -145,7 +147,8 @@ export function ModelDialog({ config, initialProviderId, setup = false, onSave, 
   })
 
   const agent = agentManagingModel(config)
-  const agentModel = agent === "claude-code" ? "Claude Code · model selected by local CLI" : agent ? `${agent} · model selected by agent` : undefined
+  const claudeLabel = claudeModel ? `${claudeModel.provider}/${claudeModel.model}` : "Claude Code · awaiting model"
+  const agentModel = agent === "claude-code" ? claudeLabel : agent ? `${agent} · model selected by agent` : undefined
   if (!provider) return <DialogFrame title="Models · /model" hint="esc close">
     {agentModel && <Text>Current: {agentModel}</Text>}
     <Text>No provider models configured. Use /connect to add a model provider.</Text>
