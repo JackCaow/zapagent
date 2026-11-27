@@ -161,6 +161,21 @@ describe("runAcpTask (in-process agent)", () => {
     } finally { await rm(cwd, { recursive: true, force: true }); }
   });
 
+  it("declines declared mutations of workspace controls before requesting approval", async () => {
+    const cwd = await tempDir();
+    try {
+      const { approve, calls } = approver(() => true);
+      const handlers = createAcpHostHandlers({ agentId: "fake", cwd, approve });
+      for (const kind of ["edit", "move", "delete"] as const) {
+        const result = await handlers.requestPermission!({
+          sessionId: "test", toolCall: { toolCallId: "change", kind, locations: [{ path: join(cwd, ".zapcode", "settings.json") }] },
+          options: [{ optionId: "no", kind: "reject_once", name: "Reject" }],
+        }, new AbortController().signal);
+        expect(result.outcome).toEqual({ outcome: "selected", optionId: "no" });
+      }
+      expect(calls).toHaveLength(0);
+    } finally { await rm(cwd, { recursive: true, force: true }); }
+  });
   it("maps permission requests: commands become bash, others are namespaced; zap never grants 'always'", async () => {
     const cwd = await tempDir();
     try {

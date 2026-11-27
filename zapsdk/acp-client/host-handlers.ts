@@ -1,5 +1,5 @@
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, sep } from "node:path";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { RequestError, type PermissionOption, type RequestPermissionRequest, type RequestPermissionResponse } from "@agentclientprotocol/sdk";
 import type { ApprovalCallback, ApprovalContext, ApprovalResponse } from "../tools/executor.js";
 import { resolveToolPathCanonical } from "../builtin-tools/filesystem.js";
@@ -45,7 +45,17 @@ export class AcpWorkspace {
   }
 
   contains(path: string): boolean { return within(path, this.root); }
-  isProtected(path: string): boolean { return this.protectedRoots.some(root => within(path, root)); }
+  isProtected(path: string): boolean {
+    // Reserve control-directory spellings even when a new path has no
+    // on-disk casing for realpath to recover on macOS or Windows.
+    const fold = process.platform === "win32" || process.platform === "darwin";
+    return this.protectedRoots.some(root => fold ? within(path.toLowerCase(), root.toLowerCase()) : within(path, root));
+  }
+
+  protectsWrite(path: string): boolean {
+    const absolute = resolve(this.root, path);
+    return this.isProtected(absolute) || this.isProtected(this.resolve(absolute));
+  }
 }
 
 function within(path: string, root: string): boolean {
@@ -86,7 +96,11 @@ export function createAcpHostHandlers(policy: AcpHostPolicy): AcpHostHandlers {
       // must be answered "cancelled", not rejected.
       const live = signalFor(signal);
       if (live.aborted) return { outcome: { outcome: "cancelled" } };
-      const response = await approve(permissionTarget(policy.agentId, request, workspace), live);
+      const diffs = tool.content?.flatMap(item => item.type === "diff" ? [item.path] : []) ?? [];
+      const mutation = tool.kind === "edit" || tool.kind === "delete" || tool.kind === "move";
+      const paths = mutation ? [...diffs, ...(tool.locations ?? []).map(location => location.path)] : diffs;
+      const response = paths.some(path => workspace.protectsWrite(path))
+        ? false : await approve(permissionTarget(policy.agentId, request, workspace), live);
       if (live.aborted) return { outcome: { outcome: "cancelled" } };
       const allowed = response === true;
       decisions.push({ title, kind: tool.kind ?? undefined, allowed });
@@ -116,7 +130,7 @@ export function createAcpHostHandlers(policy: AcpHostPolicy): AcpHostHandlers {
 
     async writeTextFile(request, signal) {
       const path = workspace.resolve(request.path);
-      if (workspace.isProtected(path)) {
+      if (workspace.isProtected(request.path) || workspace.isProtected(path)) {
         throw RequestError.internalError(undefined, "denied by zap: .git and .zapcode are protected and cannot be written");
       }
       const target: ApprovalTarget = workspace.contains(path)
