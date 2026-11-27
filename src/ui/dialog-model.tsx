@@ -15,9 +15,9 @@ import { ModelMetadataDialog } from "./dialog-model-metadata.js"
 import { ContextWindowDialog } from "./dialog-context-window.js"
 
 import { discoverClaudeModels, type ClaudeModelChoice } from "../agent/claude-models.js"
-import type { ClaudeModelIdentity } from "../agent/claude-code.js"
+import type { ExternalModelIdentity } from "../agent/startup-model-cache.js"
 
-interface Props { includeClaude?: boolean; claudeModel?: ClaudeModelIdentity; config: AppConfig; initialProviderId?: string; setup?: boolean; onSave: (next: AppConfig) => void; onCommit: (next: AppConfig) => void; onCancel: () => void }
+interface Props { includeClaude?: boolean; claudeModel?: ExternalModelIdentity; config: AppConfig; initialProviderId?: string; setup?: boolean; onSave: (next: AppConfig) => void; onCommit: (next: AppConfig) => void; onCancel: () => void }
 
 const claudeTabId = Symbol("Claude Code")
 type ProviderTabId = string | typeof claudeTabId | null

@@ -27,6 +27,7 @@ export interface AcpTurnOptions {
   /** Event path prefix for nested rendering (subagent path). */
   path?: string[];
   onEvent?: (event: AgentEvent) => void;
+  onModelId?: (model: string) => void;
   onContextUsage?: (usage: { used: number; size: number }) => void;
 }
 
@@ -47,6 +48,7 @@ export class AcpAgentSession {
   availableCommands: AvailableCommand[] = [];
   /** Setup steps the agent rejected (mode/config/model); the session continues. */
   readonly warnings: string[] = [];
+  private legacyModelId?: string;
   private turn?: (update: SessionUpdate) => void;
 
   private constructor(
@@ -72,17 +74,24 @@ export class AcpAgentSession {
         session.modes = created.modes;
         session.currentModeId = created.modes?.currentModeId;
         session.configOptions = created.configOptions;
+        // Older bridges expose this now-unstable field alongside session/new.
+        const legacy = (created as { models?: { currentModelId?: unknown } }).models?.currentModelId;
+        if (typeof legacy === "string") session.legacyModelId = legacy;
         if (spec.model) {
           // Agents expose the model as a "model" config option (agy, codex);
           // the unstable session/set_model is only a fallback.
           const model = spec.model;
           const asOption = created.configOptions?.some(option => option.id === "model");
-          await session.attempt(`model ${model}`, () => asOption
-            ? connection.setConfigOption(created.sessionId, "model", model)
-            : connection.setModel(created.sessionId, model));
+          await session.attempt(`model ${model}`, async () => {
+            if (asOption) await session.configure("model", model);
+            else {
+              await connection.setModel(created.sessionId, model);
+              session.legacyModelId = model;
+            }
+          });
         }
         for (const [configId, value] of Object.entries(spec.config ?? {})) {
-          await session.attempt(`config ${configId}=${value}`, () => connection.setConfigOption(created.sessionId, configId, value));
+          await session.attempt(`config ${configId}=${value}`, () => session.configure(configId, value));
         }
       }
       const mode = options.mode ?? spec.mode;
@@ -96,6 +105,10 @@ export class AcpAgentSession {
   }
 
   get agentName(): string { return this.connection.agentName; }
+  get modelId(): string | undefined {
+    const option = this.configOptions?.find(item => item.type === "select" && (item.category === "model" || item.id === "model"));
+    return option?.type === "select" ? option.currentValue : this.legacyModelId;
+  }
   get resumable(): boolean { return !!this.connection.info.agentCapabilities?.loadSession; }
   get supportsImages(): boolean { return !!this.connection.info.agentCapabilities?.promptCapabilities?.image; }
 
@@ -104,7 +117,17 @@ export class AcpAgentSession {
   async prompt(content: string | ContentBlock[], options: AcpTurnOptions = {}): Promise<AcpTurnResult> {
     const mapper = new AcpEventMapper(options.path ?? []);
     const emit = (events: AgentEvent[]) => { for (const event of events) options.onEvent?.(event); };
+    let reportedModel: string | undefined;
+    const reportModel = () => {
+      const modelId = this.modelId;
+      if (modelId && modelId !== reportedModel) {
+        reportedModel = modelId;
+        options.onModelId?.(modelId);
+      }
+    };
+    reportModel();
     this.turn = update => {
+      if (update.sessionUpdate === "config_option_update") reportModel();
       emit(mapper.map(update));
       if (update.sessionUpdate === "usage_update" && mapper.contextUsage) options.onContextUsage?.(mapper.contextUsage);
     };
@@ -146,6 +169,11 @@ export class AcpAgentSession {
     }
     else if (update.sessionUpdate === "config_option_update") this.configOptions = update.configOptions;
     this.turn?.(update);
+  }
+
+  private async configure(id: string, value: string): Promise<void> {
+    const result = await this.connection.setConfigOption(this.sessionId, id, value);
+    if (result?.configOptions) this.configOptions = result.configOptions;
   }
 
   private async attempt(label: string, step: () => Promise<void>): Promise<void> {

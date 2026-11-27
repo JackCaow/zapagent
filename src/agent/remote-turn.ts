@@ -7,13 +7,15 @@ import type { AcpAgentSpec } from "../../zapsdk/acp-client/types.js"
 import type { StreamingPreview } from "./streamingPreview.js"
 import { createRunHandlers, type RunHandlersDeps } from "./wireRunHandlers.js"
 import type { WorkspaceCommand } from "./claude-workspace-shell.js"
-import { promptClaudeCode, type ClaudeModelIdentity } from "./claude-code.js"
+import { promptClaudeCode } from "./claude-code.js"
+import type { ExternalModelIdentity } from "./startup-model-cache.js"
+import { codexModelIdentity } from "./codex-model.js"
 import { AgentOutputThroughput } from "./outputThroughput.js"
 import { remoteAgents } from "./remote-agent.js"
 
 export interface RemoteTurnDeps extends Omit<RunHandlersDeps, "preview" | "setContextTokens" | "setContextPending" | "currentConfig"> {
   currentConfig: RunHandlersDeps["currentConfig"]
-  setClaudeModel: (identity: ClaudeModelIdentity) => void
+  onModel: (identity: ExternalModelIdentity) => void
   setRemoteContext: (usage: { used: number; size: number } | undefined) => void
   workspaceCommand?: WorkspaceCommand
   nativeClaude?: boolean
@@ -64,7 +66,7 @@ export async function runRemoteTurn(deps: RemoteTurnDeps, task: string, images?:
       command: spec.command, args: spec.args, cwd: deps.cwd, text: task, images, signal: controller.signal,
       workspaceCommand: deps.workspaceCommand,
       model: deps.currentConfig.claudeModelPreference,
-      onModel: identity => { if (!controller.signal.aborted && remoteAgents.epoch === epoch) deps.setClaudeModel(identity) },
+      onModel: identity => { if (!controller.signal.aborted && remoteAgents.epoch === epoch) deps.onModel(identity) },
       plan: deps.currentConfig.permissionMode === "plan", approve: remoteAgents.host.approve,
       resume: previous?.cwd === deps.cwd && previous.epoch === epoch && previous.tip === deps.conversation.getTurns().at(-1) ? previous.sessionId : undefined,
       onEvent, onAccepted,
@@ -74,6 +76,10 @@ export async function runRemoteTurn(deps: RemoteTurnDeps, task: string, images?:
       signal: controller.signal,
       onEvent,
       onAccepted,
+      onModelId: spec.id === "codex" ? model => {
+        const identity = codexModelIdentity(model)
+        if (identity && !controller.signal.aborted) deps.onModel(identity)
+      } : undefined,
       onContextUsage: usage => { if (!controller.signal.aborted) deps.setRemoteContext(usage) },
       onStarted: session => {
         deps.setRemoteContext(undefined)

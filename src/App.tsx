@@ -559,7 +559,7 @@ export function App() {
     status: runnerStatus,
     providerRequest,
     remoteContext,
-    claudeModel,
+    externalModel,
     outputThroughput,
     setStatus,
     step,
@@ -975,6 +975,7 @@ export function App() {
   const agentId = conversationAgentId(config)
   const subscriptionCodex = agentId === "codex" && getActiveProvider(config)?.authMode === "codex-oauth"
   const agentLabel = agentId === "claude-code" ? "Claude Code" : agentId === "codex" ? "Codex" : agentId ? `ACP/${agentId}` : undefined
+  const claudeModel = agentId === "claude-code" ? externalModel : undefined
   const hasKey = !!agentId || configHasApiKey(config)
   const welcomeHeader = useMemo(() => <Welcome hasApiKey={hasKey} />, [hasKey])
   const mcpFooterSummary = useMemo(
@@ -1388,7 +1389,7 @@ export function App() {
           outputThroughput={outputThroughput}
           cwd={cwdShort}
           provider={(agentId === "claude-code" && claudeModel ? claudeModel.provider : agentLabel) ?? providerDisplayName}
-          model={agentId === "claude-code" ? claudeModel?.model ?? "awaiting model" : subscriptionCodex ? config.active.model || "default" : agentId ? "agent default" : config.active.model}
+          model={agentId === "claude-code" ? claudeModel?.model ?? "awaiting model" : subscriptionCodex ? config.active.model || "default" : agentId === "codex" ? externalModel?.model ?? "agent default" : agentId ? "agent default" : config.active.model}
           effort={(!agentId || subscriptionCodex) && config.active.providerId ? getEffort(config, config.active.providerId) : undefined}
           isRunning={isRunning}
           step={step}

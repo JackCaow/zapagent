@@ -33,11 +33,19 @@ ptyTest("aggregate model picker retains ownership and selection across discovery
   writeFileSync(join(bin, "claude"), `#!/bin/sh
 exec ${quote(process.execPath)} -e '
 import { createInterface } from "node:readline"
+import { existsSync } from "node:fs"
 const model = process.argv.find(arg => arg.startsWith("--model="))?.slice(8)
 const send = value => console.log(JSON.stringify(value))
 for await (const line of createInterface({ input: process.stdin })) {
   const msg = JSON.parse(line)
-  if (msg.type === "control_request") {
+  if (msg.type === "control_request" && msg.request.subtype === "get_settings") {
+    const refresh = existsSync("refresh-model")
+    if (refresh) await Bun.sleep(1600)
+    const picked = refresh ? "updated" : model ?? "opus"
+    send({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: {
+      applied: { model: "claude-fixture-" + picked },
+    } } })
+  } else if (msg.type === "control_request") {
     send({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: {
       account: { apiProvider: "firstParty" },
       models: [
@@ -47,11 +55,40 @@ for await (const line of createInterface({ input: process.stdin })) {
       ],
     } } })
   } else if (msg.type === "user") {
-    const id = model === "sonnet" ? "claude-fixture-sonnet" : "claude-fixture-opus"
+    const id = model === "sonnet" || model === "haiku" ? "claude-fixture-sonnet" : "claude-fixture-opus"
     send({ type: "system", subtype: "init", served_by_anthropic: true, model: id })
     send({ type: "assistant", message: { model: id, content: [{ type: "text", text: "FIXTURE_REPLY_" + model }] } })
     send({ type: "result", subtype: "success" })
   }
+}' -- "$@"
+`, { mode: 0o700 })
+  writeFileSync(join(bin, "codex-acp"), `#!/bin/sh
+exec ${quote(process.execPath)} -e '
+import { createInterface } from "node:readline"
+import { existsSync } from "node:fs"
+const appServer = process.argv.includes("app-server")
+const send = value => console.log(JSON.stringify({ jsonrpc: "2.0", ...value }))
+const options = model => [{ id: "model", category: "model", name: "Model", type: "select", currentValue: model, options: [{ value: model, name: model }] }]
+for await (const line of createInterface({ input: process.stdin })) {
+  const {method,id} = JSON.parse(line)
+  if (id === undefined) continue
+  let result
+  if (method === "initialize") result = appServer ? {} : { protocolVersion: 1, agentInfo: { name: "Codex", version: "fixture" } }
+  else if (appServer && method === "config/read") {
+    const refresh = existsSync("refresh-codex-model")
+    if (refresh) await Bun.sleep(1600)
+    result = { config: { model: refresh ? null : "codex-fixture-config" } }
+  } else if (appServer && method === "model/list") {
+    result = { data: [{ model: "not-the-default", isDefault: false }, { model: "codex-fixture-default", isDefault: true }] }
+  } else if (!appServer && method === "session/new") {
+    result = { sessionId: "codex-fixture", configOptions: options("codex-fixture-session") }
+  } else if (!appServer && method === "session/set_mode") result = {}
+  else if (!appServer && method === "session/prompt") {
+    send({ method: "session/update", params: { sessionId: "codex-fixture", update: { sessionUpdate: "config_option_update", configOptions: options("codex-fixture-actual") } } })
+    send({ method: "session/update", params: { sessionId: "codex-fixture", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "FIXTURE_CODEX_REPLY" } } } })
+    result = { stopReason: "end_turn" }
+  } else throw Error("unexpected " + method)
+  send({ id, result })
 }' -- "$@"
 `, { mode: 0o700 })
   const socket = `zap-models-${process.pid}-${Date.now()}`, frames: string[] = []
@@ -131,16 +168,38 @@ for await (const line of createInterface({ input: process.stdin })) {
     expect(captured).not.toContain("› manual-alias")
     expect(captured).not.toContain("[Alpha]")
     expect(config().subscriptionAgent).toBeUndefined()
-    await key("Down", "Enter"); await visible("Claude Code/awaiting model")
+    await key("Down", "Enter"); await visible("Anthropic/claude-fixture-sonnet")
     expect(config().subscriptionAgent).toBe("claude-code")
     expect(config().claudeModelPreference).toBe("sonnet")
     expect(config().active).toEqual({ providerId: "alpha", model: "manual-alias" })
     await command("Which fixture is selected?"); await visible("FIXTURE_REPLY_sonnet")
     await command("/model"); await visible("[Anthropic (Claude Code)]")
     await visible("Current: Anthropic/claude-fixture-sonnet")
+    await visible("› Fixture Sonnet (current)")
+    await key("Down", "Enter"); await visible("Anthropic/claude-fixture-haiku")
+    await command("Which model served this turn?"); await visible("FIXTURE_REPLY_haiku")
+    await command("/model"); await visible("Current: Anthropic/claude-fixture-sonnet")
+    await visible("Fixture Haiku (selected)")
+    writeFileSync(join(root, "refresh-model"), "")
+    tmux("kill-session", "-t", "models"); launch()
+    await visible("Anthropic/claude-fixture-haiku")
+    await visible("Anthropic/claude-fixture-updated")
+    await command("/model"); await visible("[Anthropic (Claude Code)]")
     await key("Right"); await visible("[Alpha]")
     await key("Enter"); await visible("Alpha/manual-alias")
     expect(config().subscriptionAgent).toBeUndefined()
+    await command("/agent codex"); await visible("Codex/codex-fixture-config")
+    await command("Reply through ACP"); await visible("FIXTURE_CODEX_REPLY")
+    await visible("Codex/codex-fixture-actual")
+    writeFileSync(join(root, "refresh-codex-model"), "")
+    tmux("kill-session", "-t", "models"); launch(); await visible("Alpha/manual-alias")
+    await command("/agent codex"); await visible("Codex/codex-fixture-actual")
+    await visible("Codex/codex-fixture-default")
+    await command("/agent zap"); await visible("Alpha/manual-alias")
+    await command("/agent codex"); await visible("Codex/codex-fixture-default")
+    await command("/agent zap"); await visible("Alpha/manual-alias")
+    await sleep(1800)
+    expect(screen()).not.toContain("Codex/codex-fixture-default")
     expect(alphaRequests).toBeGreaterThan(0); expect(betaRequests).toBeGreaterThan(0)
     if (process.env.ZAPCODE_MODEL_AGGREGATE_RECORDING) {
       writeFileSync(process.env.ZAPCODE_MODEL_AGGREGATE_RECORDING, [JSON.stringify({ version: 2, width: 160, height: 44, title: "Provider tabs in the model picker (local fixture endpoints)" }),
