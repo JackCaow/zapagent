@@ -1,3 +1,5 @@
+import { remoteAgents } from "../agent/remote-agent.js"
+import type { ClaudeModelIdentity } from "../agent/claude-code.js"
 import { agentInstallHint, codexConversationSpec, nativeCommand } from "../agent/official-agents.js"
 import { goalTurnMeter, type GoalTurnInput } from "../goal-turn.js"
 import { RetryProvider } from "../../zapsdk/core/retry.js"
@@ -367,6 +369,7 @@ export function useAgentRunner({
   const { view: goalStatus, select: selectGoalView, update: updateGoalView, clear: resetGoalView } = useGoalView(currentSessionId, cwd, goalRunning, undefined, appLogger)
   const [goalTodoId, setGoalTodoId] = useState<string>()
   useEffect(() => { setGoalTodoId(undefined) }, [currentSessionId])
+  const [claudeModel, setClaudeModel] = useState<ClaudeModelIdentity>()
   const [remoteContext, setRemoteContext] = useState<{ used: number; size: number }>()
   const [outputThroughput, setOutputThroughput] = useState<OutputThroughputSample>()
   const [providerRequest, setProviderRequest] = useState<ProviderRequestEvent>()
@@ -411,10 +414,12 @@ export function useAgentRunner({
   const imageTokenContext = resolveModelImageTokenContext(getActiveProvider(config), config.active.model)
   const imageTokenScope = `${config.active.providerId}\0${config.active.model}\0${JSON.stringify(imageTokenContext)}`
   const remoteAgentId = conversationAgentId(config)
+  const remoteEpoch = remoteAgents.epoch
   useEffect(() => {
+    setClaudeModel(undefined)
     setRemoteContext(undefined)
     setOutputThroughput(undefined)
-  }, [remoteAgentId, currentSessionId, imageTokenScope])
+  }, [remoteAgentId, currentSessionId, imageTokenScope, remoteEpoch])
   const contextScopeRef = useRef(imageTokenScope)
   useEffect(() => {
     const nextScope = imageTokenScope
@@ -508,6 +513,7 @@ export function useAgentRunner({
   ) => {
     const next = buildResetRunDiagnosticsState(usage, context, restoredUsageHistory, restoredContextHistory, promptCache)
     setOutputThroughput(undefined)
+    setClaudeModel(undefined)
     setRemoteContext(undefined)
     setTokens(next.tokens)
     setUsageHistory(next.usageHistory)
@@ -629,7 +635,7 @@ export function useAgentRunner({
         const projectShell = nativeClaude && work && turnConfig.permissionMode === "acceptEdits" && objects.sandboxConfined
           ? rootExecutor.withExecutionAdmission(work.assertProjectCommandAllowed) : undefined
         completedResult = await runRemoteTurn({
-          spec: remoteSpec, nativeClaude, setRemoteContext, cwd, conversation, currentConfig: turnConfig, controller,
+          spec: remoteSpec, nativeClaude, setClaudeModel, setRemoteContext, cwd, conversation, currentConfig: turnConfig, controller,
           workspaceCommand: projectShell ? (args, signal) => projectShell.execute("bash", args, signal) : undefined,
           createPreview: () => {
             const next = createStreamingPreview({ addLog, setStreamingText, setIsStreaming, setThinkingText, setIsThinking, getIsFrozen: getIsFrozen ?? (() => false) })
@@ -1146,6 +1152,7 @@ export function useAgentRunner({
     status,
     providerRequest,
     remoteContext,
+    claudeModel,
     outputThroughput,
     setStatus,
     step,

@@ -14,6 +14,12 @@ import { claudeWorkspaceShell, type WorkspaceCommand } from "./claude-workspace-
 
 const toolKinds: Record<string, ToolKind> = { Bash: "execute", Write: "edit", Edit: "edit", MultiEdit: "edit", NotebookEdit: "edit", Read: "read", Glob: "search", Grep: "search" }
 
+export interface ClaudeModelIdentity { provider: string; model: string }
+
+const providerLabels = new Map([
+  ["firstParty", "Anthropic"], ["bedrock", "Amazon Bedrock"], ["vertex", "Google Vertex AI"], ["foundry", "Microsoft Foundry"],
+])
+
 interface Options {
   command: string
   args?: string[]
@@ -26,6 +32,7 @@ interface Options {
   approve?: ApprovalCallback
   workspaceCommand?: WorkspaceCommand
   onEvent: (event: AgentEvent) => void
+  onModel?: (identity: ClaudeModelIdentity) => void
   onAccepted?: () => void
 }
 
@@ -122,9 +129,22 @@ async function runClaudeCode(options: Options, sessionId: string, shell?: Return
     const sendUser = () => send({ type: "user", message: { role: "user", content: [{ type: "text", text: options.text }, ...images] } })
     const settingsId = randomUUID()
     let shellReady = false
-    let initializing = shell ? randomUUID() : undefined
+    let apiProvider: string | undefined
+    let servedByAnthropic: boolean | undefined
+    let model: string | undefined
+    let reported: ClaudeModelIdentity | undefined
+    const reportModel = (value?: unknown) => {
+      if (typeof value === "string" && value.trim() && !value.startsWith("<")) model = value.trim()
+      if (!model || signal.aborted) return
+      const provider = apiProvider === "firstParty" && servedByAnthropic === false ? "Custom endpoint"
+        : apiProvider ? providerLabels.get(apiProvider) ?? apiProvider : servedByAnthropic ? "Anthropic" : "Claude Code"
+      if (reported?.model === model && reported.provider === provider) return
+      reported = { provider, model }
+      options.onModel?.(reported)
+    }
+    let initializing = shell || options.onModel ? randomUUID() : undefined
     if (initializing) send({ type: "control_request", request_id: initializing, request: { subtype: "initialize" } })
-    else sendUser()
+    if (!shell) sendUser()
     const blocks = new Map<number, { id: string; kind: "text" | "thinking"; streamed: boolean }>()
     const finalIds: { id: string; kind: "text" | "thinking" }[] = []
     for await (const line of createInterface({ input: child.stdout!, crlfDelay: Infinity })) {
@@ -133,8 +153,12 @@ async function runClaudeCode(options: Options, sessionId: string, shell?: Return
       try { event = JSON.parse(line) } catch { continue }
       if (!event || typeof event !== "object") continue
       if (initializing && event.type === "control_response" && event.response?.request_id === initializing) {
-        if (event.response.subtype !== "success" || event.response.response?.sandbox_enabled) throw new NativeShellRequired()
         initializing = undefined
+        const provider = event.response.response?.account?.apiProvider
+        if (typeof provider === "string" && provider.trim()) apiProvider = provider.trim()
+        reportModel()
+        if (!shell) continue
+        if (event.response.subtype !== "success" || event.response.response?.sandbox_enabled) throw new NativeShellRequired()
         send({ type: "control_request", request_id: settingsId, request: { subtype: "get_settings" } })
         continue
       }
@@ -144,6 +168,16 @@ async function runClaudeCode(options: Options, sessionId: string, shell?: Return
         clearTimeout(setupTimeout)
         sendUser()
         continue
+      }
+      if (!event.parent_tool_use_id) {
+        if (event.type === "system" && event.subtype === "init") {
+          servedByAnthropic = event.served_by_anthropic
+          reportModel(event.model)
+        } else if (event.type === "stream_event" && event.event?.type === "message_start") {
+          reportModel(event.event.message?.model)
+        } else if (event.type === "assistant") {
+          reportModel(event.message?.model)
+        }
       }
       if (!accepted && (event.type === "assistant" || event.type === "system" && event.subtype === "init")) {
         accepted = true
