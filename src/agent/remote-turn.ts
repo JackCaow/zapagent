@@ -63,6 +63,7 @@ export async function runRemoteTurn(deps: RemoteTurnDeps, task: string, images?:
     const turn = deps.nativeClaude ? await promptClaudeCode({
       command: spec.command, args: spec.args, cwd: deps.cwd, text: task, images, signal: controller.signal,
       workspaceCommand: deps.workspaceCommand,
+      model: deps.currentConfig.claudeModelPreference,
       onModel: identity => { if (!controller.signal.aborted && remoteAgents.epoch === epoch) deps.setClaudeModel(identity) },
       plan: deps.currentConfig.permissionMode === "plan", approve: remoteAgents.host.approve,
       resume: previous?.cwd === deps.cwd && previous.epoch === epoch && previous.tip === deps.conversation.getTurns().at(-1) ? previous.sessionId : undefined,

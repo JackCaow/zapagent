@@ -201,7 +201,7 @@ index 0082666b281ec2db77b875d6b8460bcc19a59ce7..5fe5c0f2a8338e0971af110a9eff9c4c
      initKittyKeyboard() {
          // Protocol is opt-in: if kittyKeyboard is not specified, do nothing
 diff --git a/build/log-update.js b/build/log-update.js
-index cdb5fc41f158304c4c4f230a765065ab1fe0a2f7..4ddb3a270d007f0c0d4c379bed789fb874e77045 100644
+index cdb5fc41f158304c4c4f230a765065ab1fe0a2f7..0f31b2f8aa2aa8fff80dc7a46e6b0cc9f618e535 100644
 --- a/build/log-update.js
 +++ b/build/log-update.js
 @@ -156,6 +156,33 @@ const createIncremental = (stream, { showCursor = false } = {}) => {
@@ -238,3 +238,14 @@ index cdb5fc41f158304c4c4f230a765065ab1fe0a2f7..4ddb3a270d007f0c0d4c379bed789fb8
          const hasTrailingNewline = str.endsWith('\n');
          // We aggregate all chunks for incremental rendering into a buffer, and then write them to stdout at the end.
          const buffer = [];
+@@ -176,7 +203,9 @@ const createIncremental = (stream, { showCursor = false } = {}) => {
+                 // Don't move past the last line when there's no trailing newline,
+                 // otherwise the cursor overshoots the rendered block.
+                 if (!isLastLine || hasTrailingNewline) {
+-                    buffer.push(ansiEscapes.cursorNextLine);
++                    // CSI E clamps at the bottom of the viewport. CRLF also
++                    // scrolls, keeping the next frame's row count accurate.
++                    buffer.push('\r\n');
+                 }
+                 continue;
+             }

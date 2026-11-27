@@ -221,9 +221,14 @@ The footer shows output speed as `105.4 token/s` for the latest root model reque
 
 `/model` opens on the current provider and model. Use **← / →** to switch
 provider tabs, **↑ / ↓** to highlight a model, and **Enter** to activate it.
-Each tab remembers its highlighted model while the picker is open. The endpoint
-appears above the list and capabilities appear below it for the highlighted model.
-Press `/` to search the current tab. Choose **All** to search across connections,
+Each tab remembers its highlighted model while the picker is open. The **Anthropic
+(Claude Code)** tab lists the choices reported by the local Claude CLI.
+Selecting one activates Claude Code and requests that model on later turns in Zap.
+`Current` reflects the model the CLI reports for the conversation.
+
+On saved connections, the endpoint appears above the list and capabilities
+appear below it for the highlighted model. Press `/` to search that tab.
+Choose **All** to search across saved connections,
 or `p` to jump directly to a provider. Discovery runs independently per connection,
 and saved IDs remain available offline. Metadata (`m`), context (`c`), and manual
 entry (`t`) use the selected connection. In **All**, manual entry asks for a

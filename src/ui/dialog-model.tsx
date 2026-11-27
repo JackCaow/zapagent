@@ -14,11 +14,14 @@ import { displayWidth, truncateToWidth } from "./truncate.js"
 import { ModelMetadataDialog } from "./dialog-model-metadata.js"
 import { ContextWindowDialog } from "./dialog-context-window.js"
 
+import { discoverClaudeModels, type ClaudeModelChoice } from "../agent/claude-models.js"
 import type { ClaudeModelIdentity } from "../agent/claude-code.js"
 
-interface Props { claudeModel?: ClaudeModelIdentity; config: AppConfig; initialProviderId?: string; setup?: boolean; onSave: (next: AppConfig) => void; onCommit: (next: AppConfig) => void; onCancel: () => void }
+interface Props { includeClaude?: boolean; claudeModel?: ClaudeModelIdentity; config: AppConfig; initialProviderId?: string; setup?: boolean; onSave: (next: AppConfig) => void; onCommit: (next: AppConfig) => void; onCancel: () => void }
 
-interface ProviderTab { id: string | null; label: string }
+const claudeTabId = Symbol("Claude Code")
+type ProviderTabId = string | typeof claudeTabId | null
+interface ProviderTab { id: ProviderTabId; label: string }
 
 function ProviderTabs({ tabs, index, width }: { tabs: ProviderTab[]; index: number; width: number }) {
   const labels = tabs.map((tab, i) => {
@@ -41,7 +44,7 @@ function ProviderTabs({ tabs, index, width }: { tabs: ProviderTab[]; index: numb
   }
   return <Text wrap="truncate-end">
     {first > 0 && <Text color={c.text.faint}>‹ </Text>}
-    {tabs.slice(first, last + 1).map((tab, offset) => <Text key={tab.id === null ? "all" : `provider:${tab.id}`}
+    {tabs.slice(first, last + 1).map((tab, offset) => <Text key={tab.id === null ? "all" : tab.id === claudeTabId ? "claude" : `provider:${tab.id}`}
       bold={first + offset === index} color={first + offset === index ? c.accent : c.text.muted}>
       {offset > 0 ? "  " : ""}{labels[first + offset]}
     </Text>)}
@@ -49,7 +52,7 @@ function ProviderTabs({ tabs, index, width }: { tabs: ProviderTab[]; index: numb
   </Text>
 }
 
-export function ModelDialog({ config, claudeModel, initialProviderId, setup = false, onSave, onCommit, onCancel }: Props) {
+export function ModelDialog({ config, includeClaude = false, claudeModel, initialProviderId, setup = false, onSave, onCommit, onCancel }: Props) {
   const width = Math.max(10, useTermWidth() - 2)
   const [height, setHeight] = useState(process.stdout.rows ?? 24)
   useEffect(() => {
@@ -57,11 +60,19 @@ export function ModelDialog({ config, claudeModel, initialProviderId, setup = fa
     process.stdout.on("resize", resize)
     return () => { process.stdout.off("resize", resize) }
   }, [])
-  const [tabId, setTabId] = useState<string | null>(initialProviderId ?? (config.active.providerId || config.providers[0]?.id || null))
+  const agent = agentManagingModel(config)
+  const activeClaude = agent === "claude-code"
+  const claudeProvider = claudeModel?.provider ?? "Anthropic"
+  const claudeTabLabel = claudeProvider === "Claude Code" ? claudeProvider : `${claudeProvider} (Claude Code)`
+  const [tabId, setTabId] = useState<ProviderTabId>(initialProviderId
+    ?? (includeClaude && activeClaude ? claudeTabId : config.active.providerId || config.providers[0]?.id || null))
   const tabs: ProviderTab[] = config.providers.map(item => ({ id: item.id, label: item.name || item.id }))
-  if (!setup && tabs.length > 1) tabs.push({ id: null, label: "All" })
+  if (includeClaude) tabs.unshift({ id: claudeTabId, label: claudeTabLabel })
+  if (!setup && config.providers.length > 1) tabs.push({ id: null, label: "All" })
   const tabIndex = Math.max(0, tabs.findIndex(tab => tab.id === tabId))
-  const providerFilter = tabs[tabIndex]?.id ?? null
+  const focusedTab = tabs[tabIndex]?.id ?? null
+  const showClaude = focusedTab === claudeTabId
+  const providerFilter = typeof focusedTab === "string" ? focusedTab : null
   const lastModel = useRef(new Map<string | null, string>())
   const [phase, setPhase] = useState<"models" | "providers" | "manual" | "search" | "metadata" | "context">("models")
   const [providerAction, setProviderAction] = useState<"filter" | "manual">("filter")
@@ -72,10 +83,32 @@ export function ModelDialog({ config, claudeModel, initialProviderId, setup = fa
   const [query, setQuery] = useState("")
   const [manual, setManual] = useState("")
   const [refresh, setRefresh] = useState(0)
+  const [claudeRefresh, setClaudeRefresh] = useState(0)
+  const [claudeChoices, setClaudeChoices] = useState<ClaudeModelChoice[]>()
+  const [claudeError, setClaudeError] = useState(false)
+  const [claudeSelection, setClaudeSelection] = useState<string>()
+  const claudeRows = claudeChoices ?? []
+  const reportedChoice = claudeModel && (claudeRows.find(row => row.value === config.claudeModelPreference && row.resolvedModel === claudeModel.model)
+    ?? claudeRows.find(row => row.value !== "default" && row.resolvedModel === claudeModel.model))
+  const selectedClaudeId = claudeSelection ?? config.claudeModelPreference ?? reportedChoice?.value
+  const claudeIndex = Math.max(0, claudeRows.findIndex(row => row.value === selectedClaudeId))
+
+  useEffect(() => {
+    if (!showClaude) return
+    const controller = new AbortController()
+    setClaudeError(false)
+    setClaudeChoices(undefined)
+    void discoverClaudeModels(process.cwd(), controller.signal).then(choices => {
+      if (!controller.signal.aborted) setClaudeChoices(choices)
+    }, () => {
+      if (!controller.signal.aborted) setClaudeError(true)
+    })
+    return () => controller.abort()
+  }, [showClaude, claudeRefresh])
   const setupProviderId = setup ? providerFilter : null
   // Configuration changes cannot briefly expose a removed connection's rows.
   const catalogs = catalogState.providers === config.providers ? catalogState.catalogs : savedConnectionCatalogs(config.providers)
-  const shown = configuredModelRows(config.providers, catalogs, providerFilter, query)
+  const shown = showClaude ? [] : configuredModelRows(config.providers, catalogs, providerFilter, query)
   const selectedIndex = Math.max(0, shown.findIndex(row => modelCatalogKey(row.provider.id, row.id) === selectedKey))
   const selected = shown[selectedIndex]
   const displayedKey = selected ? modelCatalogKey(selected.provider.id, selected.id) : null
@@ -102,11 +135,11 @@ export function ModelDialog({ config, claudeModel, initialProviderId, setup = fa
     return discoverConfiguredModels(requested, update)
   }, [config.providers, refresh, setupProviderId])
 
-  function switchProvider(id: string | null) {
+  function switchProvider(id: ProviderTabId) {
     if (displayedKey) lastModel.current.set(providerFilter, displayedKey)
     setTabId(id)
     setQuery("")
-    setSelectedKey(lastModel.current.get(id) ?? modelCatalogKey(config.active.providerId, config.active.model))
+    setSelectedKey((id === claudeTabId ? undefined : lastModel.current.get(id)) ?? modelCatalogKey(config.active.providerId, config.active.model))
     setPhase("models")
   }
 
@@ -115,12 +148,28 @@ export function ModelDialog({ config, claudeModel, initialProviderId, setup = fa
     if (state.phase !== "models") return
     const cmd = commandInput(input, key)
     if (key.escape) { state.onCancel(); return }
-    if (!state.provider) return
     if (!setup && tabs.length > 1 && (key.leftArrow || key.rightArrow)) {
       switchProvider(tabs[(tabIndex + (key.leftArrow ? -1 : 1) + tabs.length) % tabs.length].id)
       return
     }
-    if (cmd === "p" && !setup) { setProviderAction("filter"); setPhase("providers"); return }
+    if (state.provider && cmd === "p" && !setup) { setProviderAction("filter"); setPhase("providers"); return }
+    if (showClaude) {
+      if (cmd === "r") { setClaudeRefresh(value => value + 1); return }
+      if (key.upArrow || key.downArrow) {
+        const next = Math.max(0, Math.min(claudeRows.length - 1, claudeIndex + (key.upArrow ? -1 : 1)))
+        if (claudeRows[next]) setClaudeSelection(claudeRows[next].value)
+      } else if (isReturnInput(input, key)) {
+        const choice = claudeRows[claudeIndex]
+        if (!choice && !claudeError && !claudeChoices) return
+        if (activeClaude && (!choice || choice.value === config.claudeModelPreference)) state.onCancel()
+        else state.onCommit({
+          ...state.config, activeAgent: undefined, subscriptionAgent: "claude-code",
+          claudeModelPreference: choice?.value ?? config.claudeModelPreference,
+        })
+      }
+      return
+    }
+    if (!state.provider) return
     if (cmd === "t") {
       setManual("")
       if (state.providerFilter !== null && state.provider) { setManualProviderId(state.provider.id); setPhase("manual") }
@@ -146,9 +195,36 @@ export function ModelDialog({ config, claudeModel, initialProviderId, setup = fa
     }
   })
 
-  const agent = agentManagingModel(config)
   const claudeLabel = claudeModel ? `${claudeModel.provider}/${claudeModel.model}` : "Claude Code · awaiting model"
   const agentModel = agent === "claude-code" ? claudeLabel : agent ? `${agent} · model selected by agent` : undefined
+  const activeProvider = config.providers.find(item => item.id === config.active.providerId)
+  const currentModel = `Current: ${agentModel ?? `${config.active.model || "none"} · ${activeProvider?.name || "none"}`}`
+  const count = Math.max(1, Math.min(12, height - 18))
+  if (showClaude && currentPhase === "models") {
+    const start = Math.max(0, Math.min(claudeRows.length - count, claudeIndex - Math.floor(count / 2)))
+    const currentChoice = activeClaude ? reportedChoice?.value : undefined
+    return <DialogFrame title="Models"
+      hint={`${tabs.length > 1 ? "←→ provider · p providers · " : ""}${claudeRows.length ? "↑↓ model · enter select" : "enter use Claude Code"} · r refresh · esc close`}>
+      <ProviderTabs tabs={tabs} index={tabIndex} width={width} />
+      <Text color={c.text.faint}>{truncateToWidth(currentModel, width)}</Text>
+      <Text color={c.text.muted}>{claudeError ? "Could not read Claude Code models. Press r to retry."
+        : !claudeChoices ? "Loading Claude Code models…" : claudeRows.length
+          ? `Local Claude CLI · ${claudeRows.length} models` : "Claude Code returned no model choices."}</Text>
+      {claudeRows.length > 0 && <Box flexDirection="column" marginTop={1}>
+        {start > 0 && <Text color={c.text.faint}>… {start} above</Text>}
+        {claudeRows.slice(start, start + count).map((row, index) => {
+          const focused = start + index === claudeIndex
+          const status = row.value === currentChoice ? " (current)"
+            : activeClaude && row.value === config.claudeModelPreference ? " (selected)" : ""
+          const detail = row.resolvedModel && row.resolvedModel !== row.label ? ` · ${row.resolvedModel}` : ""
+          return <Text key={row.value} color={focused ? c.accent : c.text.primary} bold={focused}>
+            {truncateToWidth(`${focused ? "›" : " "} ${row.label}${status}${detail}`, width)}
+          </Text>
+        })}
+        {start + count < claudeRows.length && <Text color={c.text.faint}>… {claudeRows.length - start - count} more</Text>}
+      </Box>}
+    </DialogFrame>
+  }
   if (!provider) return <DialogFrame title="Models · /model" hint="esc close">
     {agentModel && <Text>Current: {agentModel}</Text>}
     <Text>No provider models configured. Use /connect to add a model provider.</Text>
@@ -165,15 +241,25 @@ export function ModelDialog({ config, claudeModel, initialProviderId, setup = fa
       onSave({ ...upsertProvider(config, { ...targetProvider, contextWindowMode: mode, contextWindow: tokens }), active: config.active })
       setPhase("models")
     }} />
-  if (phase === "providers") return <PickerDialog key={providerAction} title={providerAction === "manual" ? "Manual model · choose connection" : "Models · filter connections"}
-    options={[...(providerAction === "filter" && config.providers.length > 1 ? [{ id: "all", label: "All configured connections", meta: `${config.providers.length} connections` }] : []),
-      ...config.providers.map(item => ({ id: `provider:${item.id}`, label: item.name || item.baseURL, meta: item.baseURL }))]}
-    initialIndex={providerAction === "filter" ? providerFilter === null ? 0 : Math.max(0, config.providers.findIndex(item => item.id === providerFilter) + Number(config.providers.length > 1))
-      : Math.max(0, config.providers.findIndex(item => item.id === provider.id))}
-    onCancel={() => setPhase("models")} onSelect={id => {
-      if (providerAction === "manual") { setManualProviderId(id.slice("provider:".length)); setPhase("manual") }
-      else switchProvider(id === "all" ? null : id.slice("provider:".length))
-    }} />
+  if (phase === "providers") {
+    const manualMode = providerAction === "manual"
+    const connections = config.providers.map(item => ({
+      id: item.id, label: item.name || item.baseURL, meta: item.baseURL,
+    }))
+    const choices = manualMode ? connections : [
+      ...(config.providers.length > 1 ? [{ id: null, label: "All configured connections", meta: `${config.providers.length} connections` }] : []),
+      ...(includeClaude ? [{ id: claudeTabId, label: claudeTabLabel, meta: "Local Claude CLI" }] : []),
+      ...connections,
+    ]
+    return <PickerDialog key={providerAction} title={manualMode ? "Manual model · choose connection" : "Models · filter connections"}
+      options={choices.map(({ id, label, meta }) => ({ id: id === null ? "all" : typeof id === "symbol" ? "claude" : `provider:${id}`, label, meta }))}
+      initialIndex={Math.max(0, choices.findIndex(choice => choice.id === (manualMode ? provider.id : focusedTab)))}
+      onCancel={() => setPhase("models")} onSelect={value => {
+        const id = value === "all" ? null : value === "claude" ? claudeTabId : value.slice("provider:".length)
+        if (manualMode && typeof id === "string") { setManualProviderId(id); setPhase("manual") }
+        else switchProvider(id)
+      }} />
+  }
   if (phase === "search" || phase === "manual" && manualProvider) return <DialogFrame
     title={phase === "manual" ? `Manual model ID · ${manualProvider!.name}` : `Search models · ${providerFilter === null ? "All" : provider.name}`} hint="enter confirm · esc back">
     <Text color={c.text.faint}>{phase === "manual" ? "Manual IDs are unverified. The endpoint must support this exact ID." : "Search model IDs, connection names or endpoints. Selection changes only on Enter."}</Text>
@@ -189,14 +275,12 @@ export function ModelDialog({ config, claudeModel, initialProviderId, setup = fa
   const loading = scopedCatalogs.filter(item => item.loading).length
   const failed = scopedCatalogs.filter(item => item.error).length
   const error = catalogs.find(item => item.providerId === provider.id)?.error
-  const count = Math.max(1, Math.min(12, height - 18))
   const start = Math.max(0, Math.min(shown.length - count, selectedIndex - Math.floor(count / 2)))
-  const activeProvider = config.providers.find(item => item.id === config.active.providerId)
   return <DialogFrame title={setup ? `Choose a model · ${provider.name || provider.baseURL}` : "Models"}
     hint={setup ? "↑↓ model · enter select and finish · m metadata · c context · / search · t manual · esc choose later" : `${tabs.length > 1 ? "←→ provider · " : ""}↑↓ model · enter select · / search · p providers · m metadata · c context · r refresh · t manual · esc close`}>
     {setup && <Text color={c.accent}>Connection saved. Choose a model to use it, or press esc to choose later with /model.</Text>}
     {!setup && <ProviderTabs tabs={tabs} index={tabIndex} width={width} />}
-    <Text color={c.text.faint}>{truncateToWidth(`Current: ${agentModel ?? `${config.active.model || "none"} · ${activeProvider?.name || "none"}`}`, width)}</Text>
+    <Text color={c.text.faint}>{truncateToWidth(currentModel, width)}</Text>
     <Text color={c.text.muted}>{truncateToWidth(`${providerFilter !== null ? provider.baseURL + " · " : ""}${shown.length} models${loading ? " · discovering…" : ""}${failed && providerFilter === null ? ` · ${failed} offline` : ""}${query ? ` · filter: ${query}` : ""}`, width)}</Text>
     {error && <Text color={c.warning}>{truncateToWidth(`${provider.name}: ${error}`, width)}</Text>}
     <Box flexDirection="column" marginTop={1}>

@@ -1,6 +1,6 @@
 import { expect, it } from "bun:test"
 import { spawnSync } from "node:child_process"
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { tmpdir } from "node:os"
 import { setTimeout as sleep } from "node:timers/promises"
@@ -27,6 +27,33 @@ ptyTest("aggregate model picker retains ownership and selection across discovery
     models: index === 0 ? ["shared"] : ["shared", "beta-live"], contextWindow: index === 0 ? 128000 : 64000 }), id: name.toLowerCase(), contextWindowMode: "manual" as const }))
   saveAppConfig(join(root, "config.json"), { ...getDefaultConfig(), providers, active: { providerId: "alpha", model: "shared" }, executionBackend: "local" })
   const config = () => JSON.parse(readFileSync(join(root, "config.json"), "utf8"))
+  const bin = join(root, "bin")
+  mkdirSync(bin)
+  const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
+  writeFileSync(join(bin, "claude"), `#!/bin/sh
+exec ${quote(process.execPath)} -e '
+import { createInterface } from "node:readline"
+const model = process.argv.find(arg => arg.startsWith("--model="))?.slice(8)
+const send = value => console.log(JSON.stringify(value))
+for await (const line of createInterface({ input: process.stdin })) {
+  const msg = JSON.parse(line)
+  if (msg.type === "control_request") {
+    send({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: {
+      account: { apiProvider: "firstParty" },
+      models: [
+        { value: "default", displayName: "Default", resolvedModel: "claude-fixture-opus" },
+        { value: "sonnet", displayName: "Fixture Sonnet", resolvedModel: "claude-fixture-sonnet" },
+        { value: "haiku", displayName: "Fixture Haiku", resolvedModel: "claude-fixture-haiku" },
+      ],
+    } } })
+  } else if (msg.type === "user") {
+    const id = model === "sonnet" ? "claude-fixture-sonnet" : "claude-fixture-opus"
+    send({ type: "system", subtype: "init", served_by_anthropic: true, model: id })
+    send({ type: "assistant", message: { model: id, content: [{ type: "text", text: "FIXTURE_REPLY_" + model }] } })
+    send({ type: "result", subtype: "success" })
+  }
+}' -- "$@"
+`, { mode: 0o700 })
   const socket = `zap-models-${process.pid}-${Date.now()}`, frames: string[] = []
   const tmux = (...args: string[]) => {
     const result = spawnSync("tmux", ["-L", socket, "-f", "/dev/null", ...args], { encoding: "utf8" })
@@ -42,10 +69,9 @@ ptyTest("aggregate model picker retains ownership and selection across discovery
   const key = async (...keys: string[]) => { for (const value of keys) { tmux("send-keys", "-t", "models", value); await sleep(180) } }
   const text = (value: string) => tmux("send-keys", "-t", "models", "-l", value)
   const command = async (value: string) => { text(value); await visible(`❯ ${value}`); await sleep(200); await key("Enter") }
-  const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
   const entry = process.env.ZAP_TEST_COMPILED_BINARY ? quote(resolve(process.env.ZAP_TEST_COMPILED_BINARY)) : `${quote(process.execPath)} ${quote(resolve("src/index.tsx"))}`
   const launch = () => tmux("new-session", "-d", "-s", "models", "-x", "160", "-y", "44", "-c", root,
-    `exec env ZAPCODE_DATA_DIR=${quote(root)} ZAPCODE_VM=0 ZAP_DISABLE_UPDATE_CHECK=1 ${entry}`)
+    `exec env ZAPCODE_DATA_DIR=${quote(root)} PATH=${quote(bin)}:"$PATH" ZAPCODE_VM=0 ZAP_DISABLE_UPDATE_CHECK=1 ${entry}`)
   try {
     launch(); await visible("Alpha/shared"); await command("/model")
     let captured = await visible("[Alpha]")
@@ -99,6 +125,22 @@ ptyTest("aggregate model picker retains ownership and selection across discovery
     await visible("Alpha/manual-alias")
     expect(config().active).toEqual({ providerId: "alpha", model: "manual-alias" })
     expect(config().providers.find((p: { id: string }) => p.id === "beta").models).not.toContain("manual-alias")
+    await command("/model"); await visible("[Alpha]")
+    await key("Left"); await visible("[Anthropic (Claude Code)]")
+    captured = await visible("Fixture Haiku")
+    expect(captured).not.toContain("› manual-alias")
+    expect(captured).not.toContain("[Alpha]")
+    expect(config().subscriptionAgent).toBeUndefined()
+    await key("Down", "Enter"); await visible("Claude Code/awaiting model")
+    expect(config().subscriptionAgent).toBe("claude-code")
+    expect(config().claudeModelPreference).toBe("sonnet")
+    expect(config().active).toEqual({ providerId: "alpha", model: "manual-alias" })
+    await command("Which fixture is selected?"); await visible("FIXTURE_REPLY_sonnet")
+    await command("/model"); await visible("[Anthropic (Claude Code)]")
+    await visible("Current: Anthropic/claude-fixture-sonnet")
+    await key("Right"); await visible("[Alpha]")
+    await key("Enter"); await visible("Alpha/manual-alias")
+    expect(config().subscriptionAgent).toBeUndefined()
     expect(alphaRequests).toBeGreaterThan(0); expect(betaRequests).toBeGreaterThan(0)
     if (process.env.ZAPCODE_MODEL_AGGREGATE_RECORDING) {
       writeFileSync(process.env.ZAPCODE_MODEL_AGGREGATE_RECORDING, [JSON.stringify({ version: 2, width: 160, height: 44, title: "Provider tabs in the model picker (local fixture endpoints)" }),

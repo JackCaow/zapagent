@@ -27,6 +27,7 @@ interface Options {
   text: string
   images?: ImageContent[]
   resume?: string
+  model?: string
   plan: boolean
   signal: AbortSignal
   approve?: ApprovalCallback
@@ -94,6 +95,7 @@ async function runClaudeCode(options: Options, sessionId: string, shell?: Return
   const args = [...(options.args ?? []), "--print", "--verbose", "--include-partial-messages", "--input-format", "stream-json", "--output-format", "stream-json",
     "--permission-prompt-tool", "stdio", "--permission-mode", options.plan ? "plan" : "manual",
     options.resume ? "--resume" : "--session-id", sessionId]
+  if (options.model) args.push(`--model=${options.model}`)
   if (options.plan) args.push("--tools", "Read,Grep,Glob")
   if (shell) args.push(...shell.args)
   const images = await Promise.all((options.images ?? []).map(async image => ({ type: "image", source: {

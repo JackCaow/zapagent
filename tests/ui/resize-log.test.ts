@@ -20,6 +20,13 @@ describe("resize log written-frame tracking", () => {
     expect(writes.at(-1)).toBe("\r\x1b[1A\x1b[J")
   })
 
+  it("uses a scrolling line advance when reusing a row in a growing frame", () => {
+    const { log, writes } = fixture()
+    log("header\nunchanged\n")
+    log("changed header\nunchanged\nnew tail\n")
+    expect(writes.at(-1)).toContain("changed header\x1b[K\n\r\n\x1b[1Gnew tail")
+  })
+
   it("tracks direct fullscreen sync writes", () => {
     const { log, stream, writes } = fixture()
     log("old\n")
