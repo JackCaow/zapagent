@@ -243,7 +243,7 @@ export class GoalTurnHost implements GoalHost {
     return result
   }
   async plan(context: GoalOperationContext) {
-    // Ordinary turns already own planning/todos. Do not let another model
+    // Ordinary turns plan their own work. Do not let another model
     // expand a simple objective into mandatory, invented acceptance criteria.
     if (context.goal.permissionMode !== "plan") return { tasks: [{ id: "objective", description: context.goal.objective, acceptance: context.goal.objective, dependencies: [] }] }
     return readGoalStructuredResult(async correction => (await this.turn(context, "planner", [

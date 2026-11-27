@@ -659,7 +659,7 @@ function diagnosePromptCache(cache: ReturnType<typeof computeCacheUsageStats>): 
   if (reuse >= 0.6) {
     return "partial; some prefix is stable but dynamic context or tool/schema changes may be fragmenting it"
   }
-  return "low; stable prefix is not being reused, inspect dynamic system prompt, memory/todo attachments, and tool definitions"
+  return "low; stable prefix is not being reused, inspect dynamic system prompt, memory attachments, and tool definitions"
 }
 
 function summarizeCacheCause(
@@ -728,7 +728,7 @@ function summarizeCacheCause(
       return `transient context text stable at ${formatTokens(latest.estimatedTokens)} tokens${metadataOnlyContextHint}${shareHint}; inspect cacheable system prompt${promptHint}, tool definitions${toolHint}, provider cache settings, or model support${boundaryHint}`
     }
     const shareHint = summarizeCacheablePrefixShareHint(promptCache, latest, effectiveToolSchema, cache)
-    return `transient context is ${formatTokens(latest.estimatedTokens)} tokens; appended memory/todo context can lower total cache share${metadataOnlyContextHint}${shareHint}${boundaryHint}`
+    return `transient context is ${formatTokens(latest.estimatedTokens)} tokens; appended memory context can lower total cache share${metadataOnlyContextHint}${shareHint}${boundaryHint}`
   }
 
   const promptHint = promptCache ? ` (prompt static hash ${promptCache.staticPrefix.hash})` : ""
@@ -818,8 +818,8 @@ function summarizeCacheablePrefixShareHint(
     ? `; unaccounted provider tail ${formatTokens(unaccountedReusableTokens)}`
     : ""
   const capSubject = hasUnaccountedPromptTail
-    ? "non-cacheable dynamic memory/todo context plus current user/conversation tail"
-    : "non-cacheable dynamic memory/todo context"
+    ? "non-cacheable dynamic memory context plus current user/conversation tail"
+    : "non-cacheable dynamic memory context"
   const unaccountedHint = hasUnaccountedPromptTail
     ? `; provider reported ${formatTokens(unaccountedReusableTokens)} additional prompt tokens outside ` +
       `static/tools/conversation/dynamic context diagnostics, ` +
@@ -1475,18 +1475,6 @@ function formatContextMetaDelta(segment: ChangedContextSegment): string | null {
       metaNumber(latestMeta, "budgetTokens"),
       segment.state,
     ),
-    formatNumberMetaDelta(
-      "todos",
-      metaNumber(previousMeta, "todoCount"),
-      metaNumber(latestMeta, "todoCount"),
-      segment.state,
-    ),
-    formatNumberMetaDelta(
-      "in_progress",
-      metaNumber(previousMeta, "inProgressCount"),
-      metaNumber(latestMeta, "inProgressCount"),
-      segment.state,
-    ),
   ].filter((value): value is string => !!value)
   return parts.length > 0 ? parts.join("; ") : null
 }
@@ -1620,8 +1608,6 @@ function formatSegmentMeta(meta: Record<string, unknown> | undefined): string {
     if (queryKind) parts.push(`query ${queryKind}`)
   }
   if (typeof meta.budgetTokens === "number") parts.push(`budget ${formatTokens(nonNegativeFinite(meta.budgetTokens))} tok`)
-  if (typeof meta.todoCount === "number") parts.push(`todos ${nonNegativeFinite(meta.todoCount)}`)
-  if (typeof meta.inProgressCount === "number") parts.push(`in_progress ${nonNegativeFinite(meta.inProgressCount)}`)
   if (parts.length === 0) return ""
   return ` · ${parts.join(", ")}`
 }

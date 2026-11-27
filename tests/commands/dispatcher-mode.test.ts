@@ -6,8 +6,8 @@ async function setMode(value: string) {
   const configRef = { current: { permissionMode: "default" } as AppConfig }
   const logs: string[] = []
   await dispatchSlashCommand(`/mode ${value}`, {
-    exit: () => {}, bumpTranscript: () => {}, setLogs: () => {}, setTodos: () => {},
-    todosRef: { current: [] }, subagentTodosRef: { current: new Map() }, checkpointRef: { current: {} as any },
+    exit: () => {}, bumpTranscript: () => {}, setLogs: () => {},
+    checkpointRef: { current: {} as any },
     turnStartLogIndexRef: { current: 0 }, setDialog: () => {}, addLog: (_type, text) => logs.push(text),
     configRef, updateConfig: next => { configRef.current = next }, addToast: () => {}, compactLogs: () => {},
     agentRef: { current: { provider: {} } as any }, skillsRef: { current: new Map() },
@@ -18,6 +18,7 @@ async function setMode(value: string) {
 
 describe("/mode", () => {
   it("stores presets as their modes", async () => {
+    expect((await setMode("auto")).mode).toBe("auto")
     expect((await setMode("balanced")).mode).toBe("acceptEdits")
     expect((await setMode("bypass")).mode).toBe("bypassPermissions")
   })

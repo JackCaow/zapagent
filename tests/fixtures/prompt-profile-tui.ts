@@ -31,7 +31,7 @@ try {
       executor: new ToolExecutor(registry, {}), autoCompactThreshold: 320000, autoCompactTokenThreshold: 80000,
       agentLogger: new AgentLogger(logger), currentSessionId: "profile-fixture", checkpoint: null,
       turnStartLogPosition: () => ({ journalLogIndex: 0, uiLogIndex: 0 }),
-      todoStore: { get: () => [], set: () => {} }, subAgentEventHandler: () => {},
+      subAgentEventHandler: () => {},
     })
     try { await runtime.run("Report the fixture state", { resultSchema: "outcome-v1" }) }
     finally { await runtime.close() }
@@ -58,7 +58,7 @@ try {
       autoCompactThreshold: 320000, autoCompactTokenThreshold: 80000,
       agentLogger: new AgentLogger(logger), currentSessionId: `delegation-${override ? "override" : "config"}`,
       checkpoint: null, turnStartLogPosition: () => ({ journalLogIndex: 0, uiLogIndex: 0 }),
-      todoStore: { get: () => [], set: () => {} }, subAgentEventHandler: () => {},
+      subAgentEventHandler: () => {},
     })
     try { await runtime.run("Delegate fixture inspection", { resultSchema: "outcome-v1" }) }
     finally { await runtime.close() }

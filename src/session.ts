@@ -581,21 +581,6 @@ class SessionWriter {
     this.uuidByIndex.length = cutoff;
   }
 
-  appendTodoUpdate(key: string, todos: unknown[], journalLogIndex?: number): void {
-    this.materialize("append_todo_update");
-    const uuid = randomUUID();
-    const entry = {
-      ...baseEntry(this.lastUuid, uuid, this.sessionId),
-      type: "todo-update",
-      key,
-      todos,
-      ...(typeof journalLogIndex === "number" ? { journalLogIndex } : {}),
-    };
-    this.buffer.push(JSON.stringify(entry));
-    this.lastUuid = uuid;
-    this.scheduleFlush();
-  }
-
   /** Persist per-turn API-reported token usage. `total` is what the
    *  provider counted against the context window (input + cache_read +
    *  cache_creation); `localEstimateAtTime` is what conversation.estimatedTokens
@@ -777,10 +762,6 @@ export function appendRewindMarkerDurable(targetTurnStartIndex: number, logIndex
   }
 }
 
-export function appendTodoUpdate(key: string, todos: unknown[]): void {
-  currentWriter.appendTodoUpdate(key, todos, journalLogIndex);
-}
-
 /** Persist per-turn API-reported token usage so restore can prime the
  *  context-usage indicators with last-known truth instead of cold-starting
  *  at the local conversation estimate. See SessionWriter.appendUsage. */
@@ -821,12 +802,6 @@ export interface PersistedUsage {
   journalLogIndex?: number
 }
 export type PersistedUsageDetail = Omit<PersistedUsage, "total" | "localEstimateAtTime" | "output" | "journalLogIndex">
-
-export interface PersistedTodoUpdate {
-  key: string
-  todos: unknown[]
-  journalLogIndex?: number
-}
 
 export interface RestoredUsageContext {
   contextTokens: number
@@ -971,51 +946,12 @@ export function readRecentUsages(sessionId: string, limit = RECENT_USAGE_DEFAULT
   } catch { return []; }
 }
 
-/** Parse raw JSONL contents and return a key→todos map (tail-wins).
- *  Exported for unit tests; production code uses readTodoUpdates. */
-export function parseTodoUpdates(raw: string): Map<string, unknown[]> {
-  const latest = new Map<string, unknown[]>();
-  for (const update of parseTodoUpdateJournalJsonl(raw)) latest.set(update.key, update.todos);
-  return latest;
-}
-
-/** Marker-aware todo journal used both by restore and by session-fork seeding. */
-export function parseTodoUpdateJournalJsonl(raw: string): PersistedTodoUpdate[] {
-  let updates: PersistedTodoUpdate[] = [];
-  for (const line of raw.split("\n")) {
-    if (!line.trim()) continue;
-    try {
-      const e = JSON.parse(line);
-      if (e?.type === "todo-update" && typeof e.key === "string" && Array.isArray(e.todos)) {
-        updates.push({
-          key: e.key,
-          todos: e.todos,
-          ...(isJournalIndex(e.journalLogIndex) ? { journalLogIndex: e.journalLogIndex } : {}),
-        });
-      } else if (e?.type === "rewind-marker" && isJournalIndex(e.logIndex)) {
-        updates = updates.filter((candidate) => (
-          candidate.journalLogIndex === undefined
-          || candidate.journalLogIndex <= e.logIndex
-        ));
-      }
-    } catch {}
-  }
-  return updates;
-}
-
 function isJournalIndex(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
-export function readTodoUpdates(sessionId: string): Map<string, unknown[]> {
-  const filePath = sessionJsonlPathFor(sessionId);
-  try {
-    return parseTodoUpdates(readFileSync(filePath, "utf-8"));
-  } catch { return new Map(); }
-}
-
 /** Resolve the JSONL path for a given session id. All JSONL readers
- *  (snapshot / rewind / todo) should call this instead of re-building. */
+ *  (snapshot / rewind) should call this instead of re-building. */
 function sessionFilePathInDir(dir: string, sessionId: string): string {
   if (!isValidSessionId(sessionId)) {
     throw new SessionLoadError(
@@ -1145,22 +1081,15 @@ function effectiveForkSnapshots(entries: CheckpointJournalEntry[]): any[] {
 
 export interface SessionForkMetadata {
   checkpointJournal: CheckpointJournalEntry[]
-  todoUpdates: PersistedTodoUpdate[]
   usageJournal: PersistedUsage[]
-  todos: Map<string, unknown[]>
   usages: PersistedUsage[]
 }
 
 function parseForkMetadata(raw: string, sessionId: string): SessionForkMetadata {
-  const todoUpdates = parseTodoUpdateJournalJsonl(raw);
   const usageJournal = parseUsageJournalJsonl(raw);
-  const todos = new Map<string, unknown[]>();
-  for (const update of todoUpdates) todos.set(update.key, update.todos);
   return {
     checkpointJournal: parseCheckpointJournalJsonl(raw, sessionId),
-    todoUpdates,
     usageJournal,
-    todos,
     usages: usageJournal.filter(usage => usage.purpose !== "maintenance").slice(-RECENT_USAGE_DEFAULT_LIMIT),
   };
 }
@@ -1174,9 +1103,7 @@ function readForkMetadata(sourceSessionId: string): SessionForkMetadata {
   } catch {
     return {
       checkpointJournal: [],
-      todoUpdates: [],
       usageJournal: [],
-      todos: new Map(),
       usages: [],
     };
   }
@@ -1204,12 +1131,6 @@ function seedForkMetadata(
     parentId = typeof snapshot.id === "string" ? snapshot.id : parentId;
   }
 
-  const todoUpdates: PersistedTodoUpdate[] = metadata.todoUpdates.length > 0
-    ? metadata.todoUpdates
-    : Array.from(metadata.todos, ([key, todos]) => ({ key, todos }));
-  for (const update of todoUpdates) {
-    writer.appendTodoUpdate(update.key, update.todos, update.journalLogIndex);
-  }
   const usageJournal = metadata.usageJournal.length > 0 ? metadata.usageJournal : metadata.usages;
   for (const usage of usageJournal) {
     const { total, localEstimateAtTime, output, journalLogIndex, ...detail } = usage;
@@ -1958,7 +1879,6 @@ export function loadLastSession(): { id: string; logs: SessionLog[] } | null {
 // ─── Restore helpers ─────────────────────────────────────────────────────────
 
 /**
-/**
  * Phase 3 of the Turn-based history refactor. Canonical restore entry point:
  * SessionLog[] → Turn[]. The result is wire-valid by construction (Turn
  * invariants — every assistant tool_use is paired with its tool_result),
@@ -2054,7 +1974,8 @@ export function sessionLogsToTurns(logs: SessionLog[]): Turn[] {
   }
 
   for (const log of logs) {
-    if (log.restore === false) {
+    // Preserve old journal positions without replaying the retired checklist tool.
+    if (log.restore === false || log.tool?.name === "todo_write") {
       idx++
       continue
     }

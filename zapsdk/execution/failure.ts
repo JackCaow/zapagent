@@ -57,10 +57,8 @@ export function formatToolFailureForModel(result: ToolResult): string {
     : "Use the structured failure as the authoritative cause, not keywords in the diagnostic text.";
   if (failure.code === "POLICY_DENIED" || failure.code === "SANDBOX_DENIED" || failure.code === "APPROVAL_REQUIRED") {
     guidance += " Do not bypass the denied boundary with another tool. Report the restriction and request any needed authorization.";
-  } else if (failure.code === "TASK_PLAN_REQUIRED") {
-    guidance += " Provide the required todo_write plan before continuing; this is not a file or sandbox permission denial.";
   }
-  if (!failure.retryable && failure.code !== "TASK_PLAN_REQUIRED") {
+  if (!failure.retryable) {
     guidance += " Do not repeat the same failed operation unchanged; first resolve the prerequisite or report it as blocked.";
   }
   return `[Execution failure] ${metadata}\n[HINT] ${guidance}`;

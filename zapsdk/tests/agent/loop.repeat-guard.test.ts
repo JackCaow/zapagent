@@ -4,10 +4,8 @@ import { LoopAgent } from "../../agent/loop.js"
 import { ToolRegistry } from "../../tools/registry.js"
 import { ToolExecutor } from "../../tools/executor.js"
 import { ConversationManager } from "../../memory/conversation.js"
-import { todoWriteTool, type Todo, type TodoStore } from "../../builtin-tools/todo.js"
 import type { LLMProvider } from "../../core/llm.js"
 import type { LLMChunk, LLMResponse } from "../../core/types.js"
-import { OperationFailureSchema } from "../../execution/contracts.js"
 import { stepSignature } from "../../agent/tool-execution-guards.js"
 
 // Provider that streams `count` identical tool calls (same tool, same primary
@@ -90,110 +88,16 @@ describe("LoopAgent repeat guard", () => {
     expect(sig(JSON.parse('{"__proto__":{"value":1}}'))).not.toBe(sig({}))
   })
 
-  it("requires a small executable plan before constrained runs mutate the workspace", async () => {
-    let applyExecutions = 0
-    let currentTodos: Todo[] = []
-    const todoStore: TodoStore = {
-      get: () => currentTodos,
-      set: (_key, _old, next) => { currentTodos = next },
-    }
-    const actions = [
-      { name: "inspect", args: { path: "src/main.ts" } },
-      { name: "apply", args: { path: "src/main.ts" } },
-      {
-        name: "todo_write",
-        args: {
-          todos: [
-            {
-              content: "Inspect the failing path and run a minimal smoke probe",
-              activeForm: "Inspecting the failing path",
-              status: "in_progress",
-              acceptanceCriteria: "The minimal smoke probe reproduces the failure once.",
-              contingency: "If the probe cannot run after two attempts, inspect its missing dependency instead.",
-            },
-            {
-              content: "Implement the smallest fix",
-              activeForm: "Implementing the smallest fix",
-              status: "pending",
-              acceptanceCriteria: "Only the failing source path is changed.",
-            },
-            {
-              content: "Verify the targeted behavior",
-              activeForm: "Verifying the targeted behavior",
-              status: "pending",
-              acceptanceCriteria: "The targeted test passes.",
-            },
-          ],
-        },
-      },
-      { name: "apply", args: { path: "src/main.ts" } },
-    ]
-    let turn = 0
-    const provider: LLMProvider = {
-      async call(): Promise<LLMResponse> {
-        return { type: "text", text: "done", toolCalls: [], usage: { inputTokens: 1, outputTokens: 1 } }
-      },
-      async *stream(): AsyncIterable<LLMChunk> {
-        const action = actions[turn++]
-        if (!action) {
-          yield { type: "text_delta", text: "done" }
-          yield { type: "done", usage: { inputTokens: 1, outputTokens: 1 } }
-          return
-        }
-        yield { type: "tool_call_start", toolCallId: `plan-${turn}`, toolName: action.name }
-        yield { type: "tool_call_delta", toolCallId: `plan-${turn}`, partialJson: JSON.stringify(action.args) }
-        yield { type: "done", usage: { inputTokens: 1, outputTokens: 1 }, finishReason: "tool_calls" }
-      },
-    }
-    const registry = new ToolRegistry()
-    registry.register({
-      definition: { name: "inspect", description: "inspect", parameters: z.object({ path: z.string() }), readOnly: true },
-      handler: async () => ({ success: true, output: "baseline" }),
-    })
-    registry.register({
-      definition: { name: "apply", description: "apply", parameters: z.object({ path: z.string() }) },
-      handler: async () => {
-        applyExecutions++
-        return { success: true, output: "changed" }
-      },
-    })
-    registry.register(todoWriteTool({ store: todoStore }))
-    const conversation = new ConversationManager({ maxMessages: 200 })
-    const agent = new LoopAgent({
-      provider,
-      registry,
-      executor: new ToolExecutor(registry, {}),
-      conversation,
-      systemPrompt: "test",
-      maxSteps: 8,
-      taskDecomposition: "required",
-    })
-
-    const result = await agent.run("Fix the implementation and verify it")
-
-    expect(applyExecutions).toBe(1)
-    expect(currentTodos).toHaveLength(3)
-    const blocked = result.toolResults.find(result => !result.success)!
-    expect(OperationFailureSchema.parse(blocked.failure)).toMatchObject({ code: "TASK_PLAN_REQUIRED", source: "harness", retryable: false })
-    expect(blocked.runtime?.execution).toBeUndefined()
-    expect(conversation.getMessages().some((message) =>
-      message.content.includes("Task decomposition required")
-    )).toBe(true)
-  })
-
-  it("auto planning does not synthesize failures or mandatory todos for a short task", async () => {
+  it("runs a short task directly", async () => {
     let executions = 0
-    let todos: Todo[] = []
     const registry = new ToolRegistry()
     registry.register({ definition: { name: "apply", description: "apply", parameters: z.object({ path: z.string() }) },
       handler: async () => { executions++; return { success: true, output: "changed" } } })
-    registry.register(todoWriteTool({ store: { get: () => todos, set: (_key, _old, next) => { todos = next } } }))
-    const agent = new LoopAgent({ registry, executor: new ToolExecutor(registry), maxSteps: 6, taskDecomposition: "auto",
+    const agent = new LoopAgent({ registry, executor: new ToolExecutor(registry), maxSteps: 6,
       provider: makeRepeatingProvider("apply", { path: "index.html" }, 3, "done") })
     const result = await agent.run("Make a small change and verify")
     expect(executions).toBe(3)
     expect(result.toolResults.every(result => result.success)).toBe(true)
-    expect(todos).toEqual([])
   })
 
   it("folds an identical repeated read after running it", async () => {

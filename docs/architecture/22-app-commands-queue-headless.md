@@ -42,7 +42,6 @@ src/
 | `init_project` / `review` / `commit` | `/init /review /commit` | `dispatchUserTurn(text, systemPromptOverride)` |
 | `run_skill` | `/<skill-name> [...args]` | `dispatchUserTurn` with skill 的 systemPrompt + params |
 | `show_permissions` | `/permissions` | open dialog |
-| `clear_todos` | `/todos clear` | `setTodos([])` |
 | `set_effort` | `/effort [value/cycle]` | `setEffort` 写入 config |
 
 没识别的 `/xxx` token 但用户装了同名 skill → 走 `run_skill`；否则 fallback 走
@@ -53,7 +52,7 @@ src/
 ## `commands/dispatcher.ts` —— `dispatchSlashCommand(input, deps)`
 
 `parseCommand` 返回的 `CommandResult` 在这里被执行。`deps` 是 `App.tsx`
-里 `useCallback` bind 出来的局部依赖大全（exit/setDialog/setLogs/setTodos/
+里 `useCallback` bind 出来的局部依赖大全（exit/setDialog/setLogs/
 addLog/configRef/updateConfig/agentRef/checkpointRef/dispatchUserTurn 等）。
 
 主要分支：

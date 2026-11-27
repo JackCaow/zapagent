@@ -274,7 +274,7 @@ UI 订阅 `AgentRunStore`，按 `runId` 渲染；Transcript 日志只负责展�
 ### Phase 3：写入隔离
 
 - WorkspaceManager、shadow snapshot、per-run worktree/copy sandbox。
-- 子 Agent 的 cwd、checkpoint、todo、Tool output storage 全部绑定 workspaceId。
+- 子 Agent 的 cwd、checkpoint、Tool output storage 全部绑定 workspaceId。
 - 初期可要求用户手动确认应用，不自动合并。
 
 ### Phase 4：协调合并

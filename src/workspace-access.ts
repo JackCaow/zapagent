@@ -5,15 +5,20 @@ import type { PermissionMode } from "./config.js"
 import { getProjectAuthorizationSettingsPath } from "./permissions.js"
 import { writeFileAtomic } from "./utils/secure-write.js"
 
-export type WorkspaceChoice = "task" | "project" | "analyze" | "revoke"
+export type WorkspaceChoice = "project" | "analyze" | "revoke"
+type TurnOrigin = { kind: "user" } | { kind: "task"; ids: readonly string[] }
+type ProjectIdentity = { root: string; device: string; inode: string }
+type WorkGrant = "auto" | "project" | "approved-plan"
 
 /** Only the interactive host issues these grants. A checkout cannot supply its own. */
 export class WorkspaceAccess {
   private readonly root: string
   private readonly record: string
-  private nextTask?: { session: string; prompt?: string; entryId?: string }
+  private readonly taskContinuations = new Map<string, {
+    session: string; workspace: ProjectIdentity; signal: AbortSignal
+  }>()
   private onGrantChange?: () => void
-  private active?: { session: string; run: string; write: boolean; project: boolean }
+  private active?: { session: string; run: string; grant?: WorkGrant }
 
   constructor(cwd: string) {
     this.root = realpathSync(cwd)
@@ -38,43 +43,58 @@ export class WorkspaceAccess {
     } catch { return false }
   }
 
-  choose(choice: WorkspaceChoice, session: string, prompt?: string): void {
+  choose(choice: WorkspaceChoice, session: string): void {
     if (choice === "project") {
-      if (!this.recordOutsideWorkspace()) throw new Error("Project access must be saved outside the workspace. Use access for this task.")
+      if (!this.recordOutsideWorkspace()) throw new Error("Project access must be saved outside the workspace.")
       writeFileAtomic(this.record, JSON.stringify(this.identity()) + "\n")
     }
     if (choice === "revoke" && this.recordOutsideWorkspace()) {
       try { unlinkSync(this.record) }
       catch (err) { if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err }
     }
-    const write = choice === "project" || choice === "task"
-    if (this.active?.session === session) this.active.write = write
-    this.nextTask = !this.active && choice === "task" ? { session, prompt } : undefined
+    if (choice !== "project") this.clearTaskContinuations()
+    if (this.active?.session === session && choice !== "project") this.active.grant = undefined
   }
 
-  bindSubmission(session: string, entryId: string, text: string, display: string): void {
-    const next = this.nextTask
-    if (next?.session === session && !next.entryId && (!next.prompt || next.prompt === text || next.prompt === display)) {
-      this.nextTask = { session, prompt: text, entryId }
-    }
+  rememberTask(id: string, session: string, signal: AbortSignal): void {
+    if (this.active?.grant !== "auto" || this.active.session !== session || signal.aborted) return
+    try {
+      this.taskContinuations.set(id, { session, workspace: this.identity(), signal })
+    } catch { /* A missing workspace cannot authorize a later turn. */ }
   }
 
-  begin(session: string, run: string, userInitiated: boolean, prompt: string, entryId?: string, onProjectRevoked?: () => void): void {
+  consumeTasks(ids: readonly string[]): void {
+    for (const id of ids) this.taskContinuations.delete(id)
+  }
+
+  clearTaskContinuations(): void { this.taskContinuations.clear() }
+
+  private canResume(session: string, ids: readonly string[]): boolean {
+    if (!ids.length) return false
+    try {
+      const { root, device, inode } = this.identity()
+      return ids.every(id => {
+        const grant = this.taskContinuations.get(id)
+        return grant?.session === session && !grant.signal.aborted
+          && grant.workspace.root === root && grant.workspace.device === device && grant.workspace.inode === inode
+      })
+    } catch { return false }
+  }
+
+  begin(session: string, run: string, base: PermissionMode, origin: TurnOrigin, onProjectRevoked?: () => void): void {
     if (this.active) throw new Error("Another workspace task is still running")
-    const next = this.nextTask
-    const matches = userInitiated && !!entryId && next?.session === session && next.entryId === entryId && next.prompt === prompt
-    const project = userInitiated && !matches && this.remembered()
-    const active = this.active = { session, run, write: project || matches, project }
+    const project = base === "default" && origin.kind === "user" && this.remembered()
+    const auto = base === "auto" && (origin.kind === "user" || this.canResume(session, origin.ids))
+    const active = this.active = { session, run, grant: auto ? "auto" : project ? "project" : undefined }
     if (project && onProjectRevoked) {
       this.onGrantChange = () => {
-        if (this.active !== active || !active.write || this.remembered()) return
-        active.write = false
+        if (this.active !== active || active.grant !== "project" || this.remembered()) return
+        active.grant = undefined
         onProjectRevoked()
       }
       watchFile(this.record, { persistent: false, interval: 250 }, this.onGrantChange)
       this.onGrantChange()
     }
-    if (matches || next?.session !== session) this.nextTask = undefined
   }
 
   get activeRun(): string | undefined { return this.active?.run }
@@ -82,13 +102,13 @@ export class WorkspaceAccess {
   assertProjectCommandAllowed(base: PermissionMode, session: string, run: string): void {
     const active = this.active
     if (!active || active.run !== run || active.session !== session || this.mode(base, session, run) !== "acceptEdits"
-      || (base === "default" && active.project && !this.remembered())) {
+      || (base === "default" && active.grant === "project" && !this.remembered())) {
       throw new Error("This task no longer has project command access")
     }
   }
 
   approvePlan(session: string): void {
-    if (this.active?.session === session) this.active.write = true
+    if (this.active?.session === session && !this.active.grant) this.active.grant = "approved-plan"
   }
 
   end(run: string): void {
@@ -99,12 +119,16 @@ export class WorkspaceAccess {
   }
 
   canWork(session: string, remembered: boolean): boolean {
-    return this.active ? this.active.session === session && this.active.write : this.nextTask?.session === session || remembered
+    return this.active ? this.active.session === session && !!this.active.grant : remembered
   }
 
   mode(base: PermissionMode, session: string, actorRun?: string): PermissionMode {
     if (actorRun && (actorRun !== this.active?.run || session !== this.active?.session)) return "plan"
+    if (base === "auto") {
+      if (!this.active) return "default"
+      return this.active.session === session && this.active.grant === "auto" ? "acceptEdits" : "plan"
+    }
     if (base !== "default" || !this.active) return base
-    return this.active.session === session && this.active.write ? "acceptEdits" : "plan"
+    return this.active.session === session && this.active.grant && this.active.grant !== "auto" ? "acceptEdits" : "plan"
   }
 }

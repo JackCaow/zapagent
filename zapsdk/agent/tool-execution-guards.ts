@@ -1,7 +1,5 @@
 import type { ToolResult } from "../tools/types.js";
-import type { ToolExecutor } from "../tools/executor.js";
 import type { ToolExecutionHooks } from "./streaming-tool-executor.js";
-import { operationFailure } from "../execution/failure.js";
 import { canonicalizeJsonSchema } from "../tools/schema.js";
 import { sliceHeadCodePoints } from "../utils/logical-lines.js";
 import { createHash } from "node:crypto";
@@ -53,10 +51,8 @@ export function stepSignature(toolCalls: Array<{ name: string; arguments: Record
 
 /**
  * Tools whose semantics make consecutive same-signature calls *expected
- * progress*, not "stuck": iterating edits on one file (`edit_file` /
- * `multi_edit`), or repeatedly syncing the todo list (`todo_write`). Steps
- * composed entirely of these
- * tools bypass the REPEAT_LIMIT tracker.
+ * progress*, not "stuck", such as successive edits to one file. Steps
+ * composed entirely of these tools bypass the REPEAT_LIMIT tracker.
  *
  * Trade-off: a step containing only whitelisted tools also RESETS the
  * tracker to null, so a mixed pattern like
@@ -70,7 +66,6 @@ export function stepSignature(toolCalls: Array<{ name: string; arguments: Record
 const REPEAT_FRIENDLY_TOOLS = new Set<string>([
   "edit_file",
   "multi_edit",
-  "todo_write",
 ]);
 
 const DUPLICATE_QUERY_TOOLS = new Set(["read_file", "search_files"]);
@@ -167,62 +162,6 @@ export function duplicateQueryKey(name: string, args: Record<string, unknown>): 
   return `${name}:${JSON.stringify(canonicalizeJsonSchema(args))}`;
 }
 
-export type TaskDecompositionMode = "off" | "auto" | "required";
-
-interface TaskPlanGateState {
-  ready: boolean;
-  baselineReads: number;
-}
-
-function initialPlanError(
-  mode: TaskDecompositionMode,
-  args: Record<string, unknown>,
-): string | undefined {
-  const todos = args.todos;
-  if (!Array.isArray(todos)) return "todo_write requires a todos array.";
-  const minItems = mode === "required" ? 3 : 2;
-  if (todos.length < minItems || todos.length > 6) {
-    return `Create an actionable ${minItems}-6 item plan before execution; received ${todos.length} item(s).`;
-  }
-  const items = todos.filter((item): item is Record<string, unknown> => !!item && typeof item === "object");
-  if (items.length !== todos.length) return "Each plan item must be a structured todo.";
-  if (items.filter((item) => item.status === "in_progress").length !== 1) {
-    return "Mark exactly one concrete plan item as in_progress before execution.";
-  }
-  if (mode === "required") {
-    if (items.some((item) => typeof item.acceptanceCriteria !== "string" || !item.acceptanceCriteria.trim())) {
-      return "Give every plan item an acceptanceCriteria with observable proof of completion.";
-    }
-    const planText = items.map((item) => `${item.content ?? ""} ${item.acceptanceCriteria ?? ""}`).join(" ");
-    if (!/(?:probe|smoke|end[ -]?to[ -]?end|e2e|minimal.*(?:run|build|test)|最小.*(?:运行|构建|测试)|端到端|冒烟)/i.test(planText)) {
-      return "Include an early minimal end-to-end probe so the plan proves the critical path before large implementation.";
-    }
-    if (!items.some((item) => typeof item.contingency === "string" && item.contingency.trim())) {
-      return "Give at least one plan item a contingency for a blocked or slow dependency instead of waiting indefinitely.";
-    }
-    const finalItem = `${items[items.length - 1]?.content ?? ""} ${items[items.length - 1]?.acceptanceCriteria ?? ""}`;
-    if (!/(?:verify|test|check|run|validate|验证|测试|检查|运行)/i.test(finalItem)) {
-      return "Make the final plan item a concrete verification (test, run, check, or validate).";
-    }
-  }
-  return undefined;
-}
-
-function taskPlanRequiredResult(mode: TaskDecompositionMode): ToolResult {
-  const detail = mode === "required"
-    ? "You may take one read-only baseline action, but must then call todo_write before any further tool execution."
-    : "Call todo_write now before continuing tool execution.";
-  return {
-    success: false,
-    output: "",
-    failure: operationFailure("TASK_PLAN_REQUIRED", "harness"),
-    error:
-      `[Task decomposition required] ${detail} ` +
-      "Create 3-5 small, ordered, observable tasks: establish the target, run a minimal end-to-end probe, implement the smallest change, and verify it. " +
-      "Give each item acceptanceCriteria and give the slowest/riskest item a contingency. Keep exactly one item in_progress and make the final item a concrete verification.",
-  };
-}
-
 export interface RunToolExecutionHooks extends ToolExecutionHooks {
   /** Forget fetched pages once history is rewritten: their results may have
    * been compacted away, so "reuse that result" would point at nothing. */
@@ -233,34 +172,15 @@ export interface RunToolExecutionHooks extends ToolExecutionHooks {
  * searches are not suppressed here; LoopAgent folds an identical result after
  * it runs. */
 export function createRunToolExecutionHooks(
-  executor: ToolExecutor,
   onSuppressed: (name: string, args: Record<string, unknown>) => void,
-  taskDecomposition: TaskDecompositionMode,
-  hasTodoTool: boolean,
 ): RunToolExecutionHooks {
   // Remote GETs do not depend on the workspace, so a mutation must not forget them.
   const fetchedUrls = new Map<string, number>();
-  const planState: TaskPlanGateState = { ready: false, baselineReads: 0 };
   return {
     forgetObservations() {
       fetchedUrls.clear();
     },
     beforeExecute(name, args) {
-      // Planning is not a permission boundary. Only an explicitly required
-      // plan may block execution; auto must not turn a short task into retries.
-      if (hasTodoTool && taskDecomposition === "required") {
-        if (name === "todo_write" && !planState.ready) {
-          const planError = initialPlanError(taskDecomposition, args);
-          if (planError) {
-            return { success: false, output: "", error: `[Task decomposition required] ${planError}`,
-              failure: operationFailure("TASK_PLAN_REQUIRED", "harness") };
-          }
-        } else if (!planState.ready) {
-          const readOnly = executor.workspaceGate ? executor.isStaticallyReadOnly(name) : executor.isReadOnly(name, args);
-          const allowUnplanned = readOnly && planState.baselineReads++ < 1;
-          if (!allowUnplanned) return taskPlanRequiredResult(taskDecomposition);
-        }
-      }
       // Process calls are never memoized by their output path. Compiler flags,
       // inputs and external state can change without an observed file edit.
       const fetchKey = httpFetchKey(name, args);
@@ -279,13 +199,7 @@ export function createRunToolExecutionHooks(
     },
     afterExecute(name, args, result) {
       const fetchedKey = httpFetchKey(name, args);
-      if (fetchedKey) {
-        if (!result.success) fetchedUrls.delete(fetchedKey);
-        return;
-      }
-      if (name === "todo_write" && result.success) {
-        planState.ready = true;
-      }
+      if (fetchedKey && !result.success) fetchedUrls.delete(fetchedKey);
     },
   };
 }

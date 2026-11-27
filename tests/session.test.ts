@@ -190,15 +190,14 @@ describe("durable session fork", () => {
     }
   })
 
-  it("persists checkpoints, todos, and usage into the new fork", () => {
+  it("persists checkpoints and usage into the new fork", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "zap-session-durable-fork-"))
     try {
       const script = [
-        'import { appendLog, appendSnapshot, appendTodoUpdate, appendUsage, getCurrentSessionId, readCheckpointJournal, readRecentUsages, readTodoUpdates, setActiveSession, startNewSession } from "./src/session.ts";',
+        'import { appendLog, appendSnapshot, appendUsage, getCurrentSessionId, readCheckpointJournal, readRecentUsages, setActiveSession, startNewSession } from "./src/session.ts";',
         'appendLog("user", "source turn");',
         'const source = getCurrentSessionId();',
         'appendSnapshot({ id: "snap-source", turnStartIndex: 0, logIndex: 0, journalLogIndex: 0, uiLogIndex: 99, sessionId: source, timestamp: new Date().toISOString(), trackedFiles: { "a.ts": { kind: "absent" } }, parentId: null });',
-        'appendTodoUpdate("main", [{ content: "keep", status: "pending" }]);',
         'appendUsage(42, 30, 4, { inputTokens: 40 });',
         'startNewSession();',
         'const { loadSessionForDialog } = await import("./src/ui/dialog-sessions.tsx");',
@@ -207,7 +206,7 @@ describe("durable session fork", () => {
         'const fork = getCurrentSessionId();',
         'startNewSession();',
         'const checkpoints = readCheckpointJournal(fork);',
-        'console.log(JSON.stringify({ fork, source, checkpoints, todos: Array.from(readTodoUpdates(fork)), usage: readRecentUsages(fork) }));',
+        'console.log(JSON.stringify({ fork, source, checkpoints, usage: readRecentUsages(fork) }));',
       ].join("\n")
       const raw = execFileSync(process.execPath, ["--eval", script], {
         cwd: process.cwd(),
@@ -223,7 +222,6 @@ describe("durable session fork", () => {
         parentId: null,
       })
       expect(result.checkpoints[0].snapshot.uiLogIndex).toBeUndefined()
-      expect(result.todos).toEqual([["main", [{ content: "keep", status: "pending" }]]])
       expect(result.usage).toHaveLength(1)
       expect(result.usage[0]).toMatchObject({ total: 42, inputTokens: 40 })
     } finally {
@@ -557,6 +555,21 @@ describe("sessionLogsToMessages: consecutive-user merge", () => {
     // Tool pair still intact in the middle
     expect(msgs.some((m) => m.role === "assistant" && m.toolCalls?.[0]?.name === "bash")).toBe(true)
     expect(msgs.some((m) => m.role === "tool_result")).toBe(true)
+  })
+
+  it("replays real work from older sessions without restoring checklist tool calls", () => {
+    const logs: SessionLog[] = [
+      { type: "user", text: "Check the project" },
+      { type: "result", text: "", tool: { id: "legacy", name: "todo_write", output: "Todos updated", success: true } },
+      { type: "result", text: "", tool: { id: "read", name: "read_file", output: "fixture source", success: true } },
+      { type: "agent", text: "Project checked" },
+    ]
+
+    const messages = sessionLogsToMessages(logs)
+    expect(messages.map(message => message.role)).toEqual(["user", "assistant", "tool_result", "assistant"])
+    expect(messages[1]?.toolCalls?.map(call => call.name)).toEqual(["read_file"])
+    expect(messages[2]?.content).toContain("fixture source")
+    expect(messages[3]?.content).toBe("Project checked")
   })
 
   it("synthesizes assistant(tool_call) from result-only logs (writer collapses tool→result)", () => {

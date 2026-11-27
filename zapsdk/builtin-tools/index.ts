@@ -16,7 +16,6 @@ import { searchFilesTool, type SearchFilesOptions } from "./search.js";
 import { globFilesTool, type GlobFilesOptions } from "./glob.js";
 import { webSearchTool, type WebSearchOptions } from "./web-search.js";
 import { readDocumentTool, readPdfTool, readDocxTool, type DocumentReadOptions } from "./document.js";
-import { todoWriteTool, type TodoWriteToolOptions, type TodoStore, type Todo, type TodoStatus } from "./todo.js";
 import { askUserQuestionTool, type AskUserToolOptions } from "./ask-user.js";
 import { generateImageTool, type GenerateImageOptions } from "./generate-image.js";
 import { browserScreenshotTool, type BrowserScreenshotOptions } from "./browser.js";
@@ -55,7 +54,6 @@ export {
 } from "./web-search.js";
 export { currentTimeTool } from "./time.js";
 export { readDocumentTool, readPdfTool, readDocxTool, type DocumentReadOptions } from "./document.js";
-export { todoWriteTool, renderTodoList, type TodoWriteToolOptions, type TodoStore, type Todo, type TodoStatus } from "./todo.js";
 export { enterPlanModeTool, exitPlanModeTool, type PlanModeToolsOptions, type PlanModeCallbacks } from "./plan-mode.js";
 export { askUserQuestionTool, type AskUserToolOptions, type AskUserCallbacks, type AskUserQuestion, type AskUserAnswer } from "./ask-user.js";
 export { generateImageTool, type GenerateImageOptions } from "./generate-image.js";
@@ -99,10 +97,6 @@ export interface BuiltinToolsOptions {
   /** Only registered when the host supplies an authenticated image capability. */
   generateImage?: GenerateImageOptions;
   webSearch?: WebSearchOptions;
-  /** Required for the main agent to get `todo_write`. When omitted (e.g.
-   *  subagent registries), `todo_write` is not registered — mirrors CCB's
-   *  "todos are main-agent-only" choice. */
-  todoWrite?: TodoWriteToolOptions;
   /** Required for the main agent to get `exit_plan_mode`. Omit to skip
    *  registration (subagent registries don't manage plan mode). Entering plan
    *  mode is a user action; register `enterPlanModeTool` explicitly to let the
@@ -116,8 +110,7 @@ export interface BuiltinToolsOptions {
    *  skill invocation is a main-agent concern. */
   skill?: SkillToolOptions;
   /** Caller-owned cron handle. When absent, `cron_create` / `cron_delete` /
-   *  `cron_list` are NOT registered — mirrors how `todo_write` requires a
-   *  store. Create with `cronTools({ onFire, agentId })` in the app layer
+   *  `cron_list` are NOT registered. Create with `cronTools({ onFire, agentId })` in the app layer
    *  so the app owns the job map, the scheduler, and the shutdown path. */
   cronHandle?: CronToolsHandle;
   /** Caller-owned monitor handle. When absent, `monitor` is NOT registered.
@@ -164,9 +157,6 @@ export function createBuiltinRegistry(options: BuiltinToolsOptions = {}): ToolRe
   if (!exclude.has("web_search")) registry.register(webSearchTool(options.webSearch));
   if (!exclude.has("browser_screenshot")) registry.register(browserScreenshotTool({ defaultCwd, ...options.browserScreenshot }));
   if (!exclude.has("read_document")) registry.register(readDocumentTool({ defaultCwd, ...options.documentRead }));
-  if (options.todoWrite && !exclude.has("todo_write")) {
-    registry.register(todoWriteTool(options.todoWrite));
-  }
   if (options.planMode && !exclude.has("exit_plan_mode")) registry.register(exitPlanModeTool(options.planMode));
   if (options.askUser && !exclude.has("ask_user_question")) registry.register(askUserQuestionTool(options.askUser));
   if (options.skill && !exclude.has("skill")) {

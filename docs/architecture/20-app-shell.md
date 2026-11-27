@@ -65,7 +65,6 @@ CLI/TUI 复杂度的 80% 都在这个文件，因为它处理终端 quirk；剩�
 ```
 config / inputValue / inputEpoch / dialog
 logs                         (useLogs)
-todos + subagentTodosRef
 checkpointRef (CheckpointManager)
 toasts                       (useToasts)
 pendingImages
@@ -82,7 +81,7 @@ status/step/streamingText/...  (useAgentRunner —— 跑 agent + 写 logs)
 | `dispatchUserTurn(text, sys?, imgs?, displayText?, silent?)` | `useTurnDispatcher` + slash command 的 `/review`、`/commit` 等 | `addLog("user", ...)` + `runAgent(...)`；`silent: true` 走 `task-notification` 路径，UI 显示成淡化的系统消息 |
 | `dispatchCommand(input)` | `useTurnDispatcher` 检测到斜杠开头 | bind 了 App-local deps 的 `dispatchSlashCommand` |
 | `precheckProvider()` | 提交前 | 没 provider/key → addLog 错误 + 拒绝提交 |
-| `onClearScreen` | `/clear` + Ctrl+L | 擦终端 + `conversation.clear()` + 重置 logs/todos |
+| `onClearScreen` | `/clear` + Ctrl+L | 擦终端 + `conversation.clear()` + 重置 logs |
 
 ### Static frame freeze（Ink-specific）
 
@@ -132,7 +131,6 @@ warn 日志。详见 [24-app-prompts-memory-skills.md](24-app-prompts-memory-ski
 | `system` / `error` | `{ type:"system", subtype:"info"\|"error", message }` | |
 | snapshot | `{ type:"snapshot", snapshot:{...} }` | checkpoint 调用 |
 | rewind-marker | `{ type:"rewind-marker", targetTurnStartIndex, logIndex }` | rewind 之后写一条 |
-| todo-update | `{ type:"todo-update", key, todos }` | TodoStore 每次写都顺手记 |
 
 所有条目带 `baseEntry`：`parentUuid`（上一条 uuid，形成链）/ `uuid` /
 `timestamp` / `cwd` / `sessionId` / `version` / `gitBranch` / `userType` /
@@ -173,7 +171,6 @@ replaceLog(idx, type, text, tool?, agentPath?)
 startNewSession()                  // /new
 appendSnapshot(snapshot)
 appendRewindMarker(...)
-appendTodoUpdate(key, todos)
 listSavedSessions(): SessionInfo[] // 同步兼容 API，不用于 TUI render
 listSavedSessionsPage({ offset, limit }): Promise<SavedSessionPage> // /sessions
 loadSavedSession(id): SessionLog[] // 严格校验；失败抛 SessionLoadError
@@ -188,7 +185,7 @@ parseSessionJsonl(raw)             // 单测用
 每个 turn 结束 emit 一次，但不持久化）。
 
 `/sessions` 使用 prepare/commit 两阶段恢复：异步读取、解析和构建
-conversation/checkpoint/todo/usage bundle 成功后，才用可回滚的事务切换
+conversation/checkpoint/usage bundle 成功后，才用可回滚的事务切换
 ConversationManager 与 active writer。列表按文件 mtime 分页加载，不信任
 JSONL 内部的 `sessionId` 作为文件定位符。
 

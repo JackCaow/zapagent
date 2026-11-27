@@ -1,4 +1,4 @@
-import { conciseBehaviorSection, concisePlanSection, conciseToolsSection } from "./sections/concise.js"
+import { conciseBehaviorSection, conciseToolsSection } from "./sections/concise.js"
 import type { PromptProfile } from "../../zapsdk/agent/prompt-profile.js"
 import type { PromptSection } from "./registry.js"
 import { identitySection } from "./sections/identity.js"
@@ -34,7 +34,7 @@ import { planDisciplineSection } from "./sections/plan-discipline.js"
  * project-specific, but stable enough to cache; if maintainers edit it, the
  * changed bytes simply create a new provider cache entry.
  *
- * Memory index and the todo-reminder both live OUTSIDE this list — they're
+ * Memory attachments live OUTSIDE this list — they are
  * injected as per-turn user-context attachments wrapped in `<system-reminder>`
  * tags (see useAgentRunner). Inline placement matches CCB and is more salient
  * than a system-prompt tail section, which models tend to attend less to
@@ -66,6 +66,5 @@ export function sectionsForProfile(profile: PromptProfile = "standard"): PromptS
     ...DEFAULT_SECTIONS.filter(section => section.purpose !== "behavior"),
     conciseBehaviorSection,
     conciseToolsSection,
-    concisePlanSection,
   ]
 }

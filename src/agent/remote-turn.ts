@@ -33,6 +33,9 @@ export interface RemoteTurnDeps extends Omit<RunHandlersDeps, "preview" | "setCo
 
 const claudeSessions = new WeakMap<ConversationManager, { tip: unknown; sessionId: string; epoch: number; cwd: string }>()
 
+const zapInstructions = "You are running inside Zap. For an implementation request, make the requested changes and verify them. Plan internally and ask only about choices that matter to the outcome. If the user asks for analysis or a proposal without changes, respect that scope. Zap handles tool approvals. Do not direct users to native CLI mode controls."
+const readOnlyInstructions = "This turn is read-only. Do not attempt changes. If the user requests implementation, mention that selecting Auto in Zap's /mode returns to normal work."
+
 /** One user turn handled by an external ACP agent instead of zap's loop.
  * Rendering reuses the regular run handlers, so the transcript looks the
  * same; zap's conversation records the exchange so switching back to zap
@@ -62,17 +65,18 @@ export async function runRemoteTurn(deps: RemoteTurnDeps, task: string, images?:
       acceptedAt = performance.now()
       deps.onInputAccepted?.()
     }
+    const readOnly = deps.currentConfig.permissionMode === "plan"
+    const nativeInstructions = readOnly ? zapInstructions + "\n" + readOnlyInstructions : zapInstructions
     const turn = deps.nativeClaude ? await promptClaudeCode({
       command: spec.command, args: spec.args, cwd: deps.cwd, text: task, images, signal: controller.signal,
       workspaceCommand: deps.workspaceCommand,
       model: deps.currentConfig.claudeModelPreference,
       onModel: identity => { if (!controller.signal.aborted && remoteAgents.epoch === epoch) deps.onModel(identity) },
-      plan: deps.currentConfig.permissionMode === "plan", approve: remoteAgents.host.approve,
+      plan: readOnly, approve: remoteAgents.host.approve, appInstructions: nativeInstructions,
       resume: previous?.cwd === deps.cwd && previous.epoch === epoch && previous.tip === deps.conversation.getTurns().at(-1) ? previous.sessionId : undefined,
       onEvent, onAccepted,
     }) : await remoteAgents.prompt(spec, deps.cwd,
-      spec.id === "codex" && deps.currentConfig.permissionMode === "plan"
-        ? `Answer the following request in analysis-only mode. Do not modify files or request write access in this turn.\n\n${task}` : task, images, {
+      spec.id === "codex" ? `${nativeInstructions}\n\nUser request:\n${task}` : task, images, {
       signal: controller.signal,
       onEvent,
       onAccepted,

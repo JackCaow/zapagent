@@ -30,10 +30,8 @@ export interface CommandResult {
     | "supertask_watch"
     | "run_skill"
     | "show_permissions"
-    | "open_workspace_access"
     | "open_mode_picker"
     | "set_permission_mode"
-    | "clear_todos"
     | "open_rewind"
     | "open_recovery"
     | "set_effort"
@@ -110,12 +108,8 @@ export function parseCommand(input: string): CommandResult | null {
           "",
           "  Permissions:",
           "  /permissions     — Manage active permission rules (interactive)",
-          "  /work [task]     — Start implementation in this project or manage access",
-          "  /mode [name]     — Set permission mode (default | acceptEdits | plan | bypass; presets strict | balanced | autonomous)",
+          "  /mode [name]     — Choose how Zap works (auto | default | acceptEdits | bypass)",
           "",
-          "  Todos:",
-          "  /todos [on|off]   — Show or hide the todo panel",
-          "  /todos clear      — Clear the current todo list",
           "",
           "  Settings:",
           "  /mcp             — Manage MCP servers",
@@ -208,17 +202,9 @@ export function parseCommand(input: string): CommandResult | null {
     case "agent":
       return { type: "set_agent", value: rest.trim() }
 
-    case "work": return { type: "open_workspace_access", value: rest.trim() }
     case "mode":
       if (!rest.trim()) return { type: "open_mode_picker" }
       return { type: "set_permission_mode", value: rest.trim() }
-
-    // ─── Todos ───
-    case "todos": {
-      if (rest.trim().toLowerCase() === "clear") return { type: "clear_todos" }
-      // bare `/todos` or `/todos <other>` — fall through to skill resolution
-      return { type: "run_skill", skill: cmd, skillInput: rest || cmd }
-    }
 
     // ─── Built-in ───
     case "review":

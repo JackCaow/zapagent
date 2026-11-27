@@ -11,7 +11,6 @@ import { toolPromptsSection } from "./prompts/sections/tool-prompts.js"
 import { writeFileAtomic } from "./utils/secure-write.js"
 import { DYNAMIC_BOUNDARY, escapeDynamicBoundaryText } from "../zapsdk/core/prompt-boundary.js"
 import { resolvePromptProfile, type PromptProfile } from "../zapsdk/agent/prompt-profile.js"
-import { concisePlanSection } from "./prompts/sections/concise.js"
 import { recordPromptSection } from "./prompts/registry.js"
 import { localExecutionShell } from "../zapsdk/execution/shell.js"
 import { REQUIRED_SECTIONS } from "./prompts/required-sections.js"
@@ -193,7 +192,7 @@ export function calculateTokenWarningState(
 import type { MCPServerConfig as SDKMCPServerConfig } from "../zapsdk/mcp/types.js"
 export type MCPServerConfig = SDKMCPServerConfig
 
-export type PermissionMode = "default" | "acceptEdits" | "plan" | "bypassPermissions"
+export type PermissionMode = "auto" | "default" | "acceptEdits" | "plan" | "bypassPermissions"
 
 /** Presets name the trade-off; each is an existing mode. */
 export const PERMISSION_PRESETS = { strict: "default", balanced: "acceptEdits", autonomous: "bypassPermissions" } as const satisfies Record<string, PermissionMode>
@@ -1110,7 +1109,7 @@ export function buildCustomSystemPrompt(
     ...REQUIRED_SECTIONS,
     toolPromptsSection,
     skillsSection,
-    ctx.promptProfile === "concise" ? concisePlanSection : planDisciplineSection,
+    ...(ctx.promptProfile === "concise" ? [] : [planDisciplineSection]),
   ].flatMap((section) => {
     const value = section.compute(ctx)
     const trimmed = value ? escapeDynamicBoundaryText(value).trim() : ""

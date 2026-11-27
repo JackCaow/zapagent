@@ -1,31 +1,24 @@
 import { describe, expect, test } from "bun:test"
 import { z } from "zod"
-import { makeTurnEndGuard } from "../../src/agent/contextAttachments.js"
+import { reviewFailedTools } from "../../src/agent/contextAttachments.js"
 import { AgentBudget } from "../../zapsdk/agent/budget.js"
 import { LoopAgent } from "../../zapsdk/agent/loop.js"
 import { ToolRegistry } from "../../zapsdk/tools/registry.js"
 import { ToolExecutor } from "../../zapsdk/tools/executor.js"
 import { ConversationManager } from "../../zapsdk/memory/conversation.js"
-import type { Todo } from "../../zapsdk/index.js"
 
 async function runFixture(options: {
   work?: boolean
   failWork?: boolean
-  activeTodo?: boolean
-  clearTodoAfterWork?: boolean
   sharedTokens?: number
   localTokens?: number
   firstAnswer?: string
 } = {}) {
   let calls = 0, effects = 0, reviews = 0
-  let todos: Todo[] = options.activeTodo
-    ? [{ content: "Complete the requested work", activeForm: "Completing work", status: "in_progress" }]
-    : []
   const requests: string[] = []
   const registry = new ToolRegistry()
   registry.register({ definition: { name: "observe", description: "Return a synthetic observation", parameters: z.object({}) }, handler: async () => {
     effects++
-    if (options.clearTodoAfterWork) todos = []
     return options.failWork
       ? { success: false, output: "functional check FAILED", error: "Command failed: check\nExit code: 1" }
       : { success: true, output: "Command exit 0; functional check FAILED." }
@@ -50,13 +43,13 @@ async function runFixture(options: {
       },
     } })
   agent.on("observation", event => { if (event.type === "observation" && event.kind === "turn_end_guard_fired") reviews++ })
-  const result = await agent.run("Satisfy the original request and verify the result.", { turnEndGuard: makeTurnEndGuard(() => todos) })
+  const result = await agent.run("Satisfy the original request and verify the result.", { turnEndGuard: reviewFailedTools })
   return { calls, effects, reviews, requests, result, messages: conversation.getMessages() }
 }
 
 describe("application finish evidence review", () => {
-  test("reviews a failed tool call even after the Todo list is cleared, without replaying work", async () => {
-    const run = await runFixture({ work: true, failWork: true, activeTodo: true, clearTodoAfterWork: true })
+  test("reviews a failed tool call, without replaying work", async () => {
+    const run = await runFixture({ work: true, failWork: true })
     expect(run.calls).toBe(3)
     expect(run.reviews).toBe(1)
     expect(run.effects).toBe(1)
@@ -67,17 +60,7 @@ describe("application finish evidence review", () => {
     expect(run.result.stopped).toBeUndefined()
   })
 
-  test("allows an honest incomplete final answer with an active Todo and no forced tool call", async () => {
-    const run = await runFixture({ activeTodo: true, firstAnswer: "Missing input; cannot complete this task." })
-    expect(run.calls).toBe(2)
-    expect(run.reviews).toBe(1)
-    expect(run.effects).toBe(0)
-    expect(run.requests[1]).toContain("You may finish with an honest incomplete or unverified result")
-    expect(run.requests[1]).not.toContain("Do not reply with text only")
-    expect(run.result.stopped).toBeUndefined()
-  })
-
-  test("direct conversation with no work or active Todo ends after one response", async () => {
+  test("direct conversation with no work ends after one response", async () => {
     const run = await runFixture()
     expect(run.calls).toBe(1)
     expect(run.reviews).toBe(0)
@@ -92,7 +75,7 @@ describe("application finish evidence review", () => {
     expect(run.result.text).toContain("unverified")
   })
 
-  test("successful tool work with no open Todo ends without an extra review call", async () => {
+  test("successful tool work ends without an extra review call", async () => {
     const run = await runFixture({ work: true })
     expect(run.calls).toBe(2)
     expect(run.effects).toBe(1)
@@ -102,7 +85,7 @@ describe("application finish evidence review", () => {
 
   for (const kind of ["sharedTokens", "localTokens"] as const) {
     test(`does not start review after the natural answer exactly consumes ${kind}`, async () => {
-      const run = await runFixture({ work: true, activeTodo: true, [kind]: 4, firstAnswer: "The check failed." })
+      const run = await runFixture({ work: true, failWork: true, [kind]: 4, firstAnswer: "The check failed." })
       expect(run.calls).toBe(2)
       expect(run.reviews).toBe(0)
       expect(run.result.text).toBe("The check failed.")

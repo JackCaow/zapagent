@@ -2,7 +2,6 @@ import { Database } from "bun:sqlite"
 import { existsSync } from "node:fs"
 import { stripVTControlCharacters } from "node:util"
 import type { GoalRecord, GoalStatus } from "../zapsdk/goal/contracts.js"
-import type { Todo } from "../zapsdk/index.js"
 import { goalDatabasePath } from "./goal-command.js"
 
 export interface GoalView {
@@ -42,7 +41,7 @@ export function goalObjectiveText(objective: string): string {
   return stripVTControlCharacters(objective).replace(/[\x00-\x1f\x7f]/g, " ").replace(/\s+/g, " ").trim()
 }
 
-export function goalActionText(goal: GoalView, attached: boolean, todos: readonly Todo[] = [], activeTool = ""): string {
+export function goalActionText(goal: GoalView, attached: boolean, activeTool = ""): string {
   if (goal.status === "completed") return goal.accepted ? "目标已完成，验收通过" : "目标已完成"
   if (goal.status === "cancelled") return "目标已取消"
   if (goal.status === "failed") return `/goal status ${goal.id} · 目标执行失败`
@@ -56,12 +55,7 @@ export function goalActionText(goal: GoalView, attached: boolean, todos: readonl
   else if (goal.phase === "integrating" || goal.phase === "delivering") text = "正在整理并交付结果"
   else if (goal.phase === "sealing") text = "正在停止当前工作"
   else if (goal.status === "created" || goal.phase === "planning") text = "正在准备执行目标"
-  else if (!attached) text = goal.phase === "repairing" ? "正在修正验收发现的问题" : "正在推进目标"
-  else {
-    const current = todos.find(todo => todo.status === "in_progress")
-    text = current ? goalObjectiveText(current.activeForm || current.content)
-      : goal.phase === "repairing" ? "正在修正验收发现的问题"
-        : activeTool && activeTool !== "todo_write" ? `正在使用 ${activeTool}` : "正在推进目标"
-  }
+  else if (goal.phase === "repairing") text = "正在修正验收发现的问题"
+  else text = attached && activeTool ? `正在使用 ${activeTool}` : "正在推进目标"
   return attached ? text : `后台目标 · ${text}`
 }

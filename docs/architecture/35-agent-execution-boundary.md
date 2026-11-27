@@ -26,7 +26,7 @@ argument, so embedders can supply another backend without any VM discovery:
 
 ```ts
 const objects = buildAgentObjects(
-  config, onApproval, todoStore, planCallbacks, checkpoint, skills,
+  config, onApproval, planCallbacks, checkpoint, skills,
   cwd, "required", {
     broker: myExecutionBroker,
     commandOptions: { restrictedNetwork: true, disableBackgroundTasks: true },

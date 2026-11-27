@@ -63,7 +63,7 @@ const fixture = `
 `
 
 describe("background wake-up dispatch", () => {
-  for (const mode of ["human-first", "blocked", "unavailable", "failure", "during-turn"]) {
+  for (const mode of ["human-first", "unavailable", "failure", "during-turn"]) {
     it(`${mode} preserves delivery ownership`, () => {
       const directory = mkdtempSync(join(tmpdir(), "zap-event-dispatch-"))
       const script = `
@@ -82,7 +82,6 @@ describe("background wake-up dispatch", () => {
         const event = { kind: "task-notification", payload: "exit notification", ts: 1, taskId: "t1", onDelivered: () => { delivered++; } };
         pushSystemEvent(event);
         const opts = { isRunning: false, inputQueue: queue.getSnapshot(), systemInboxSize: 1,
-          getTodos: () => mode === "blocked" ? [{ content: "work", activeForm: "working", status: "blocked", blocked: { reason: "needs reply", waitingFor: "user" } }] : [],
           addLog: (type, text) => { if (type === "error") errors.push(text); }, addToast: () => {}, precheckProvider: () => mode !== "unavailable",
           dispatchCommand: async () => true,
           dispatchUserTurn: async (text, _system, _images, _display, silent, _restore, _query, accept) => {

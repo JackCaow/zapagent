@@ -22,7 +22,7 @@ zapcode/
 | Runtime 装配、Thread/Turn/Item/Run 协议、事件/控制状态存储与崩溃分类 | `zapsdk/runtime` |
 | Agent 主循环（step → tool → step）、事件、预算、流式工具执行 | `zapsdk/agent` |
 | 工具注册表、JSON-Schema、审批 hook、结果落盘 | `zapsdk/tools` |
-| 内置工具集合（文件、shell、edit、http、search、subagent、todo…） | `zapsdk/builtin-tools` |
+| 内置工具集合（文件、shell、edit、http、search、subagent…） | `zapsdk/builtin-tools` |
 | 上下文压缩（autocompact / microcompact / 反应式压缩 / 工具结果摘要） | `zapsdk/context` |
 | Checkpoint / Rewind（文件快照 + content-addressed blob store） | `zapsdk/checkpoint` |
 | 跨会话长期记忆（auto-memory MD 文件）和会话历史（Turn[]） | `zapsdk/memory` |
@@ -103,7 +103,7 @@ src/hooks/useTurnDispatcher  ── 排队 / 命令 vs 普通输入
 | 路径 | 由谁写 | 写什么 |
 |---|---|---|
 | `~/.zapcode/config.json` | `src/config.ts` | 用户 provider 列表 + active 绑定 + MCP servers |
-| `~/.zapcode/projects/<project-id>/<sessionId>.jsonl` | `src/session.ts` | 单会话事件流（CCB 兼容：user/assistant/progress/snapshot/rewind-marker/todo-update） |
+| `~/.zapcode/projects/<project-id>/<sessionId>.jsonl` | `src/session.ts` | 单会话事件流（CCB 兼容：user/assistant/progress/snapshot/rewind-marker） |
 | `~/.zapcode/projects/<project-id>/runtime-events/<thread-hash>.jsonl` | `zapsdk/runtime` | 版本化 Thread/Turn/Item/Run 事实流 |
 | `~/.zapcode/projects/<project-id>/runtime-state/<thread-hash>.json` | `zapsdk/runtime` | 原子控制状态、approval/workspace/artifact/merge 与恢复报告 |
 | `~/.zapcode/memory/` | `zapsdk/memory/md-store.ts` + `memory_save` | 全局个人记忆，仅 `user` / `feedback` |

@@ -30,7 +30,7 @@ async function fixture() {
     },
   });
   const executor = new ToolExecutor(registry);
-  const hooks = createRunToolExecutionHooks(executor, () => {}, "off", false);
+  const hooks = createRunToolExecutionHooks(() => {});
   const messages: Message[] = [];
   let index = 0;
   let lastOutput: string | undefined;

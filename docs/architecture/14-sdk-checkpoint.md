@@ -46,12 +46,12 @@ LoopAgent.onRunEnd
 同回合同路径仅保留首次备份。从目标回合向后遍历，每路径取第一份备份，重建边界状态。
 
 `turnStartIndex` 仅兼容旧数据；compact 会改变消息数量。恢复 marker 以稳定 snapshot id
-和 journal 边界定位；App 从 marker-aware journal 重建 conversation、todo 和 usage 上下文，
+和 journal 边界定位；App 从 marker-aware journal 重建 conversation 和 usage 上下文，
 不直接用旧消息下标截断经过 compact 的模型历史。UI 使用独立的 `uiLogIndex` 或 journal 映射。
 
 ## 三种恢复方式
 
-| 模式 | 文件 | 对话 / todo 分支 | 恢复点 | 输入框 |
+| 模式 | 文件 | 对话分支 | 恢复点 | 输入框 |
 |---|---|---|---|---|
 | `both` | 恢复已追踪文件 | 回到所选回合之前 | 丢弃目标及后续点 | 回填原提示 |
 | `conversation` | 保持当前文件 | 回到所选回合之前 | 丢弃目标及后续点 | 回填原提示 |

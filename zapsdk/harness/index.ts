@@ -22,7 +22,6 @@ export {
 } from "./completion.js";
 export {
   DEFAULT_HARNESS_POLICY,
-  policyToTaskDecomposition,
   resolveHarnessPolicy,
   type HarnessPolicy,
   type HarnessPolicyV1,
@@ -34,11 +33,9 @@ export {
   type HarnessCheckpointMode,
   type HarnessExecutionPolicy,
   type HarnessObservabilityLevel,
-  type HarnessPlanThreshold,
   type HarnessTaskClass,
   type HarnessTaskPolicy,
   type HarnessWorkspaceMode,
-  type TaskDecompositionPolicy,
 } from "./policy.js";
 export {
   ProgressController,

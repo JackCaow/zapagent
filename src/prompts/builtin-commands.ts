@@ -102,13 +102,8 @@ export const SUPERTASK_PROMPT = `You are the orchestrator for a long-horizon tas
       Briefing: "You are a VALIDATOR. Your job is strictly to verify, not to fix. Run the project's test / lint / typecheck commands as appropriate (e.g. \`bun test\`, \`bun run tsc --noEmit\`). Check the acceptance criterion: <T.acceptance>. You MUST NOT edit, write, or delete any source files. You MUST NOT attempt to make a failing test pass — your only output is a single line starting with PASS or FAIL, followed by a one-line reason and (on FAIL) the offending file:line if known."
    d. If validator says PASS → mark T.status = "done", append a log entry.
       If validator says FAIL → T.retry_count++. If retry_count < 3, set status back to "pending"; if ≥ 3, set status to "blocked". Append a log entry either way.
-4. Sync the queue to the user-visible todo list with todo_write:
-   - pending → pending
-   - in_progress → in_progress (at most one)
-   - done → completed
-   - failed / blocked → keep in todo list with a "[blocked]" or "[retry N]" prefix on the content
-5. If every task is done or blocked → write done.flag, summarize the run to the user, and stop.
-6. Increment meta.iteration_count and write meta.json back.
+4. If every task is done or blocked → write done.flag, summarize the run to the user, and stop.
+5. Increment meta.iteration_count and write meta.json back.
    If iteration_count ≥ ${SUPERTASK_MAX_ITERATIONS} → set meta.status = "max_iter" and write meta.json BEFORE reporting. Do NOT write done.flag (the work is not complete, but the run is no longer active). Then stop and report. Without this status flip the dispatcher will treat the run as still in flight and block future /supertask <desc> calls.
 
 # Log entry format (append to log.md, ≤ 5 lines per entry):

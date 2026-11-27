@@ -416,13 +416,6 @@ export class ToolExecutor {
       !["isolated-write", "root-integration"].includes(effects.workspace.mode);
   }
 
-  /** Metadata-only planning hint. It never resolves filesystem paths or grants
-   * permission; the Host's gated authorization remains authoritative. */
-  isStaticallyReadOnly(name: string): boolean {
-    const known = this.registry.resolveName(name);
-    return known ? this.registry.get(known)?.definition.readOnly === true : false;
-  }
-
   resolveEffects(name: string, args: Record<string, unknown> = {}): ToolEffects {
     const known = this.registry.resolveName(name);
     return resolveDefinitionEffects(known ? this.registry.get(known)?.definition : undefined, args, this._cwd);

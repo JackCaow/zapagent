@@ -60,12 +60,8 @@ are not injected into the main agent's inbox. Task tools cannot inspect or stop
 a task explicitly owned by a different session. Legacy unowned tasks remain
 visible for compatibility.
 
-Todos may declare `blocked: { reason, waitingFor, taskIds? }`. When every unfinished
-item is blocked, only a matching task dependency may cause an automatic wake-up.
-Waiting on the user or a capability suppresses unrelated background wake-ups.
-Human input always remains available. An approval already pending inside a tool
-continues that same invocation when answered; this is separate from a blocked
-todo. The harness never infers waiting state from assistant prose.
+A pending tool approval continues the same invocation when answered.
+The harness uses task ownership and actual task events for background continuation.
 
 Readiness also follows observed state transitions: an inconclusive first VM
 daemon probe does not suppress a later degraded observation. Startup can recycle
@@ -75,8 +71,7 @@ Host execution change; the independent Go VM policy and protocol are unchanged.
 
 Receipts and tasks are process-local. This is not a durable exactly-once queue
 across crashes. A post-acceptance provider failure follows normal conversation
-recovery; it does not automatically replay a side effect. A model must explicitly
-report blocked state for dependency filtering to apply.
+recovery; it does not automatically replay a side effect.
 
 ## 3. Process facts and task acceptance are distinct
 
@@ -104,9 +99,9 @@ or behavior check; failed attempts remain blocked/incomplete.
 Regression fixtures cover approved external reads/writes through the real
 executor, denied/expired/wrong-call grants, SDK roots, protected paths, read/write
 separation, symlink retargeting, missing skill refresh, task wait/notification
-receipts, session isolation, explicit dependency filtering, human-first dispatch,
+receipts, session isolation, human-first dispatch,
 provider unavailability, pre-acceptance failure, events during a turn, unknown
-exit status, a failing producer behind a successful pipeline, and todo evidence.
+exit status, and a failing producer behind a successful pipeline.
 Execution fixtures also cover a daemon becoming reachable but degraded after an
 initially inconclusive probe.
 

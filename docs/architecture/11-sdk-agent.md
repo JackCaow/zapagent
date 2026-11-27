@@ -211,14 +211,14 @@ async run(input, opts):
 | 压缩反复失败 | 连续 3 次 | `MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES` 熔断 |
 | Vision 400 | provider 抛特定字符串 | `setVisionSupported(false)` → 重试 |
 | 输出 token 截断 | `finishReason in {length,max_tokens}` | 注入 continue prompt（次数受 `maxOutputTokensRecoveries` 限） |
-| 重复同样 tool 太多次 | `stepSignature` 出现 N 次 | `stop("max_repeat")`（白名单：edit/multi_edit/todo_write 不计） |
+| 重复同样 tool 太多次 | `stepSignature` 出现 N 次 | `stop("max_repeat")`（白名单：edit/multi_edit 不计） |
 | 模型死缠"我做完了"但忘 tool | 自然完成 turn | `turnEndGuard()` 注入一句话，最多一次 |
 | Stream 长时间不发 chunk | watchdog 触发 | `StreamIdleTimeoutError`（在 core/stream-idle 里实现） |
 
 ### Repeat detection
 
 - `primaryArgSig(name, args)` 把 tool call 折成 `(name, path|command|pattern|task)` 二元组。
-- `REPEAT_FRIENDLY_TOOLS` = `{edit_file, multi_edit, todo_write}` 不计。
+- `REPEAT_FRIENDLY_TOOLS` = `{edit_file, multi_edit}` 不计。
 - 连续 step 出现同一个 signature N 次（默认 3）就 `stop("max_repeat")`，避免
   agent 死循环 grep 同一个文件。
 
@@ -226,7 +226,7 @@ async run(input, opts):
 
 不直接 `import { subagentTool }`（防循环）。`LoopAgent` 通过 `subagentFactory`
 注入：`registry` 里的 `agent` 工具是 factory 接收 `{ provider, registry,
-budget, fallbackProvider, todoStore, ... }` 后造出来的。`subagentTool` 内部
+budget, fallbackProvider, ... }` 后造出来的。`subagentTool` 内部
 再实例化新的 `LoopAgent`，传同样的 budget，让 step/spawn 跨树共享。
 
 子 agent 事件：parent 把自己的 `subagent.onEvent` 透传给子 LoopAgent，

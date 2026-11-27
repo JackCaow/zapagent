@@ -8,7 +8,6 @@ import { ToolRegistry } from "../../tools/registry.js";
 import { ToolExecutor } from "../../tools/executor.js";
 import { ConversationManager } from "../../memory/conversation.js";
 import { subagentTool } from "../../builtin-tools/subagent.js";
-import { todoWriteTool } from "../../builtin-tools/todo.js";
 import type { Tool } from "../../tools/types.js";
 
 function provider(calls: Message[][]): LLMProvider {
@@ -127,25 +126,6 @@ describe("SDK prompt profile", () => {
     expect(calls[0][0].content).toContain("Profile: concise");
     expect(calls[0][0].content).toContain("Child host instructions");
     expect(calls[0][0].content).not.toContain("3-5 ordered");
-  });
-
-  it("keeps an explicitly required plan enforced under concise", async () => {
-    const calls: Message[][] = [], registry = new ToolRegistry();
-    let executed = false, turns = 0;
-    registry.register(todoWriteTool({ store: { get: () => [], set: () => {} } }));
-    registry.register({ definition: { name: "change", description: "mutate fixture", parameters: z.object({}) },
-      handler: async () => { executed = true; return { success: true, output: "changed" }; } });
-    const p: LLMProvider = { async call(messages) {
-      calls.push(structuredClone(messages));
-      return turns++ === 0
-        ? { type: "tool_call", text: "", toolCalls: [{ id: "change", name: "change", arguments: {} }], usage: { inputTokens: 1, outputTokens: 1 } }
-        : { type: "text", text: "Blocked by explicit planning policy", usage: { inputTokens: 1, outputTokens: 1 } };
-    } };
-    await new LoopAgent({ provider: p, registry, executor: new ToolExecutor(registry, {}), promptProfile: "concise",
-      taskDecomposition: "required", maxSteps: 5 }).run("Change the fixture");
-    expect(executed).toBe(false);
-    expect(calls[0][0].content).toContain("host explicitly requires a plan");
-    expect(JSON.stringify(calls.at(-1))).toContain("Task decomposition required");
   });
 
   it("retains permission denial and the deadline under concise", async () => {

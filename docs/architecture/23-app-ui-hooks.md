@@ -28,7 +28,6 @@ src/
     ├── slash-palette.tsx        # / 命令补全
     ├── file-palette.tsx         # @ 文件补全
     ├── conversation-surface.tsx # Box 包装 + 一些 layout 约束
-    ├── todos-panel.tsx          # /todos 视图
     ├── toast.tsx                # 顶部 toast 列表渲染
     ├── markdown.tsx             # 自实现 Markdown → Ink Box/Text
     ├── code-block.tsx           # ``` 代码块 + shiki 高亮
@@ -98,8 +97,8 @@ flash）。
 6. runtime = buildAgentRuntime({ provider, registry, executor, conversation, ...
                                 subAgentEventHandler: handlers.subAgentEventHandler })
 7. handlers.wire(runtime)
-8. contextPrefix = makeContextPrefixBuilder({attachments, getTodos, modelId})
-9. turnEndGuard = makeTurnEndGuard(getTodos)
+8. { contextPrefix, contextDiagnostics } = makeContextBuilders({ attachments })
+9. turnEndGuard = reviewFailedTools
 10. result = await runtime.run(text, { signal, images, contextPrefix, turnEndGuard })
 11. finally: handlers.settlePending("..."); preview.flush(); setStatus("ready")
 12. emit run_ended divider, saveLastOutput(result.text)
@@ -249,14 +248,13 @@ shiki 单例初始化在 App 顶部 `initHighlighter()` 触发（fire-and-forget
 `diff.tsx` 把 unified diff 上色：`+` 绿、`-` 红、`@@` 灰。
 `looksLikeDiff(text)` 简单 sniff（首行 `--- ` / `diff --git` 等）。
 
-### 状态层：`footer.tsx` + `live-activity.tsx` + `conversation-surface.tsx` + `todos-panel.tsx` + `toast.tsx`
+### 状态层：`footer.tsx` + `live-activity.tsx` + `conversation-surface.tsx` + `toast.tsx`
 
 - `footer.tsx` —— cwd 简称 / provider/model / token 进度条 /
   permission mode badge / step counter / shell mode
 - `live-activity.tsx` —— 运行中时显示「Thinking · 12.4s」「⌽ write_file
   (foo.ts · 18 KB)」+ 最近 3 个 pending tool 行
 - `conversation-surface.tsx` —— Box wrapping + min-height
-- `todos-panel.tsx` —— `/todos on` 时显示 todo 列表
 - `toast.tsx` —— `<ToastContainer>` 顶部短信息
 
 ### Palette / Dialog

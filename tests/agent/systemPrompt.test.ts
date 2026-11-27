@@ -423,7 +423,7 @@ describe("buildSystemPrompt", () => {
 
     expect(staticPart).toContain("You are a focused code reviewer.")
     expect(staticPart).toContain("# Plan discipline")
-    expect(staticPart).toContain("<active_plan>")
+    expect(staticPart).not.toContain("<active_plan>")
     expect(staticPart).not.toContain("Today:")
     expect(staticPart).not.toContain("CWD:")
     expect(dynamicPart).toContain("Today:")
@@ -500,7 +500,7 @@ describe("buildSystemPrompt", () => {
     }
   })
 
-  it("keeps memory content and active todos out of the cacheable system prompt", async () => {
+  it("keeps memory content out of the cacheable system prompt", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "zapcode-system-prompt-"))
     const dataDir = mkdtempSync(join(tmpdir(), "zapcode-system-prompt-data-"))
     const prevDataDir = process.env.ZAPCODE_DATA_DIR
@@ -520,26 +520,13 @@ describe("buildSystemPrompt", () => {
       const attachments = await buildPerTurnAttachments(autoMemory, {
         memoryQuery: "cache hit rate",
       })
-      const { contextPrefix } = makeContextBuilders({
-        attachments,
-        getTodos: () => [
-          {
-            content: "Investigate prompt cache churn",
-            activeForm: "Investigating prompt cache churn",
-            status: "in_progress",
-          },
-        ],
-        modelId: "gpt-5",
-      })
-      const context = contextPrefix()
+      const context = makeContextBuilders({ attachments }).contextPrefix()
       const populatedPrompt = appendCacheableSystemSection(basePrompt, await autoMemory.buildInstructions())
       const populatedDiagnostics = buildPromptCacheDiagnostics(populatedPrompt)
 
       expect(populatedDiagnostics.staticPrefix.hash).toBe(emptyDiagnostics.staticPrefix.hash)
       expect(populatedPrompt).not.toContain("Provider cache hit rate should stay above 90%")
-      expect(populatedPrompt).not.toContain("Investigating prompt cache churn")
       expect(context).toContain("Provider cache hit rate should stay above 90%")
-      expect(context).toContain("Investigating prompt cache churn")
     } finally {
       if (prevDataDir === undefined) delete process.env.ZAPCODE_DATA_DIR
       else process.env.ZAPCODE_DATA_DIR = prevDataDir

@@ -34,7 +34,6 @@ import {
   type PersistCompactSummary,
 } from "../agent/memoryDiagnostics.js"
 import { buildStatusText } from "./status.js"
-import type { Todo } from "../../zapsdk/index.js"
 import type { LogEntry, LogType, ToolCallInfo, UserImageRef } from "../ui/types.js"
 import type { SkillDefinition } from "../../zapsdk/skills/types.js"
 import type { AgentObjects } from "../agent/types.js"
@@ -111,15 +110,11 @@ export interface DispatchSlashCommandDeps {
   runGoalCommand?: (args: string[]) => Promise<number>
   bumpTranscript: () => void
   setLogs: (logs: LogEntry[]) => void
-  setTodos: (todos: Todo[]) => void
-  todosRef: React.MutableRefObject<Todo[]>
-  subagentTodosRef: React.MutableRefObject<Map<string, Todo[]>>
   checkpointRef: React.MutableRefObject<CheckpointManager>
   turnStartLogIndexRef: React.MutableRefObject<number>
   setDialog: (id: DialogId) => void
   addLog: AddLog
   configRef: React.MutableRefObject<AppConfig>
-  openWorkspaceAccess?: (task: string) => void
   updateConfig: (next: AppConfig) => void
   addToast: (text: string, options?: ToastOptions) => void
   /** Current in-memory transcript. Used by /copy-input to copy the latest
@@ -345,9 +340,6 @@ export function dispatchSlashCommand(
   const resetConversationState = () => {
     conversation.clear()
     deps.setLogs([])
-    deps.todosRef.current = []
-    deps.setTodos([])
-    deps.subagentTodosRef.current.clear()
     deps.turnStartLogIndexRef.current = 0
     clearQueue()
     clearSystemInbox()
@@ -399,7 +391,6 @@ export function dispatchSlashCommand(
     case "open_update":      deps.setDialog("update");      return true
     case "open_connect":     deps.setDialog("connect");     return true
     case "open_model_picker":deps.setDialog("model");       return true
-    case "open_workspace_access": deps.openWorkspaceAccess?.(cmd.value ?? ""); return true
     case "open_mode_picker": deps.setDialog("mode");        return true
     case "open_sessions":    deps.setDialog("sessions");    return true
     case "open_queue":       deps.setDialog("queue");       return true
@@ -473,13 +464,14 @@ export function dispatchSlashCommand(
     }
 
     case "set_permission_mode": {
-      const v = parsePermissionMode(cmd.value ?? "default")
+      const name = cmd.value ?? "auto"
+      const v = name === "auto" ? "auto" : parsePermissionMode(name)
       if (!v) {
-        deps.addLog("error", `Unknown permission mode: ${cmd.value}. Use default, acceptEdits, plan, bypass, or a preset: strict, balanced, autonomous`)
+        deps.addLog("error", `Unknown permission mode: ${cmd.value}. Open /mode to see the available choices.`)
         return true
       }
       deps.updateConfig({ ...deps.configRef.current, permissionMode: v })
-      deps.addToast(`mode → ${v}`)
+      deps.addToast(v === "auto" ? "Auto is on" : `mode → ${v}`)
       return true
     }
 
@@ -654,13 +646,6 @@ export function dispatchSlashCommand(
       })()
     }
 
-    case "clear_todos": {
-      deps.todosRef.current = []
-      deps.setTodos([])
-      deps.addToast("Todos cleared")
-      return true
-    }
-
     case "review": {
       return dispatchAgentTurn(`Review the code at: ${cmd.value ?? "."}`, REVIEW_PROMPT)
     }
@@ -825,15 +810,11 @@ export function dispatchSlashCommand(
         void (async () => {
           await terminateProcessGracefully(pid)
           abortSupertask(cwd, ref.id)
-          deps.todosRef.current = []
-          deps.setTodos([])
           deps.addToast(`Supertask ${ref.id} aborted`, { variant: "warning" })
         })()
         return true
       }
       abortSupertask(cwd, ref.id)
-      deps.todosRef.current = []
-      deps.setTodos([])
       deps.addToast(`Supertask ${ref.id} aborted`, { variant: "warning" })
       return true
     }

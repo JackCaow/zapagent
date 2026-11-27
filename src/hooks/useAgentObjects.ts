@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import type { AppConfig } from "../config.js"
 import type { CheckpointManager } from "../../zapsdk/checkpoint/index.js"
-import type { AskUserCallbacks, PlanModeCallbacks, TodoStore, Tool } from "../../zapsdk/index.js"
+import type { AskUserCallbacks, PlanModeCallbacks, Tool } from "../../zapsdk/index.js"
 import type { ApprovalCallback } from "../../zapsdk/tools/executor.js"
 import type { SkillDefinition } from "../../zapsdk/skills/types.js"
 import { buildAgentObjects } from "../agent-factory.js"
@@ -14,8 +14,7 @@ import { requestCapabilitiesTool } from "../request-capabilities-tool.js"
 export interface UseAgentObjectsOptions {
   config: AppConfig
   onApproval: ApprovalCallback
-  todoStore: TodoStore
-  planCallbacks: PlanModeCallbacks
+  planCallbacks?: PlanModeCallbacks
   askUserCallbacks?: AskUserCallbacks
   checkpoint: CheckpointManager
   skillsRef: React.MutableRefObject<Map<string, SkillDefinition>>
@@ -53,10 +52,10 @@ export function useAgentObjects(opts: UseAgentObjectsOptions & {
    *  notably useSamplingHandler, which is consumed by the MCP manager. */
   externalRef?: React.MutableRefObject<AgentObjects | null>
 }): UseAgentObjectsResult {
-  const { config, onApproval, todoStore, planCallbacks, askUserCallbacks, checkpoint, skillsRef, mcpTools, externalRef } = opts
+  const { config, onApproval, planCallbacks, askUserCallbacks, checkpoint, skillsRef, mcpTools, externalRef } = opts
 
   const build = () => {
-    const objs = buildAgentObjects(config, onApproval, todoStore, planCallbacks, checkpoint, skillsRef.current, undefined, undefined, undefined, undefined, askUserCallbacks)
+    const objs = buildAgentObjects(config, onApproval, planCallbacks, checkpoint, skillsRef.current, undefined, undefined, undefined, undefined, askUserCallbacks)
     // The live ACP session (session mode) asks through the current gates.
     remoteAgents.host.approve = onApproval
     remoteAgents.host.trackEdit = checkpoint?.createEditTracker()
@@ -100,7 +99,7 @@ export function useAgentObjects(opts: UseAgentObjectsOptions & {
   useEffect(() => {
     agentRef.current = build()
     if (externalRef) externalRef.current = agentRef.current
-  // skillsRef + checkpoint + todoStore are stable refs/values for this session.
+  // skillsRef + checkpoint are stable refs/values for this session.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config, onApproval, planCallbacks, askUserCallbacks, delegateRebuildKey, mcpTools])
 

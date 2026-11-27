@@ -63,7 +63,7 @@ for (const transport of ["call", "stream", "xml"] as const) {
       };
       const conversation = new ConversationManager({ maxMessages: 100 });
       const agent = new LoopAgent({ provider, registry, executor: new ToolExecutor(registry), conversation,
-        taskDecomposition: "off", maxSteps: 10, reserveSteps: 0, storageProjectCwd: root });
+        maxSteps: 10, reserveSteps: 0, storageProjectCwd: root });
       const eventResults: unknown[] = [];
       agent.on("content_final", event => {
         if (event.type === "content_final" && event.kind === "tool_result") {
