@@ -120,7 +120,7 @@ ptyTest("real App guides connection creation into model selection, skip and repa
     await key("Escape"); await closed()
     expect(config().providers).toHaveLength(1)
     expect(config().active.model).toBe("")
-    await command("/model"); await visible("Models · All connections"); await visible("alpha-model")
+    await command("/model"); await visible("[First]"); await visible("alpha-model")
     await key("Enter"); await closed()
     const first = config().active
     expect(first.model).toBe("alpha-model")
@@ -128,7 +128,7 @@ ptyTest("real App guides connection creation into model selection, skip and repa
     expect(frames.autoStatus).toContain("1.05M")
     expect(frames.autoStatus).toContain("Limit source:    models-dev")
     await key("Escape")
-    await command("/model"); await visible("Models · All connections"); await literal("c")
+    await command("/model"); await visible("[First]"); await literal("c")
     await visible("Context window"); await key("Down"); await key("Enter")
     await visible("Manual context window")
     for (let i = 0; i < 7; i++) await key("BSpace")
@@ -141,7 +141,7 @@ ptyTest("real App guides connection creation into model selection, skip and repa
     await command("/status"); frames.manualStatus = await visible("Auto-compact at: 202.4K")
     expect(frames.manualStatus).toContain("Limit source:    manual")
     await key("Escape")
-    await command("/model"); await visible("Models · All connections"); await literal("c")
+    await command("/model"); await visible("[First]"); await literal("c")
     await visible("Context window"); await key("Up"); await key("Enter")
     await visible("First: automatic context")
     expect(config().providers[0]?.contextWindowMode).toBe("auto")
@@ -166,16 +166,16 @@ ptyTest("real App guides connection creation into model selection, skip and repa
 
     // Re-open models directly on a saved but incomplete connection.
     await openConnect(); await key("Down"); await key("Down"); await literal("m")
-    await visible("Models · Offline"); await visible("Endpoint discovery failed")
+    await visible("[Offline]"); await visible("Endpoint discovery failed")
     await literal("t"); await visible("Manual model ID · Offline")
-    await key("Escape"); await visible("Models · Offline")
+    await key("Escape"); await visible("[Offline]")
     await literal("t"); await visible("Manual model ID · Offline")
     await command("manual-id"); await closed()
     expect(config().active.model).toBe("manual-id")
     const manual = config().active
 
     // Esc from m returns to connections; no parent dialog consumes the same key.
-    await openConnect(); await literal("m"); await visible("Models · First")
+    await openConnect(); await literal("m"); await visible("[First]")
     await key("Escape"); await visible("Connections · /connect")
     expect(config().active).toEqual(manual)
     await key("Escape")
