@@ -104,8 +104,8 @@ External agents run on the host and can perform actions under their own permissi
 rules. Zap checkpoints cover writes through its file handlers. Setting
 `allowUnsandboxedCommands` to `false` blocks both agents. Zap saves the displayed
 transcript. Restoring that transcript, starting a new conversation, or switching
-agents starts a fresh native context. Changing the Codex sandbox, model or reasoning effort
-also starts a new native session.
+agents starts a fresh native context. Codex applies sandbox mode changes in the current conversation before the next prompt.
+Changing its model or reasoning effort starts a new native session.
 
 For Zap's own tools, `/goal`, and `zap -p`, select an API connection in `/model`.
 For noninteractive native usage, run `codex exec` or `claude --print`.
@@ -173,6 +173,7 @@ also skip CI, headless output and ACP; explicit `zap update` still checks.
 | `/model` | Search and switch models across all configured connections |
 | `/effort` | Set reasoning effort (`off`, `cycle`, or a provider value) |
 | `/agent` | List conversation agents (`agy`, `codex`, `claude-code`); `/agent <id>` sends messages to that agent, `/agent zap` switches back |
+| `/work` | Start implementing the plan, give a task with `/work <task>`, or manage project access |
 | `/mode` | Set permission mode (`default`, `acceptEdits`, `plan`, `bypass`) or a preset: `strict`, `balanced`, `autonomous` |
 | `/permissions` | Manage active permission rules |
 | `/sessions` | Browse saved sessions |
@@ -194,6 +195,27 @@ also skip CI, headless output and ACP; explicit `zap update` still checks.
 | `/goal` | Run until independent acceptance and delivery, with no default usage or time limit; use `/goal help` for status, pause, resume, cancel, and budget controls |
 | `/supertask` | Start, resume, abort, status, or watch a long-horizon task |
 | `/exit` | Exit zapAgent (`/quit` and `/q` also work) |
+
+An ordinary interactive conversation starts in analysis for a new directory.
+Use `/work` after a plan or `/work <task>` to start coding. Choose **Start
+implementation** for this root task (including its child agents), or **Always
+allow work in this project** to cover later interactive tasks. The project
+decision lives in Zap's user data and is bound to the directory's identity.
+**Only analyze** limits the current conversation. **Forget project access**
+revokes the saved decision. An explicit advanced `/mode` takes precedence.
+Headless runs and Goals use their existing explicit policies.
+
+Codex applies workspace access to its native thread before sending the task.
+Claude Code uses manual stdio approvals for implementation and resumes its
+session. Identified project edits can be approved automatically. During an authorized
+implementation turn with an available sandbox, Claude runs foreground commands
+through Zap's project shell. Tests, builds, and lint use the same permissions as
+Zap's own commands. The shell starts in the project root on every call. Use Zap
+permission rules for this tool. When Claude reports native Bash restrictions,
+shell-related hooks, or its own active sandbox, Zap keeps the native shell and
+its permission flow. Analysis turns do not expose the project shell. In Zap, writing
+children keep their private workspaces and ask in the parent terminal when
+they need an additional permission.
 
 The footer shows output speed as `105.4 token/s` for the latest root model request. `~` marks a live estimate (streamed characters ÷ 4); provider-reported output usage calibrates the final rate. Timing starts at first output and excludes tool execution. Missing usage keeps the estimate; non-streaming or very short responses may have no rate. In a local agent session, streamed chunks show an estimated rate. Buffered replies with reported output tokens show `avg` over the full turn, including tool time. When the agent reports its context window, the footer shows used tokens, capacity and percent occupied.
 

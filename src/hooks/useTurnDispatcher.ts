@@ -8,7 +8,7 @@ import {
   getMessageQueue,
   type QueuedCommand,
 } from "../queue/inputQueue.js"
-import type { FollowUpMode } from "../queue/messageQueue.js"
+import type { FollowUpMode, QueueEntry } from "../queue/messageQueue.js"
 import { deliverNextMessage } from "../queue/delivery.js"
 import {
   drainSystemInbox,
@@ -83,6 +83,7 @@ export interface UseTurnDispatcherOptions {
   openQueue?: () => void
   getInputValue?: () => string
   queueError?: string
+  onEnqueued?: (entry: QueueEntry) => void
   getTodos?: () => Todo[]
   getSessionId?: () => string
   addLog: AddLog
@@ -100,6 +101,7 @@ export interface UseTurnDispatcherOptions {
     restoreText?: string,
     memoryQueryText?: string,
     onAccepted?: () => void,
+    entryId?: string,
   ) => Promise<unknown>
 
   /** Slash-command dispatcher pre-bound with its own deps by the App. Called
@@ -445,7 +447,7 @@ export function useTurnDispatcher(
     try {
       while (true) {
         if (pausedRef.current) break
-        let openedRewind = false
+        let openedDialog = false
         if (opts.getSessionId && getMessageQueue().getSessionId() !== opts.getSessionId()) break
         // Human steering takes precedence. Never discard events when the provider is unavailable.
         const humanPending = getQueueSnapshot().some(entry => entry.state !== "accepted")
@@ -477,13 +479,13 @@ export function useTurnDispatcher(
             const unreadable = images?.filter(image => image.base64 === undefined).map(image => image.filePath)
             if (unreadable?.length) throw new Error(`Queued image is no longer readable: ${unreadable.join(", ")}`)
             return dispatchUserTurn(buildDispatchText(entry.text, !!images?.length), undefined,
-              images, entry.displayForm, false, entry.restoreText, entry.displayForm, accepted)
+              images, entry.displayForm, false, entry.restoreText, entry.displayForm, accepted, entry.id)
           },
           command: async (entry, accepted) => {
             addLog("user", entry.displayForm, undefined, undefined, undefined, {
               restore: false, ...(entry.restoreText !== undefined ? { restoreText: entry.restoreText } : {}),
             })
-            openedRewind = parseCommand(entry.text)?.type === "open_rewind"
+            openedDialog = ["open_rewind", "open_workspace_access"].includes(parseCommand(entry.text)?.type ?? "")
             const compact = isManualCompactCommand(entry.text)
             let inputRequired = false, result: unknown
             if (compact) manualCompactInFlightRef.current = true
@@ -498,7 +500,7 @@ export function useTurnDispatcher(
           onError: error => addLog("error", `Queue: ${error}`),
         })
         if (delivered) retrySystemEvents(opts.getSessionId?.())
-        if (openedRewind || (!delivered && !deliveredEvents)) break
+        if (openedDialog || (!delivered && !deliveredEvents)) break
       }
     } catch (error) {
       addLog("error", `Queue dispatch failed: ${error instanceof Error ? error.message : String(error)}`)
@@ -520,7 +522,8 @@ export function useTurnDispatcher(
     } else {
       // A failed message at the head stops delivery. Say so, or typing looks dead.
       const wasPaused = getMessageQueue().isPaused()
-      enqueueCommand(command, opts.followUpMode)
+      const entry = enqueueCommand(command, opts.followUpMode)
+      if (!command.text.trimStart().startsWith("/") || looksLikeDroppedFilePath(command.text)) opts.onEnqueued?.(entry)
       if (wasPaused) {
         addToast("Queue paused by a failed message — this one waits. Ctrl+Q: r retry, x delete, c clear failed.", {
           variant: "warning", duration: 8000,
@@ -579,14 +582,14 @@ export function useTurnDispatcher(
       }
       // Provider repair is a local control action, not a follow-up task. It
       // must remain reachable behind a failed head, without reviving that head.
-      if (isGoalSessionControl(value)) {
+      const control = parseCommand(value)
+      if (isGoalSessionControl(value) || (!opts.editingMessageId && control?.type === "open_workspace_access")) {
         pushHistory(value)
         addLog("user", displayForm, undefined, undefined, undefined, { restore: false })
         await dispatchCommand(expandPastes(value), { displayText: displayForm })
         setInputValue(current => current === draftAtSubmit ? "" : current)
         return
       }
-      const control = parseCommand(value)
       if (!isRunning && !isDispatchingRef.current && !opts.editingMessageId
         && control && ["open_connect", "open_model_picker", "set_model"].includes(control.type)) {
         const images = filterPendingImagesForSubmit(pendingImages, value)
@@ -773,6 +776,7 @@ export function useTurnDispatcher(
       opts.followUpMode,
       opts.editingMessageId,
       opts.onEditCommitted,
+      opts.onEnqueued,
       opts.openQueue,
       opts.getInputValue,
       opts.queueError,

@@ -88,6 +88,8 @@ export class MergeCoordinator {
     private options: MergeCoordinatorOptions = {},
   ) {}
 
+  ordinaryEditPaths(ids: readonly string[]): string[] { return this.workspaces.ordinaryArtifactPaths(ids); }
+
   async merge(artifactIds: string[]): Promise<MergeResult> {
     const previous = this.chain.catch(() => undefined);
     let release!: () => void;

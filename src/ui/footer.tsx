@@ -50,6 +50,7 @@ interface FooterProps {
   hasApiKey: boolean
   showWelcome?: boolean
   shellMode?: boolean
+  analysisHint?: boolean
   permissionMode?: PermissionMode
   termWidth: number
   /** Compact MCP server status: `{ready, total, degraded, needsAuth, error}`.
@@ -73,6 +74,7 @@ export const Footer = memo(function Footer({
   showWelcome,
   shellMode,
   permissionMode = "default",
+  analysisHint,
   termWidth,
   mcp,
 }: FooterProps) {
@@ -91,9 +93,9 @@ export const Footer = memo(function Footer({
     : c.text.faint
 
   const modeLabel: Record<PermissionMode, string | null> = {
-    default:            null,
-    acceptEdits:        "accept-edits",
-    plan:               "plan",
+    default:            analysisHint ? "Analyze · /work to edit" : null,
+    acceptEdits:        "editing",
+    plan:               analysisHint ? "Analyze · /work to edit" : "plan",
     bypassPermissions:  "bypass",
   }
   const modeColor: Record<PermissionMode, string> = {

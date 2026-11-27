@@ -39,6 +39,7 @@ export interface UsePermissionApprovalOptions {
   /** Live config ref — read inside the callback so a mode flip during a run
    *  (e.g. user toggles plan mode) takes effect on the very next approval. */
   configRef: React.MutableRefObject<AppConfig>
+  effectiveMode?: (actorRun?: string) => AppConfig["permissionMode"]
   addLog: AddLog
 }
 
@@ -56,7 +57,7 @@ export interface UsePermissionApprovalResult {
 export function usePermissionApproval(
   opts: UsePermissionApprovalOptions,
 ): UsePermissionApprovalResult {
-  const { configRef, addLog } = opts
+  const { configRef, addLog, effectiveMode } = opts
   const sessionId = getCurrentSessionId()
   permissionManager.setSessionId(sessionId)
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null)
@@ -130,7 +131,7 @@ export function usePermissionApproval(
             settle({ approved: false, source: "approval", reason: "approval session changed" })
             return "Approval session changed"
           }
-          const current = evaluateApprovalPolicy(permissionManager, name, ar, { mode: configRef.current.permissionMode, cwd: process.cwd(), context })
+          const current = evaluateApprovalPolicy(permissionManager, name, ar, { mode: effectiveMode?.(context?.actor?.runId) ?? configRef.current.permissionMode, cwd: process.cwd(), context })
           if (current.decision === "ask" && !current.allowScope) scopeAllowed = false
           if (current.decision === "deny") {
             clear()
@@ -199,7 +200,7 @@ export function usePermissionApproval(
         })
       })
     },
-    [addLog, configRef],
+    [addLog, configRef, effectiveMode],
   )
 
   /** Policy decision without a human. Unsettled ones are logged only when
@@ -207,14 +208,14 @@ export function usePermissionApproval(
   const decide = useCallback(
     (toolName: string, args: Record<string, unknown>, context?: Readonly<ApprovalContext>, logAsk = true) => {
       permissionManager.setSessionId(getCurrentSessionId())
-      const mode = configRef.current.permissionMode
+      const mode = effectiveMode?.(context?.actor?.runId) ?? configRef.current.permissionMode
       const decision = evaluateApprovalPolicy(permissionManager, toolName, args, { mode, cwd: process.cwd(), context })
       if (decision.decision === "ask" && !logAsk) return decision
       try { appLogger.info("permission_decision", { tool: toolName, mode, decision: decision.decision, category: decision.category, tier: decision.tier, source: decision.source, reason: decision.reason }) } catch {}
       if (decision.decision === "deny") addLog("system", `Permission: denied ${getToolAlias(toolName)} — ${decision.reason}`)
       return decision
     },
-    [addLog, configRef],
+    [addLog, configRef, effectiveMode],
   )
 
   const queued = useCallback(

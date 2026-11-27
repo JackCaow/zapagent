@@ -37,6 +37,34 @@ describe("RemoteAgentManager (session mode)", () => {
     expect(manager.current).toBeUndefined()
   })
 
+  it("applies permission changes on the original thread before the next prompt", async () => {
+    const { app, log } = fakeAgent({ async script(turn) { await turn.update(text("ok")) } })
+    const manager = new RemoteAgentManager(() => inProcessTransport(app))
+    try {
+      const threads = []
+      for (const mode of ["read-only", "workspace-write", "workspace-write", "read-only"]) {
+        const result = await manager.prompt({ ...spec, mode, requireSettings: true }, "/w", "task", undefined,
+          { signal: new AbortController().signal, onEvent() {} })
+        threads.push(result.session.sessionId)
+      }
+      expect(new Set(threads).size).toBe(1)
+      expect(log.calls.map(call => call.method)).toEqual(["session/new", "session/set_mode", "session/prompt",
+        "session/set_mode", "session/prompt", "session/prompt", "session/set_mode", "session/prompt"])
+    } finally { await manager.reset() }
+  })
+
+  it("discards an unconfirmed mode change before delivering the next message", async () => {
+    const { app, log } = fakeAgent({ rejectMode: "workspace-write", async script() {} })
+    const manager = new RemoteAgentManager(() => inProcessTransport(app))
+    const options = { signal: new AbortController().signal, onEvent() {} }
+    try {
+      await manager.prompt({ ...spec, mode: "read-only", requireSettings: true }, "/w", "analysis", undefined, options)
+      await expect(manager.prompt({ ...spec, mode: "workspace-write", requireSettings: true }, "/w", "work", undefined, options)).rejects.toThrow()
+      expect(manager.current).toBeUndefined()
+      expect(log.calls.filter(call => call.method === "session/prompt")).toHaveLength(1)
+    } finally { await manager.reset() }
+  })
+
   it("starts a fresh agent when the cwd changes or after a failed turn", async () => {
     let fail = true
     const { app } = fakeAgent({ async script(turn) {

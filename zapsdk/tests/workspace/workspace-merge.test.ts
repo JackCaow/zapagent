@@ -45,6 +45,7 @@ describe("isolated Agent workspace merge", () => {
         if (format === "split") git(lease.path, "update-index", "--split-index");
         const artifact = (await manager.finalize(lease))!;
         expect(artifact.changedPaths.sort()).toEqual([...names].sort());
+        expect(manager.ordinaryArtifactPaths([artifact.artifactId]).sort()).toEqual(names.map(name => join(manager.rootRepoPath(), name)).sort());
         expect((await new MergeCoordinator(manager).merge([artifact.artifactId])).success).toBe(true);
         for (const name of names) expect(readFileSync(join(root, name), "utf8")).toBe(`content of ${name}\n`);
         expect(existsSync(join(root, "noise.generated"))).toBe(false);
@@ -100,6 +101,7 @@ describe("isolated Agent workspace merge", () => {
       }
       const artifact = (await manager.finalize(lease))!;
       expect(artifact.changedPaths.sort()).toEqual(["a.txt", "a.txt/source.txt"]);
+      expect(manager.ordinaryArtifactPaths([artifact.artifactId])).toEqual([]);
       expect(git(artifact.repoPath!, "ls-tree", "-r", "--name-only", "HEAD")).not.toContain("noise.generated");
       expect(git(artifact.repoPath!, "ls-tree", "-r", "--name-only", "HEAD")).not.toContain(".env");
       expect((await new MergeCoordinator(manager).merge([artifact.artifactId])).success).toBe(true);

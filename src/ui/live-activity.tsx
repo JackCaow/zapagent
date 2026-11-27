@@ -114,6 +114,8 @@ export interface LiveActivityProps {
   status: string
   providerRequest?: ProviderRequestEvent
   activeTool: string
+  externalAgent?: string
+  awaitingApproval?: boolean
   /** Bytes accumulated in the in-flight tool-call's JSON arg buffer (set
    *  while the model is still streaming tool args, cleared once the tool
    *  starts executing). When >0, surface a `12.4k` counter so a slow
@@ -155,13 +157,13 @@ export function CompactActivity({ elapsed, stopHint = "Esc twice to stop", termW
 
 export const LiveActivity = memo(function LiveActivity({
   isRunning, isStreaming, isThinking, thinkingChars,
-  status, activeTool, activeToolBytes = 0, termWidth, pendingTools,
+  status, activeTool, externalAgent, awaitingApproval, activeToolBytes = 0, termWidth, pendingTools,
   lastCompletedTool, providerRequest, stopHint = "Esc twice to stop",
   goal, goalAttached = false, goalTodos = [], goalAwaitingInput = false,
 }: LiveActivityProps) {
   // Keep the 150ms animation state inside this small row. Hosting it in App
   // made every spinner tick reconcile the transcript, prompt and palettes.
-  const { spinIdx, elapsed, spinnerFrames } = useSpinner(status)
+  const { spinIdx, elapsed, spinnerFrames } = useSpinner(awaitingApproval ? "approval" : externalAgent && pendingTools.length ? "external-tool" : status)
   const goalActive = !!goal && goalAttached && ["created", "running"].includes(goal.status)
   const waitingForGoalInput = goalActive && goalAwaitingInput
   const progress = activityProgress(isThinking, thinkingChars, activeToolBytes)
@@ -217,7 +219,9 @@ export const LiveActivity = memo(function LiveActivity({
   // exists in this architecture.)
   const spinner = goalActive ? spinnerFrames[spinIdx % spinnerFrames.length] : SPINNER_FRAMES[spinIdx % SPINNER_FRAMES.length]
   const toolsSegment = formatPendingToolsLabel(pendingTools)
-  const primaryLabel = toolsSegment || statusLabel(status, activeTool)
+  let primaryLabel = toolsSegment || statusLabel(status, activeTool)
+  if (awaitingApproval) primaryLabel = "Waiting for your approval"
+  else if (toolsSegment && externalAgent) primaryLabel = `Awaiting ${externalAgent} · ${toolsSegment}`
   const copy = buildLiveActivityCopy({
     primaryLabel,
     elapsedSeconds: elapsed,
@@ -231,7 +235,8 @@ export const LiveActivity = memo(function LiveActivity({
     ? `after ${formatToolLabel(lastCompletedTool.tool.name, lastCompletedTool.tool.arguments)}`
     : ""
   const goalTool = pendingTools.length > 0 || activeToolBytes > 0 ? activeTool : ""
-  const segments = [goalActive ? waitingForGoalInput ? "等待你确认操作" : goalActionText(goal!, goalAttached, goalTodos, goalTool) : copy.primaryLabel, copy.elapsed, waitingForGoalInput ? "" : copy.progress, goalActive ? "" : lastActionSegment]
+  const approvalLabel = awaitingApproval ? "Waiting for your approval" : copy.primaryLabel
+  const segments = [goalActive ? waitingForGoalInput ? "等待你确认操作" : goalActionText(goal!, goalAttached, goalTodos, goalTool) : approvalLabel, awaitingApproval ? formatActivityDuration(elapsed) : copy.elapsed, waitingForGoalInput || awaitingApproval ? "" : copy.progress, goalActive ? "" : lastActionSegment]
     .filter(Boolean)
     .join("  ·  ")
   const interruptHint = goal && termWidth < 70

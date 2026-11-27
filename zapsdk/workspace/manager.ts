@@ -146,6 +146,7 @@ export class WorkspaceManager {
   private sourceLinksHash?: string;
   private sourceLinks: Record<string, string> = Object.create(null);
   private initializePromise?: Promise<void>;
+  private readonly ordinaryEdits = new Map<string, string[]>();
   private artifacts = new Map<string, AgentArtifact>();
   private leases = new Map<string, WorkspaceLease>();
   private onLifecycle?: WorkspaceLifecycleHandler;
@@ -297,9 +298,13 @@ export class WorkspaceManager {
     }
     const resultOid = (await artifactGit(artifactRoot, ["rev-parse", "HEAD"])).stdout.trim();
     const changedOutput = (await artifactGit(artifactRoot, [
-      "diff", "--name-only", "-z", lease.baseOid, resultOid,
+      "diff", "--raw", "--no-renames", "-z", lease.baseOid, resultOid,
     ])).stdout;
-    const changedPaths = changedOutput.split("\0").filter(Boolean);
+    // --no-renames yields one status record and one path per change, including both sides of a rename.
+    const records = changedOutput.split("\0").slice(0, -1);
+    const changedPaths = records.filter((_, index) => index % 2 === 1);
+    const onlyRegularEdits = records.every((record, index) => index % 2 === 1 ||
+      /^:(?:000000|100644) 100644 [0-9a-f]+ [0-9a-f]+ [AM]$/.test(record));
     const numstat = (await artifactGit(artifactRoot, [
       "diff", "--numstat", lease.baseOid, resultOid,
     ])).stdout.trim();
@@ -322,7 +327,8 @@ export class WorkspaceManager {
       changedPaths,
       diffStat: { additions, deletions, files: changedPaths.length },
     };
-    this.artifacts.set(artifact.artifactId, artifact);
+    this.recordOrdinaryEdits(artifact, onlyRegularEdits);
+    this.artifacts.set(artifact.artifactId, structuredClone(artifact));
     await this.onLifecycle?.({
       type: "artifact_created",
       lease,
@@ -341,6 +347,19 @@ export class WorkspaceManager {
     const updated = { ...lease, privateGit };
     this.leases.set(updated.workspaceId, updated);
     return updated;
+  }
+
+  /** Only this live manager can attest to the targets in a freshly frozen ordinary edit. */
+  private recordOrdinaryEdits(artifact: AgentArtifact, ordinary: boolean): void {
+    this.ordinaryEdits.delete(artifact.artifactId);
+    if (!ordinary || artifact.changedPaths.some(path => SECRET_UNTRACKED.test(path) ||
+      path.split("/").some(part => [".git", ".zapcode"].includes(part.toLowerCase())))) return;
+    this.ordinaryEdits.set(artifact.artifactId, artifact.changedPaths.map(path => join(this.rootRepoPath(), path)));
+  }
+
+  ordinaryArtifactPaths(ids: readonly string[]): string[] {
+    if (!ids.length || ids.some(id => !this.ordinaryEdits.has(id))) return [];
+    return [...new Set(ids.flatMap(id => this.ordinaryEdits.get(id)!))];
   }
 
   getArtifact(artifactId: string): AgentArtifact | undefined {
@@ -393,6 +412,9 @@ export class WorkspaceManager {
       diffStat: { additions: 0, deletions: 0, files: changedPaths.length },
       ...(privateGitHistory ? { privateGitHistory } : {}),
     };
+    this.recordOrdinaryEdits(artifact, changedPaths.every(path =>
+      result[path]?.kind === "file" && (!baseline[path] || baseline[path].kind === "file" && baseline[path].mode === result[path].mode) ||
+      !baseline[path] && result[path]?.kind === "directory"));
     this.artifacts.set(artifactId, structuredClone(artifact));
     await this.onLifecycle?.({ type: "artifact_created", lease, artifact, timestamp: Date.now() });
     return artifact;
@@ -580,6 +602,7 @@ export class WorkspaceManager {
     this.baseOid = undefined;
     this.sourceLinksHash = undefined; this.sourceLinks = Object.create(null);
     this.initializePromise = undefined;
+    this.ordinaryEdits.clear();
     this.artifacts.clear();
     this.leases.clear();
   }

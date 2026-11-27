@@ -10,6 +10,7 @@ import { makeParserCtx, parseClaudeLine } from "../../zapsdk/builtin-tools/deleg
 import type { ImageContent, TokenUsage } from "../../zapsdk/core/types.js"
 import { createLocalProcessBroker, terminateProcessTree, terminateProcessTreeWithGrace } from "../../zapsdk/execution/process.js"
 import type { ApprovalCallback, ApprovalResponse } from "../../zapsdk/tools/executor.js"
+import { claudeWorkspaceShell, type WorkspaceCommand } from "./claude-workspace-shell.js"
 
 const toolKinds: Record<string, ToolKind> = { Bash: "execute", Write: "edit", Edit: "edit", MultiEdit: "edit", NotebookEdit: "edit", Read: "read", Glob: "search", Grep: "search" }
 
@@ -23,6 +24,7 @@ interface Options {
   plan: boolean
   signal: AbortSignal
   approve?: ApprovalCallback
+  workspaceCommand?: WorkspaceCommand
   onEvent: (event: AgentEvent) => void
   onAccepted?: () => void
 }
@@ -59,10 +61,34 @@ async function approveClaudeTool(
  * Each invocation adds one user turn to the native session. */
 export async function promptClaudeCode(options: Options): Promise<AcpTurnResult & { sessionId: string }> {
   const sessionId = options.resume ?? randomUUID()
+  const shell = !options.plan && options.workspaceCommand ? claudeWorkspaceShell(sessionId, options.workspaceCommand) : undefined
+  try {
+    return await runClaudeCode(options, sessionId, shell)
+  } catch (error) {
+    if (!(error instanceof NativeShellRequired)) throw error
+    options.signal.throwIfAborted()
+    return runClaudeCode(options, sessionId)
+  }
+}
+
+class NativeShellRequired extends Error {}
+
+/** A Bash-specific Claude rule or hook cannot constrain an MCP tool. Keep
+ * Claude's native executor whenever its own shell policy must be applied. */
+function requiresNativeShell(settings: unknown): boolean {
+  if (!settings || typeof settings !== "object") return true
+  const data = settings as { permissions?: { ask?: unknown; deny?: unknown }; hooks?: Record<string, unknown>; sandbox?: { enabled?: boolean } }
+  if (data.sandbox?.enabled || data.hooks?.PreToolUse || data.hooks?.PermissionRequest || data.hooks?.PostToolUse) return true
+  return [data.permissions?.ask, data.permissions?.deny].some(rules => rules !== undefined && (
+    !Array.isArray(rules) || rules.some(rule => typeof rule !== "string" || /^(?:Bash|\*)(?:$|\()/i.test(rule))))
+}
+
+async function runClaudeCode(options: Options, sessionId: string, shell?: ReturnType<typeof claudeWorkspaceShell>): Promise<AcpTurnResult & { sessionId: string }> {
   const args = [...(options.args ?? []), "--print", "--verbose", "--include-partial-messages", "--input-format", "stream-json", "--output-format", "stream-json",
     "--permission-prompt-tool", "stdio", "--permission-mode", options.plan ? "plan" : "manual",
     options.resume ? "--resume" : "--session-id", sessionId]
   if (options.plan) args.push("--tools", "Read,Grep,Glob")
+  if (shell) args.push(...shell.args)
   const images = await Promise.all((options.images ?? []).map(async image => ({ type: "image", source: {
     type: "base64", media_type: image.mediaType, data: image.base64 ?? (await readFile(image.filePath)).toString("base64"),
   } })))
@@ -89,9 +115,16 @@ export async function promptClaudeCode(options: Options): Promise<AcpTurnResult 
   let completed = false
   let failure: string | undefined
   let usage: TokenUsage | undefined
+  const pending = new Map<string, { rpcId: unknown; controller: AbortController; done: Promise<void> }>()
+  const setupTimeout = shell && setTimeout(() => terminateProcessTreeWithGrace(child), 30_000)
   const send = (message: unknown) => stdin.write(JSON.stringify(message) + "\n")
   try {
-    send({ type: "user", message: { role: "user", content: [{ type: "text", text: options.text }, ...images] } })
+    const sendUser = () => send({ type: "user", message: { role: "user", content: [{ type: "text", text: options.text }, ...images] } })
+    const settingsId = randomUUID()
+    let shellReady = false
+    let initializing = shell ? randomUUID() : undefined
+    if (initializing) send({ type: "control_request", request_id: initializing, request: { subtype: "initialize" } })
+    else sendUser()
     const blocks = new Map<number, { id: string; kind: "text" | "thinking"; streamed: boolean }>()
     const finalIds: { id: string; kind: "text" | "thinking" }[] = []
     for await (const line of createInterface({ input: child.stdout!, crlfDelay: Infinity })) {
@@ -99,12 +132,50 @@ export async function promptClaudeCode(options: Options): Promise<AcpTurnResult 
       let event
       try { event = JSON.parse(line) } catch { continue }
       if (!event || typeof event !== "object") continue
+      if (initializing && event.type === "control_response" && event.response?.request_id === initializing) {
+        if (event.response.subtype !== "success" || event.response.response?.sandbox_enabled) throw new NativeShellRequired()
+        initializing = undefined
+        send({ type: "control_request", request_id: settingsId, request: { subtype: "get_settings" } })
+        continue
+      }
+      if (shell && !shellReady && event.type === "control_response" && event.response?.request_id === settingsId) {
+        if (event.response.subtype !== "success" || requiresNativeShell(event.response.response?.effective)) throw new NativeShellRequired()
+        shellReady = true
+        clearTimeout(setupTimeout)
+        sendUser()
+        continue
+      }
       if (!accepted && (event.type === "assistant" || event.type === "system" && event.subtype === "init")) {
         accepted = true
         options.onAccepted?.()
       }
+      if (event.type === "control_cancel_request") {
+        pending.get(event.request_id)?.controller.abort()
+        continue
+      }
       if (event.type === "control_request") {
         const request = event.request
+        if (request?.subtype === "mcp_message" && shell && request.server_name === shell.name) {
+          const message = request.message
+          const reply = (mcp_response: unknown) => {
+            if (!signal.aborted && !stdin.writableEnded) send({ type: "control_response", response: { subtype: "success", request_id: event.request_id, response: { mcp_response } } })
+          }
+          if (message?.method === "notifications/cancelled") {
+            for (const call of pending.values()) if (call.rpcId === message.params?.requestId) call.controller.abort()
+          }
+          if (message?.method === "tools/call" && shellReady && !completed) {
+            const controller = new AbortController()
+            const done = shell.request(message, AbortSignal.any([signal, controller.signal]))
+              .then(reply).finally(() => pending.delete(event.request_id))
+            pending.set(event.request_id, { rpcId: message.id, controller, done })
+            continue
+          }
+          const mcp_response = request.message?.method === "tools/call"
+            ? { jsonrpc: "2.0", id: request.message.id, error: { code: -32600, message: "Project commands are unavailable" } }
+            : await shell.request(request.message, signal)
+          reply(mcp_response)
+          continue
+        }
         const input = request?.input ?? {}
         const decision = request?.subtype === "can_use_tool"
           ? await approveClaudeTool(request.tool_name, input, workspace, signal, options.approve) : false
@@ -134,12 +205,17 @@ export async function promptClaudeCode(options: Options): Promise<AcpTurnResult 
       }
       if (!event.parent_tool_use_id) for (const parsed of parseClaudeLine(line, parser)) {
         if (parsed.type !== "content_final") continue
+        if (shell && parsed.kind === "tool_call" && parsed.toolName === shell.toolName) {
+          options.onEvent({ ...parsed, toolName: "bash", path: [] })
+          continue
+        }
         const index = finalIds.findIndex(block => block.kind === parsed.kind)
         const id = index === -1 ? parsed.id : finalIds.splice(index, 1)[0].id
         options.onEvent({ ...parsed, id, path: [] })
       }
       if (event.type === "result") {
         completed = true
+        for (const call of pending.values()) call.controller.abort()
         if (event.is_error || event.subtype !== "success") failure = String(event.result || event.subtype)
         if (event.usage) usage = {
           inputTokens: event.usage.input_tokens, outputTokens: event.usage.output_tokens, providerUsageReported: true,
@@ -150,11 +226,14 @@ export async function promptClaudeCode(options: Options): Promise<AcpTurnResult 
     }
     const code = await exited
     options.signal.throwIfAborted()
+    if (shell && !shellReady) throw new NativeShellRequired()
     if (code !== 0 || !completed || failure) throw new Error(failure || stderr.trim() || `Claude Code exited before returning a result (exit code ${code ?? "unknown"}).`)
     return { sessionId, stopReason: "end_turn", report: parser.finalText, toolCalls: parser.stepCounter.value, plan: [], usage }
   } finally {
+    clearTimeout(setupTimeout)
     process.off("exit", onExit)
     abort.abort()
     if (child.pid && child.exitCode === null && child.signalCode === null) terminateProcessTreeWithGrace(child)
+    await Promise.allSettled([exited, ...[...pending.values()].map(call => call.done)])
   }
 }

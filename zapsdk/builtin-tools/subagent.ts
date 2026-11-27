@@ -823,6 +823,7 @@ function createDirectSubagentTool(options: SubagentToolOptions): Tool {
         }) : undefined;
         const executor = new ToolExecutor(registry, {
           ...options.executorOptions,
+          actor: { id: subagentId, kind: agentType, runId: options.executorOptions?.actor?.runId },
           cwd: workspaceLease?.path ?? options.storageProjectCwd,
           workspace: workspaceLease
             ? { id: workspaceLease.workspaceId, root: workspaceLease.path, mode: "isolated-write",

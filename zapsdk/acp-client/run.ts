@@ -42,6 +42,7 @@ export interface AcpTurnResult {
  * host can hold a multi-turn conversation; dispose with `close()`. */
 export class AcpAgentSession {
   modes?: SessionModeState | null;
+  currentModeId?: string;
   configOptions?: SessionConfigOption[] | null;
   availableCommands: AvailableCommand[] = [];
   /** Setup steps the agent rejected (mode/config/model); the session continues. */
@@ -69,6 +70,7 @@ export class AcpAgentSession {
         const created = await connection.newSession(options.cwd, setup);
         session = new AcpAgentSession(connection, spec, created.sessionId, false);
         session.modes = created.modes;
+        session.currentModeId = created.modes?.currentModeId;
         session.configOptions = created.configOptions;
         if (spec.model) {
           // Agents expose the model as a "model" config option (agy, codex);
@@ -84,7 +86,7 @@ export class AcpAgentSession {
         }
       }
       const mode = options.mode ?? spec.mode;
-      if (mode) await session.attempt(`mode ${mode}`, () => connection.setMode(session.sessionId, mode));
+      if (mode) await session.attempt(`mode ${mode}`, () => session.setMode(mode, setup));
       if (spec.requireSettings && session.warnings.length) throw new Error(session.warnings.join("; "));
       return session;
     } catch (error) {
@@ -128,8 +130,9 @@ export class AcpAgentSession {
     };
   }
 
-  async setMode(modeId: string): Promise<void> {
-    await this.connection.setMode(this.sessionId, modeId);
+  async setMode(modeId: string, options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<void> {
+    await this.connection.setMode(this.sessionId, modeId, options);
+    this.currentModeId = modeId;
     if (this.modes) this.modes = { ...this.modes, currentModeId: modeId };
   }
 
@@ -137,7 +140,10 @@ export class AcpAgentSession {
 
   private observe(update: SessionUpdate): void {
     if (update.sessionUpdate === "available_commands_update") this.availableCommands = update.availableCommands;
-    else if (update.sessionUpdate === "current_mode_update" && this.modes) this.modes = { ...this.modes, currentModeId: update.currentModeId };
+    else if (update.sessionUpdate === "current_mode_update") {
+      this.currentModeId = update.currentModeId;
+      if (this.modes) this.modes = { ...this.modes, currentModeId: update.currentModeId };
+    }
     else if (update.sessionUpdate === "config_option_update") this.configOptions = update.configOptions;
     this.turn?.(update);
   }

@@ -138,8 +138,8 @@ export class AcpClientConnection {
     await this.call(this.connection.agent.request("session/load", { sessionId, cwd, mcpServers: [] }), "session_failed", options);
   }
 
-  async setMode(sessionId: string, modeId: string): Promise<void> {
-    await this.call(this.connection.agent.request("session/set_mode", { sessionId, modeId }), "session_failed");
+  async setMode(sessionId: string, modeId: string, options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<void> {
+    await this.call(this.connection.agent.request("session/set_mode", { sessionId, modeId }), "session_failed", options);
   }
 
   async setConfigOption(sessionId: string, configId: string, value: string): Promise<void> {

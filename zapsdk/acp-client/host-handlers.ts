@@ -79,6 +79,7 @@ export function createAcpHostHandlers(policy: AcpHostPolicy): AcpHostHandlers {
   };
 
   const approve = async (target: ApprovalTarget, signal: AbortSignal): Promise<ApprovalResponse> => {
+    if (signal.aborted) return false;
     if (!policy.approve) return { approved: false, source: "policy", reason: "no approval handler" };
     const pre = policy.approve.precheck?.(target.name, target.args, target.context);
     if (pre !== undefined) return pre;
@@ -113,7 +114,9 @@ export function createAcpHostHandlers(policy: AcpHostPolicy): AcpHostHandlers {
       const target: ApprovalTarget = workspace.contains(path)
         ? { name: "read_file", args: { path } }
         : { name: `acp_${agent}_read`, args: { title: "Read a file outside the workspace", paths: [path] } };
-      const allowed = await approve(target, signalFor(signal));
+      const live = signalFor(signal);
+      const allowed = await approve(target, live);
+      live.throwIfAborted();
       if (allowed !== true) throw RequestError.internalError(undefined, denialText(allowed));
       const info = await stat(path);
       if (!info.isFile()) throw RequestError.invalidParams(undefined, "not a regular file");
@@ -136,12 +139,16 @@ export function createAcpHostHandlers(policy: AcpHostPolicy): AcpHostHandlers {
       const target: ApprovalTarget = workspace.contains(path)
         ? { name: "write_file", args: { path, content: request.content } }
         : { name: `acp_${agent}_edit`, args: { title: "Write a file outside the workspace", paths: [path] } };
-      const allowed = await approve(target, signalFor(signal));
+      const live = signalFor(signal);
+      const allowed = await approve(target, live);
+      live.throwIfAborted();
       if (allowed !== true) throw RequestError.internalError(undefined, denialText(allowed));
       if (policy.trackEdit) {
         try { await policy.trackEdit([path]); } catch { /* checkpoint coverage is best-effort, as for write_file */ }
       }
+      live.throwIfAborted();
       await mkdir(dirname(path), { recursive: true });
+      live.throwIfAborted();
       await writeFile(path, request.content, "utf8");
       written.add(path);
     },
