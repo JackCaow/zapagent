@@ -647,9 +647,8 @@ export function useAgentRunner({
           remoteSpec = await codexConversationSpec(turnConfig, acpAgents.find(agent => agent.id === "codex"))
         } else {
           remoteSpec = acpAgents.find(agent => agent.id === agentId)
-          if (remoteSpec?.selfGoverned && turnConfig.permissionMode === "plan") {
-            remoteSpec = undefined
-            throw new Error(`${agentId} executes its own tools and cannot guarantee an analysis-only session. Choose Zap, Codex or Claude Code for analysis.`)
+          if (remoteSpec?.selfGoverned && (turnConfig.permissionMode === "plan" || turnConfig.permissionMode === "default")) {
+            throw new Error(`${agentId} handles its own approvals. Choose Zap, Codex or Claude Code to use Manual or read-only access.`)
           }
         }
         if (!remoteSpec) throw new Error(`Agent ${agentId} is unavailable. ${agentInstallHint(agentId)}`)

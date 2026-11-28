@@ -28,16 +28,17 @@ ptyTest("Auto works across turns, with project access and revocation managed in 
     }
     const task = body.messages.filter(message => message.role === "user").reverse()
       .map(message => typeof message.content === "string" ? message.content : JSON.stringify(message.content ?? ""))
-      .find(text => /<task-notification|LOCAL_SHELL|BACKGROUND_AUTO|REVOKE_BACKGROUND|START_REVOCATION_CHILD|REVOCATION_CHILD_PROBE|WRITE_/.test(text)) ?? ""
+      .find(text => /<task-notification|LOCAL_SHELL|MANUAL_SHELL|BACKGROUND_AUTO|REVOKE_BACKGROUND|START_REVOCATION_CHILD|REVOCATION_CHILD_PROBE|WRITE_/.test(text)) ?? ""
     const completion = task.includes("<task-notification")
     const background = !completion && task.includes("BACKGROUND_AUTO")
     const name = completion ? task.includes("REVOKE_BACKGROUND") ? "revoked-continuation" : "continued"
       : task.includes("LOCAL_SHELL") ? "shell"
+      : task.includes("MANUAL_SHELL") ? "manual-shell"
       : background ? "background"
       : task.includes("REVOKE_BACKGROUND") ? "long-background"
       : task.includes("START_REVOCATION_CHILD") ? "child-parent"
       : task.includes("REVOCATION_CHILD_PROBE") ? "child"
-      : task.match(/WRITE_(one|two|three|four|five|six)/)?.[1]
+      : task.match(/WRITE_(one|two|three|four|five|six|manual)/)?.[1]
     if (name && !todoExposure.has(name)) {
       todoExposure.set(name, {
         tool: !!body.tools?.some(tool => tool.function.name === "todo_write"),
@@ -63,8 +64,8 @@ ptyTest("Auto works across turns, with project access and revocation managed in 
       ? { name: "agent", arguments: JSON.stringify({ task: "REVOCATION_CHILD_PROBE", agent_type: "general" }) }
       : name === "child"
       ? { name: "write_file", arguments: JSON.stringify({ path: childFollowUp ? "child-late" : "child-armed", content: "fixture" }) }
-      : name === "shell"
-      ? { name: "bash", arguments: JSON.stringify({ command: "printf local > shell-proof" }) }
+      : name === "shell" || name === "manual-shell"
+      ? { name: "bash", arguments: JSON.stringify({ command: `printf local > ${name}-proof` }) }
       : background
       ? { name: "bash", arguments: JSON.stringify({ command: "printf 'test finished'", run_in_background: true }) }
       : { name: "write_file", arguments: JSON.stringify({ path: join(cwd, name ?? ""), content: name }) }
@@ -108,8 +109,9 @@ ptyTest("Auto works across turns, with project access and revocation managed in 
       `exec env ZAPCODE_DATA_DIR=${quote(root)} ZAP_DISABLE_UPDATE_CHECK=1 ${entry}`)
     await visible("HarnessFixture/fixture")
     await visible("Auto")
-    await submit("/mode"); await visible("work in this project, ask when needed")
-    expect(tmux("capture-pane", "-p", "-t", "work")).not.toContain("read-only research")
+    await visible("Auto · Shift+Tab")
+    await submit("/mode"); await visible("ask before edits and commands")
+    expect(tmux("capture-pane", "-p", "-t", "work")).not.toMatch(/Require project access|Allow edits|Skip routine approvals|read-only research/)
     await key("Escape")
     await submit("WRITE_one")
     await visible("FINISHED_one"); expect(readFileSync(join(cwd, "one"), "utf8")).toContain("one")
@@ -127,6 +129,16 @@ ptyTest("Auto works across turns, with project access and revocation managed in 
     }
     await submit("/permissions"); await visible("p project access")
     await key("p"); await visible("Always allow work in this project"); await key("Enter")
+    await key("BTab"); await visible("Manual · Shift+Tab")
+    await submit("WRITE_manual"); await visible("Approve?")
+    expect(existsSync(join(cwd, "manual"))).toBe(false)
+    await key("1"); await visible("FINISHED_manual")
+    expect(existsSync(join(cwd, "manual"))).toBe(true)
+    await submit("MANUAL_SHELL"); await visible("Approve?")
+    expect(existsSync(join(cwd, "manual-shell-proof"))).toBe(false)
+    await key("1"); await visible("FINISHED_manual-shell")
+    expect(existsSync(join(cwd, "manual-shell-proof"))).toBe(true)
+    await key("BTab"); await visible("Auto · Shift+Tab")
     await submit("WRITE_three")
     await visible("FINISHED_three"); expect(existsSync(join(cwd, "three"))).toBe(true)
     expect(todoExposure.get("three")).toEqual({ tool: false, instructions: false })
@@ -150,6 +162,9 @@ ptyTest("Auto works across turns, with project access and revocation managed in 
     expect(existsSync(join(cwd, "revoked-continuation"))).toBe(false)
     expect(existsSync(join(childDir, "child-late"))).toBe(false)
     await submit("WRITE_five"); await visible("FINISHED_five"); expect(existsSync(join(cwd, "five"))).toBe(false)
+    const readOnly = tmux("capture-pane", "-p", "-t", "work")
+    expect(readOnly).toContain("This session is read-only")
+    expect(readOnly).not.toContain("plan-mode")
     expect(readOnlyPlanTool).toBe(false)
     await submit("/mode auto"); await visible("Auto")
     await submit("WRITE_six"); await visible("FINISHED_six"); expect(existsSync(join(cwd, "six"))).toBe(true)

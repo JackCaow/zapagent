@@ -49,6 +49,7 @@ export interface UseKeyboardShortcutsOptions {
   // ── Queue / images ──
   inputQueue: ReadonlyArray<QueuedCommand>
   openQueue?: () => void
+  togglePermissionMode: () => void
   openRewind?: () => void
   saveDraftToHistory?: (value: string) => void
   editingMessageId?: string | null
@@ -146,6 +147,10 @@ export function useKeyboardShortcuts(opts: UseKeyboardShortcutsOptions): void {
 
   useInput((rawInput, key) => {
     const ownsComposer = opts.dialog === null && !opts.pendingApproval && !opts.questionOpen
+    if (key.shift && key.tab && ownsComposer && !opts.isRunning && !opts.fileOpen && !opts.slashOpen && !opts.editingMessageId) {
+      opts.togglePermissionMode()
+      return
+    }
     if (key.ctrl && rawInput === "q" && opts.dialog === null && !opts.pendingApproval && !opts.questionOpen) {
       opts.openQueue?.()
       return

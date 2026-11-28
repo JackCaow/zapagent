@@ -50,7 +50,6 @@ interface FooterProps {
   hasApiKey: boolean
   showWelcome?: boolean
   shellMode?: boolean
-  analysisHint?: boolean
   permissionMode?: PermissionMode
   termWidth: number
   /** Compact MCP server status: `{ready, total, degraded, needsAuth, error}`.
@@ -73,8 +72,7 @@ export const Footer = memo(function Footer({
   hasApiKey,
   showWelcome,
   shellMode,
-  permissionMode = "default",
-  analysisHint,
+  permissionMode = "auto",
   termWidth,
   mcp,
 }: FooterProps) {
@@ -92,25 +90,13 @@ export const Footer = memo(function Footer({
     : contextBudget.severity === "notice" ? c.accent
     : c.text.faint
 
-  const modeLabel: Record<PermissionMode, string | null> = {
-    auto:               "Auto",
-    default:            analysisHint ? "Project access required" : null,
-    acceptEdits:        "editing",
-    plan:               "Read only",
-    bypassPermissions:  "bypass",
-  }
-  const modeColor: Record<PermissionMode, string> = {
-    auto:               c.text.muted,
-    default:            c.text.faint,
-    acceptEdits:        c.text.muted,
-    plan:               c.accent,
-    bypassPermissions:  c.warning,
-  }
+  const modeLabel = permissionMode === "plan" ? "Read only" : permissionMode === "default" ? "Manual" : "Auto"
 
   type Seg = { text: string; fg: string; key: string }
   const rightSegments: Seg[] = []
   if (shellMode && !isRunning) rightSegments.push({ text: "shell", fg: c.warning, key: "shell" })
-  if (modeLabel[permissionMode]) rightSegments.push({ text: modeLabel[permissionMode]!, fg: modeColor[permissionMode], key: "mode" })
+  rightSegments.push({ text: termWidth >= 100 ? `${modeLabel} · Shift+Tab` : modeLabel,
+    fg: permissionMode === "auto" ? c.text.muted : c.accent, key: "mode" })
   if (!hasApiKey && !showWelcome) rightSegments.push({ text: "! /connect", fg: c.warning, key: "connect" })
   if (showWelcome && !hasApiKey) rightSegments.push({ text: "/connect", fg: c.accent, key: "connect" })
   if (tpsText) rightSegments.push({ text: tpsText, fg: c.text.muted, key: "tps" })
@@ -131,7 +117,7 @@ export const Footer = memo(function Footer({
     fg: c.text.muted,
     key: "provider",
   })
-  const DROP_ORDER = ["shell", "mode", "mcp", "ctx", "connect", "tps"] as const
+  const DROP_ORDER = ["shell", "mcp", "ctx", "connect", "tps"] as const
   const safeWidth = Math.max(20, termWidth - 4)
   const computeRightWidth = (segs: Seg[]) =>
     segs.reduce((sum, s, i) => sum + displayWidth(s.text) + (i > 0 ? 2 : 0), 0)

@@ -880,8 +880,10 @@ export function App() {
       if (writing) allowProjectCommands()
       else access.choose(choice, session)
     } catch (error) { addToast(String(error), { variant: "error" }); return }
-    if (writing) updateConfig({ ...configRef.current, permissionMode: "default" })
-    else await returnToReadOnly(choice === "revoke" ? undefined : session)
+    if (!writing) await returnToReadOnly(choice === "revoke" ? undefined : session)
+    else if (configRef.current.permissionMode === "plan") {
+      updateConfig({ ...configRef.current, permissionMode: "auto" })
+    }
     setDialog(null)
     addToast(writing ? "Project access saved." : isRunning ? "Stopping the current task. Future turns will be read-only." : "Read only. Choose Auto in /mode to resume work.")
   }
@@ -920,6 +922,10 @@ export function App() {
     questionOpen: pendingQuestions !== null,
     inputQueue,
     openQueue,
+    togglePermissionMode: () => {
+      const current = configRef.current
+      updateConfig({ ...current, permissionMode: current.permissionMode === "auto" ? "default" : "auto" })
+    },
     openRewind: () => { if (!isRunning) setDialog("rewind") },
     saveDraftToHistory: value => pushHistory(value, Object.fromEntries(paste.pasteStoreRef.current), {}),
     editingMessageId,
@@ -1342,8 +1348,7 @@ export function App() {
           hasApiKey={hasKey}
           showWelcome={logs.length === 0 && !isRunning && !isStreaming}
           shellMode={isShellMode()}
-          permissionMode={config.permissionMode === "auto" ? "auto" : effectiveMode()}
-          analysisHint={config.permissionMode === "default" && !access.canWork(getCurrentSessionId(), rememberedAccess)}
+          permissionMode={config.permissionMode}
           termWidth={termWidth}
           mcp={mcpFooterSummary}
         />
