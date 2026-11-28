@@ -13,11 +13,12 @@ for (const scenario of ["session", "project", "custom", "folder", "folder-retarg
     const workspace = join(root, "workspace"); mkdirSync(join(workspace, "src"), { recursive: true })
     const folderScenario = scenario.startsWith("folder"), retarget = scenario.endsWith("retarget")
     const fromMenu = scenario === "folder-menu-retarget"
-    const outputDirectory = folderScenario ? join(root, "outside") : join(workspace, "src")
+    const outside = folderScenario || scenario === "custom"
+    const outputDirectory = outside ? join(root, "outside") : join(workspace, "src")
     mkdirSync(outputDirectory, { recursive: true })
     const alias = join(root, "folder-alias"), other = join(root, "unreviewed")
     if (retarget) { mkdirSync(other); symlinkSync(outputDirectory, alias, "junction") }
-    const ruleScope = folderScenario ? `${outputDirectory}{,/**}` : "src/**"
+    const ruleScope = outside ? `${outputDirectory}{,/**}` : "src/**"
     const socket = `zap-tools-${process.pid}-${Date.now()}-${scenario}`
     const frames: string[] = []
     let phase = "start", calls = 0
@@ -27,7 +28,7 @@ for (const scenario of ["session", "project", "custom", "folder", "folder-retarg
       const user = body.messages.findLast(message => message.role === "user")?.content ?? ""
       const tool = body.messages.at(-1)?.role === "user" && /^WRITE_(TEST|AGAIN|REVOKED)$/.test(user.trim())
       const name = user.includes("AGAIN") ? "again.txt" : user.includes("REVOKED") ? "revoked.txt" : "result.txt"
-      const path = folderScenario ? join(retarget ? alias : outputDirectory, name) : `src/${name}`
+      const path = outside ? join(retarget ? alias : outputDirectory, name) : `src/${name}`
       const delta = tool ? { role: "assistant", tool_calls: [{ index: 0, id: `write-${calls}`, type: "function", function: {
         name: "write_file", arguments: JSON.stringify({ path, content: "fixture-only\n" }),
       } }] } : { role: "assistant", content: "BATCH_DONE" }
@@ -70,28 +71,29 @@ for (const scenario of ["session", "project", "custom", "folder", "folder-retarg
       await settle(screen => screen.includes("Fixture/fixture"))
     }
     const closePermissions = async () => {
-      key("Escape"); await settle(screen => !screen.includes("d delete") && !screen.includes("No permission rules active"))
+      key("Escape"); await settle(screen => !screen.includes("[Rules]"))
     }
     try {
       await start()
       if (scenario === "custom" || folderScenario && !fromMenu) {
         phase = "waiting approval"; await send("WRITE_TEST"); await settle(screen => screen.includes("Approve?"))
         if (folderScenario) expect(capture()).toContain("d authorize folder / select tools")
-        else expect(capture()).toContain("don't ask again for file edits anywhere in this project")
+        else expect(capture()).toContain("g customize scope")
         text(folderScenario ? "d" : "g")
       } else {
-        phase = "open permissions"; await send("/permissions"); await settle(screen => screen.includes("No permission rules active")); text("a")
+        phase = "open permissions"; await send("/permissions"); await settle(screen => screen.includes("[Workspace]"))
+        key("Right"); await settle(screen => screen.includes("[Rules]") && screen.includes("No permission rules active.")); text("a")
       }
       phase = "tool selection"; await settle(screen => screen.includes("Tool authorization") && screen.includes("select tools"))
       if (scenario !== "custom") { text("w"); await settle(screen => /[2-9] selected/.test(screen)) }
       key("Enter")
       if (!folderScenario || fromMenu) {
-        phase = "resource scope"; await settle(screen => screen.includes("Entire selected tools")); text(fromMenu ? "3" : "2")
+        phase = "resource scope"; await settle(screen => screen.includes("Entire selected tools")); text(outside ? "3" : "2")
       }
       await settle(screen => screen.includes("resource filter"))
       if (fromMenu) text(alias)
       else if (scenario !== "custom" && !folderScenario) text("src/**")
-      await settle(screen => screen.includes(retarget ? alias : folderScenario ? outputDirectory : "src/**")); await sleep(150); key("Enter")
+      await settle(screen => screen.includes(retarget ? alias : outside ? outputDirectory : "src/**")); await sleep(150); key("Enter")
       phase = "lifetime"; await settle(screen => screen.includes("This session — cleared")); text(scenario === "project" || folderScenario ? "2" : "1")
       phase = "review"; const review = await settle(screen => screen.includes("review authorization"))
       expect(review).toContain(`write_file(${ruleScope})`)
@@ -111,7 +113,10 @@ for (const scenario of ["session", "project", "custom", "folder", "folder-retarg
       }
       phase = "grant applied"
       if (scenario !== "custom" && scenario !== "folder") {
-        await settle(screen => screen.includes("write_file(src/**)") && screen.includes("d delete")); await closePermissions(); await send("WRITE_TEST")
+        await settle(screen => screen.includes("write_file(src/**)") && screen.includes("[Rules]"))
+        text("f"); await settle(screen => screen.includes("Allow ·") && screen.includes("write_file(src/**)"))
+        text("f"); await settle(screen => screen.includes("Ask ·") && screen.includes("No matching permission rules."))
+        await closePermissions(); await send("WRITE_TEST")
       }
       await settle(screen => screen.includes("BATCH_DONE") && !screen.includes("Esc twice to stop") && existsSync(join(outputDirectory, "result.txt")))
       await sleep(250)
@@ -120,11 +125,20 @@ for (const scenario of ["session", "project", "custom", "folder", "folder-retarg
         phase = "restart"; tmux("kill-session", "-t", "tools"); await start(); await send("WRITE_AGAIN")
         await settle(screen => screen.includes("BATCH_DONE") && !screen.includes("Esc twice to stop") && existsSync(join(outputDirectory, "again.txt")))
         await sleep(250)
-        phase = "revoke"; await send("/permissions"); await settle(screen => screen.includes("d delete")); text("c")
+        phase = "revoke"; await send("/permissions"); await settle(screen => screen.includes("[Workspace]"))
+        key("Right"); await settle(screen => screen.includes("[Rules]")); text("c")
         await settle(screen => screen.includes("Press c again")); text("c")
-        await settle(screen => screen.includes("No permission rules active")); await closePermissions(); await send("WRITE_REVOKED")
+        await settle(screen => screen.includes("No permission rules active")); await closePermissions()
+        if (!outside) return
+        await send("WRITE_REVOKED")
       } else {
-        phase = "new session"; await send("/new"); await settle(screen => !screen.includes("BATCH_DONE")); await send("WRITE_AGAIN")
+        phase = "new session"; await send("/new"); await settle(screen => !screen.includes("BATCH_DONE"))
+        if (!outside) {
+          await send("/permissions"); await settle(screen => screen.includes("[Workspace]"))
+          key("Right"); await settle(screen => screen.includes("[Rules]") && screen.includes("No permission rules active."))
+          return
+        }
+        await send("WRITE_AGAIN")
       }
       phase = "approval after expiry/revoke"; expect(await settle(screen => screen.includes("Approve?"))).toContain("g customize scope")
       text("4"); await settle(screen => screen.includes("BATCH_DONE") && !screen.includes("Approve?"))

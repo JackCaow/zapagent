@@ -21,7 +21,7 @@ import type { PromptCacheDiagnostics } from "./agent/promptDiagnostics.js"
 import { sanitizePromptCacheScope, type PromptCacheScope } from "./agent/cacheScope.js"
 import { sanitizeContextDiagnostics, sanitizePromptCacheDiagnostics } from "./agent/diagnosticSanitizers.js"
 import { type Turn, type CompletedCall, type IncompleteCall, buildToolTurn, turnsToMessages } from "../zapsdk/core/turn.js"
-import type { ToolCallInfo } from "./ui/types.js"
+import type { PermissionBlock, ToolCallInfo } from "./ui/types.js"
 import { writeFileAtomic } from "./utils/secure-write.js"
 import { renderUnavailablePastedPlaceholder } from "./utils/pastedPlaceholder.js"
 import { persistPasteSidecar, readPasteSidecar } from "./utils/pasteSidecar.js"
@@ -69,6 +69,7 @@ export interface SessionImageRef {
 export interface SessionLog {
   type: string
   text: string
+  permissionBlock?: PermissionBlock
   tool?: ToolCallInfo
   images?: SessionImageRef[]
   /** false means this log is display-only and must not be replayed into
@@ -81,6 +82,8 @@ export interface SessionLog {
    *  (JSONL → parse → UI) so reloaded sessions fold the same way as live ones. */
   agentPath?: string[]
 }
+
+type SessionLogOptions = Pick<SessionLog, "restore" | "restoreText" | "permissionBlock">
 
 /** Whether replaying this display log through SessionWriter consumes one
  *  persisted journal position. Shared with restore UI mapping so checkpoint
@@ -378,7 +381,7 @@ class SessionWriter {
     tool?: ToolCallInfo,
     images?: SessionImageRef[],
     agentPath?: string[],
-    options?: { restore?: boolean; restoreText?: string },
+    options?: SessionLogOptions,
   ): boolean {
     const uuid = this.writeEntry(logType, text, tool, images, agentPath, undefined, options)
     if (!uuid) return false
@@ -399,7 +402,7 @@ class SessionWriter {
     images?: SessionImageRef[],
     agentPath?: string[],
     replacesUuid?: string,
-    options?: { restore?: boolean; restoreText?: string },
+    options?: SessionLogOptions,
   ): string | null {
     const uuid = randomUUID()
     // `replacesUuid` at top level (not inside `data`) so parseSessionJsonl
@@ -489,6 +492,7 @@ class SessionWriter {
         subtype: logType === "error" ? "error" : "info",
         message: text,
       }
+      if (logType === "system" && options?.permissionBlock) entry.zapPermissionBlock = options.permissionBlock
     }
 
     if (!entry) return null
@@ -706,7 +710,7 @@ export function appendLog(
   tool?: ToolCallInfo,
   images?: SessionImageRef[],
   agentPath?: string[],
-  options?: { restore?: boolean; restoreText?: string },
+  options?: SessionLogOptions,
 ): number | null {
   const wrote = currentWriter.appendLog(type, text, tool, images, agentPath, options)
   if (!wrote) return null
@@ -1156,6 +1160,7 @@ export function setActiveSession(
     const wrote = nextWriter.appendLog(log.type, log.text, log.tool, log.images, log.agentPath, {
       restore: log.restore,
       restoreText: log.restoreText,
+      permissionBlock: log.permissionBlock,
     })
     if (wrote) nextJournalLogIndex++
   }
@@ -1446,7 +1451,12 @@ export function parseSessionJsonl(raw: string): SessionLog[] {
 
       // CCB system entry
       else if (e.type === "system" && typeof e.message === "string") {
-        logs.push({ type: e.subtype === "error" ? "error" : "system", text: e.message })
+        const log: SessionLog = { type: e.subtype === "error" ? "error" : "system", text: e.message }
+        const block = e.zapPermissionBlock
+        if (log.type === "system" && isJsonObject(block) && typeof block.action === "string" && typeof block.reason === "string") {
+          log.permissionBlock = { action: block.action, reason: block.reason }
+        }
+        logs.push(log)
       }
 
       // Snapshot entries — not part of the conversation restore stream

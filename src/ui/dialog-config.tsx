@@ -18,8 +18,6 @@ import {
 } from "../config.js"
 import { PickerDialog, type PickerOption } from "./dialog-picker.js"
 
-import type { WorkspaceChoice } from "../workspace-access.js"
-
 interface DialogProps {
   config: AppConfig
   onCommit: (next: AppConfig) => void
@@ -38,18 +36,6 @@ export function ModeDialog({ config, onCommit, onCancel }: DialogProps) {
   return <PickerDialog title="Permission mode" options={options}
     initialIndex={MODES.findIndex(m => m.id === config.permissionMode)} onCancel={onCancel}
     onSelect={id => onCommit({ ...config, permissionMode: id as PermissionMode })} />
-}
-
-export function WorkspaceAccessDialog({ cwd, remembered, onChoose, onCancel }: {
-  cwd: string; remembered: boolean; onChoose: (choice: WorkspaceChoice) => void; onCancel: () => void
-}) {
-  const options: PickerOption[] = [
-    { id: "project", label: "Always allow work in this project", meta: "commands run with your account’s permissions" },
-    { id: "analyze", label: "Keep this session read-only", meta: "keep project files unchanged" },
-  ]
-  if (remembered) options.push({ id: "revoke", label: "Forget project access and return to analysis" })
-  return <PickerDialog title={`Project access · ${cwd}`} options={options} onCancel={onCancel}
-    onSelect={id => onChoose(id as WorkspaceChoice)} />
 }
 
 // ── Effort picker ────────────────────────────────────────────────────────

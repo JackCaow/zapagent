@@ -116,7 +116,7 @@ import { SlashPalette } from "./ui/slash-palette.js"
 import { FilePalette } from "./ui/file-palette.js"
 import { ConnectDialog } from "./ui/dialog-connect.js"
 import { WorkspaceAccess, type WorkspaceChoice } from "./workspace-access.js"
-import { ModeDialog, WorkspaceAccessDialog, EffortDialog } from "./ui/dialog-config.js"
+import { ModeDialog, EffortDialog } from "./ui/dialog-config.js"
 import { ModelDialog } from "./ui/dialog-model.js"
 import { StatusDialog } from "./ui/dialog-status.js"
 import { loadSessionForDialog, type DialogSessionRestore, commitSessionForDialog, replaceConversationMessages, SessionsDialog } from "./ui/dialog-sessions.js"
@@ -258,7 +258,6 @@ export function App() {
 
   // ── Config ──
   const [access] = useState(() => new WorkspaceAccess(process.cwd()))
-  const [rememberedAccess, setRememberedAccess] = useState(() => access.remembered())
   const [config, setConfig] = useState<AppConfig>(() => ({ ...loadAppConfig(configPath), permissionMode: "auto" }))
   const configRef = useRef(config)
   useEffect(() => { configRef.current = config }, [config])
@@ -335,7 +334,6 @@ export function App() {
   const effectiveMode = useCallback((actorRun?: string) => access.mode(configRef.current.permissionMode, getCurrentSessionId(), actorRun), [access])
   const allowProjectCommands = useCallback(() => {
     access.choose("project", getCurrentSessionId())
-    setRememberedAccess(true)
   }, [access])
   const { onApproval, pendingApproval } = usePermissionApproval({ configRef, addLog, effectiveMode, access, allowProjectCommands })
 
@@ -810,7 +808,7 @@ export function App() {
     // Pending delivery is busy for UI/controls, but must not block the
     // dispatcher effect that starts that very delivery.
     isRunning: isAgentRunning,
-    paused: dialog === "permissions" || dialog === "workspace-access" || dialog === "rewind" || dialog === "update" || dialog === "restoring",
+    paused: dialog === "permissions" || dialog === "rewind" || dialog === "update" || dialog === "restoring",
     inputQueue,
     systemInboxSize,
     followUpMode: config.followUpMode ?? "queue",
@@ -849,7 +847,6 @@ export function App() {
   }, [handleSubmit])
 
   const returnToReadOnly = useCallback(async (session?: string) => {
-    setRememberedAccess(access.remembered())
     updateConfig({ ...configRef.current, permissionMode: "plan" })
     abortRef.current?.abort()
     const owned = taskStore.list({ running: true })
@@ -859,15 +856,14 @@ export function App() {
     if (owned.some(id => taskStore.get(id)?.exitedAt === undefined)) {
       addLog("error", "Could not confirm that every revoked background task stopped.")
     }
-  }, [abortRef, access, addLog, updateConfig])
+  }, [abortRef, addLog, updateConfig])
 
   useEffect(() => {
-    if (!rememberedAccess) return
     return access.watchProject(getCurrentSessionId, () => {
       void returnToReadOnly()
       addLog("system", "Project access was revoked. Future turns are read-only.")
     })
-  }, [access, addLog, rememberedAccess, returnToReadOnly])
+  }, [access, addLog, returnToReadOnly])
 
   async function chooseWorkspaceAccess(choice: WorkspaceChoice) {
     const writing = choice === "project"
@@ -1219,7 +1215,6 @@ export function App() {
       }} onCancel={closeDialog} onRestart={request => { readCurrentSessionLogs(); requestUpdateRestart(request); exit() }} />}
       {dialog === "connect"     && <ConnectDialog     config={config} onAgentSelected={addToast} onSave={updateConfig} onCommit={commitConfig} onCancel={closeDialog} />}
       {dialog === "model"       && <ModelDialog       config={config} includeClaude claudeModel={claudeModel} onSave={updateConfig} onCommit={commitConfig} onCancel={closeDialog} />}
-      {dialog === "workspace-access" && <WorkspaceAccessDialog cwd={process.cwd()} remembered={access.remembered()} onChoose={chooseWorkspaceAccess} onCancel={() => setDialog("permissions")} />}
       {dialog === "mode"        && <ModeDialog        config={config} onCommit={commitConfig} onCancel={closeDialog} />}
       {dialog === "effort"      && <EffortDialog      config={config} onCommit={commitConfig} onCancel={closeDialog} />}
       {dialog === "status"      && (
@@ -1257,7 +1252,10 @@ export function App() {
       {dialog === "queue" && <QueueDialog queue={getMessageQueue()} entries={inputQueue} mode={config.followUpMode ?? "queue"}
         onModeChange={mode => updateConfig({ ...configRef.current, followUpMode: mode })}
         onEdit={editQueueMessage} onError={error => addToast(error, { variant: "error" })} onCancel={closeDialog} />}
-      {dialog === "permissions" && <PermissionsDialog availableTools={agentRef.current.registry.definitions().filter(tool => tool.permission === "confirm").map(tool => tool.name)} onProjectAccess={() => setDialog("workspace-access")} onCancel={closeDialog} />}
+      {dialog === "permissions" && <PermissionsDialog cwd={process.cwd()} remembered={access.remembered()}
+        readOnly={config.permissionMode === "plan"} logs={logs}
+        availableTools={agentRef.current.registry.definitions().filter(tool => tool.permission === "confirm").map(tool => tool.name)}
+        onWorkspaceChoice={chooseWorkspaceAccess} onCancel={closeDialog} />}
       {dialog === "supertask_watch" && <SupertaskWatchDialog cwd={process.cwd()} onCancel={closeDialog} />}
       {dialog === "rewind"      && (
         <RewindDialog

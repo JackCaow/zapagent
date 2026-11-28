@@ -28,6 +28,7 @@ export class WorkspaceAccess {
     session: string; workspace: ProjectIdentity; grant: WorkGrant; signal: AbortSignal
   }>()
   private active?: { session: string; run: string; grant?: WorkGrant; revocation: AbortController }
+  private watchedGrant?: string
 
   constructor(cwd: string) {
     this.root = realpathSync(cwd)
@@ -62,6 +63,7 @@ export class WorkspaceAccess {
         projectId = randomUUID()
         writeFileAtomic(this.record, JSON.stringify({ ...this.identity(), id: projectId }) + "\n")
       }
+      this.watchedGrant ??= projectId
       if (this.active?.session === session && !this.active.grant?.projectId && !this.active.revocation.signal.aborted) {
         this.active.grant = { projectId }
       }
@@ -69,6 +71,7 @@ export class WorkspaceAccess {
     if (choice === "revoke" && this.recordOutsideWorkspace()) {
       try { unlinkSync(this.record) }
       catch (err) { if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err }
+      this.watchedGrant = undefined
     }
     if (choice !== "project") this.revoke(session)
   }
@@ -81,11 +84,12 @@ export class WorkspaceAccess {
   }
 
   watchProject(session: () => string, onRevoked: () => void): () => void {
-    let watchedGrant = this.projectGrant()
+    this.watchedGrant ??= this.projectGrant()
     const check = () => {
       const grant = this.projectGrant()
-      if (grant && grant === watchedGrant) return
-      watchedGrant = grant
+      const previous = this.watchedGrant
+      this.watchedGrant = grant
+      if (!previous || grant === previous) return
       this.revoke(session())
       onRevoked()
     }
@@ -125,6 +129,8 @@ export class WorkspaceAccess {
     const projectId = base === "plan" ? undefined : this.projectGrant()
     const eligible = base !== "plan" && (origin.kind === "user" || this.canResume(session, origin.ids, projectId))
     const grant = eligible ? { projectId } : undefined
+    // Track an adopted grant even if the watcher has not observed its creation.
+    if (grant) this.watchedGrant ??= projectId
     const active = this.active = { session, run, grant, revocation: new AbortController() }
     const actor = Object.freeze({ id: session, kind: "root" as const, runId: run })
     const signal = active.revocation.signal

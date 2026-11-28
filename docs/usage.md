@@ -173,7 +173,7 @@ also skip CI, headless output and ACP; explicit `zap update` still checks.
 | `/effort` | Set reasoning effort (`off`, `cycle`, or a provider value) |
 | `/agent` | List conversation agents (`agy`, `codex`, `claude-code`); `/agent <id>` sends messages to that agent, `/agent zap` switches back |
 | `/mode` | Choose Auto (default), Manual, or Bypass. Shift+Tab cycles Auto and Manual when idle. |
-| `/permissions` | Manage active permission rules |
+| `/permissions` | Manage project access and rules, and review recently blocked actions |
 | `/sessions` | Browse saved sessions |
 | `/queue` | Manage individual follow-ups: edit, delete, reorder, retry, Steer, or toggle default queuing (also Ctrl+Q) |
 | `/rewind` | Restore code, conversation, or both to a previous turn (empty prompt: Esc twice) |
@@ -203,10 +203,13 @@ Say “review this first without editing” to ask the agent for analysis only.
 In Auto, the agent organizes its work and reports progress through actual
 changes and checks. Goals show execution and independent verification status.
 
-Open `/permissions` and press **p** to manage project access, including enabling
-read-only mode for the session or forgetting a saved project decision. Explicit
-project decisions live in Zap's user data and are bound to the directory's
-identity. Headless runs and Goals use their existing explicit policies.
+Open `/permissions` to manage project access in **Workspace**. Use **← / →**
+to switch to **Rules** or **Recently blocked**. In Rules, press **f** to filter
+by Allow, Ask, or Deny. Recently blocked shows denials from the current
+conversation, newest first, including after compaction or session restore.
+In Workspace, you can save project access, make the session read-only, or
+forget the saved decision. Saved project access lives in
+Zap's user data and is bound to the directory's identity.
 
 Claude Code and `/agent codex` show the last cached model on startup, then
 refresh it from the installed CLI in the background. Once a conversation starts,

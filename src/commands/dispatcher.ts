@@ -87,7 +87,6 @@ export type DialogId =
   | "update"
   | "connect"
   | "model"
-  | "workspace-access"
   | "mode"
   | "effort"
   | "sessions"

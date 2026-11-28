@@ -38,7 +38,7 @@ ptyTest("Auto works across turns, with project access and revocation managed in 
       : task.includes("REVOKE_BACKGROUND") ? "long-background"
       : task.includes("START_REVOCATION_CHILD") ? "child-parent"
       : task.includes("REVOCATION_CHILD_PROBE") ? "child"
-      : task.match(/WRITE_(one|two|three|four|five|six|manual)/)?.[1]
+      : task.match(/WRITE_(one|two|three|four|five|six|declined|manual)/)?.[1]
     if (name && !todoExposure.has(name)) {
       todoExposure.set(name, {
         tool: !!body.tools?.some(tool => tool.function.name === "todo_write"),
@@ -84,20 +84,20 @@ ptyTest("Auto works across turns, with project access and revocation managed in 
     if (result.status !== 0) throw new Error(result.stderr || String(result.error))
     return result.stdout
   }
-  const visible = async (value: string) => {
+  const visible = async (value: string, target = "work") => {
     let screen = ""
     for (let i = 0; i < 180; i++) {
-      screen = tmux("capture-pane", "-p", "-t", "work")
+      screen = tmux("capture-pane", "-p", "-t", target)
       if (value.startsWith("FINISHED_") && screen.includes("Approve?")) throw new Error(`Unexpected approval while waiting for ${value}:\n${screen}`)
       if (screen.includes(value)) return
       await sleep(75)
     }
     throw new Error(`Missing ${value}:\n${screen}`)
   }
-  const key = async (key: string) => { tmux("send-keys", "-t", "work", key); await sleep(200) }
-  const submit = async (text: string) => {
-    tmux("send-keys", "-t", "work", "-l", text)
-    await visible(text); await sleep(180); await key("Enter")
+  const key = async (key: string, target = "work") => { tmux("send-keys", "-t", target, key); await sleep(200) }
+  const submit = async (text: string, target = "work") => {
+    tmux("send-keys", "-t", target, "-l", text)
+    await visible(text, target); await sleep(180); await key("Enter", target)
   }
   const findChild = () => existsSync(workspaceTempRoot)
     ? readdirSync(workspaceTempRoot, { recursive: true }).find(path => basename(String(path)) === "child-armed")
@@ -105,10 +105,23 @@ ptyTest("Auto works across turns, with project access and revocation managed in 
   try {
     const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'"
     const entry = process.env.ZAP_TEST_COMPILED_BINARY ? quote(resolve(process.env.ZAP_TEST_COMPILED_BINARY)) : `${quote(process.execPath)} ${quote(resolve("src/index.tsx"))}`
-    tmux("new-session", "-d", "-s", "work", "-x", "160", "-y", "45", "-c", cwd,
-      `exec env ZAPCODE_DATA_DIR=${quote(root)} ZAP_DISABLE_UPDATE_CHECK=1 ${entry}`)
+    const command = `exec env ZAPCODE_DATA_DIR=${quote(root)} ZAP_DISABLE_UPDATE_CHECK=1 ${entry}`
+    tmux("new-session", "-d", "-s", "work", "-x", "160", "-y", "45", "-c", cwd, command)
+    tmux("new-session", "-d", "-s", "observer", "-x", "160", "-y", "45", "-c", cwd, command)
+    await visible("HarnessFixture/fixture", "observer")
     await visible("HarnessFixture/fixture")
     await visible("Auto")
+    await submit("/permissions"); await visible("[Workspace]")
+    await visible("Project access is not saved")
+    tmux("send-keys", "-t", "work", "-l", "\x1b[C\r")
+    await visible("[Rules]")
+    await key("Left"); await visible("Project access is not saved")
+    await key("Right"); await visible("[Rules]")
+    await key("Right"); await visible("[Recently blocked]")
+    await visible("No blocked actions in this conversation.")
+    await key("Left"); await visible("[Rules]")
+    await key("Left"); await visible("[Workspace]")
+    await key("Escape")
     await visible("Auto · Shift+Tab")
     await submit("/mode"); await visible("ask before edits and commands")
     await visible("Bypass")
@@ -134,8 +147,9 @@ ptyTest("Auto works across turns, with project access and revocation managed in 
     for (const name of ["one", "two", "background", "continued"]) {
       expect(todoExposure.get(name)).toEqual({ tool: false, instructions: false })
     }
-    await submit("/permissions"); await visible("p project access")
-    await key("p"); await visible("Always allow work in this project"); await key("Enter")
+    await submit("/permissions"); await visible("[Workspace]")
+    await visible("Project access saved")
+    await visible("Always allow work in this project"); await key("Enter")
     await key("BTab"); await visible("Manual · Shift+Tab")
     await submit("WRITE_manual"); await visible("Approve?")
     expect(existsSync(join(cwd, "manual"))).toBe(false)
@@ -145,6 +159,15 @@ ptyTest("Auto works across turns, with project access and revocation managed in 
     expect(existsSync(join(cwd, "manual-shell-proof"))).toBe(false)
     await key("1"); await visible("FINISHED_manual-shell")
     expect(existsSync(join(cwd, "manual-shell-proof"))).toBe(true)
+    await submit("WRITE_declined"); await visible("Approve?")
+    await key("2"); await visible("FINISHED_declined")
+    expect(existsSync(join(cwd, "declined"))).toBe(false)
+    await submit("/permissions"); await visible("[Workspace]")
+    await key("Left"); await visible("[Recently blocked]")
+    await visible("Write(declined)")
+    if (!tmux("capture-pane", "-p", "-t", "work").includes("Declined by you")) await key("Down")
+    await visible("Declined by you")
+    await key("Escape")
     await key("BTab"); await visible("Auto · Shift+Tab")
     await submit("WRITE_three")
     await visible("FINISHED_three"); expect(existsSync(join(cwd, "three"))).toBe(true)
@@ -157,10 +180,12 @@ ptyTest("Auto works across turns, with project access and revocation managed in 
     for (let i = 0; i < 120 && (!findChild() || !childWaiting); i++) await sleep(75)
     const childMarker = findChild()
     if (!childMarker || !childWaiting) throw new Error(`Child did not start (marker ${childMarker}, calls ${JSON.stringify(childRequests)}):\n${tmux("capture-pane", "-p", "-t", "work")}`)
-    await submit("/permissions"); await visible("p project access")
-    await key("p"); await visible("Forget project access")
-    await key("Down"); await key("Down"); await key("Enter")
-    await visible("Read only")
+    await submit("/permissions", "observer"); await visible("[Workspace]", "observer")
+    await visible("Project access saved", "observer")
+    await visible("Forget project access", "observer")
+    await key("Down", "observer"); await key("Down", "observer"); await key("Enter", "observer")
+    await visible("Read only", "observer")
+    await visible("Project access was revoked")
     writeFileSync(join(cwd, "unfreeze"), "")
     const childDir = dirname(join(workspaceTempRoot, String(childMarker)))
     releaseChild()
@@ -173,6 +198,17 @@ ptyTest("Auto works across turns, with project access and revocation managed in 
     expect(readOnly).toContain("This session is read-only")
     expect(readOnly).not.toContain("plan-mode")
     expect(readOnlyPlanTool).toBe(false)
+    await submit("/permissions"); await visible("[Workspace]")
+    await visible("Session is read-only")
+    await key("Right"); await key("Right"); await visible("[Recently blocked]")
+    await visible("Write(five)")
+    await visible("Write(declined)")
+    tmux("resize-window", "-t", "work", "-x", "34", "-y", "40")
+    await visible("[Blocked]")
+    await key("Left"); await visible("[Rules]")
+    await key("Left"); await visible("[Work]")
+    await key("Escape")
+    tmux("resize-window", "-t", "work", "-x", "160", "-y", "45")
     await submit("/mode auto"); await visible("Auto")
     await submit("WRITE_six"); await visible("FINISHED_six"); expect(existsSync(join(cwd, "six"))).toBe(true)
   } finally {
