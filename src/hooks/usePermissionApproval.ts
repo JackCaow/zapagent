@@ -11,7 +11,7 @@ import { evaluateApprovalPolicy } from "../permission-policy.js"
 import { buildToolGrantRules, type ToolGrantRequest } from "../tool-grants.js"
 import type { PermissionRule } from "../permissions.js"
 import { buildEditPreview, isEditTool } from "../ui/edit-preview.js"
-import { getToolAlias } from "../ui/transcript-format.js"
+import { formatToolCall, getToolAlias } from "../ui/transcript-format.js"
 import type { ApprovalCallback, ApprovalContext, ApprovalResponse } from "../../zapsdk/tools/executor.js"
 
 type AddLog = (
@@ -22,6 +22,11 @@ type AddLog = (
   agentPath?: string[],
   extra?: Partial<LogEntry>,
 ) => void
+
+function permissionAction(name: string, args: Record<string, unknown>): string {
+  try { return formatToolCall(name, args) }
+  catch { return getToolAlias(name) }
+}
 
 interface PendingApproval {
   id: string
@@ -199,7 +204,9 @@ export function usePermissionApproval(
                 addLog("system", `Permission: project allow added for ${getToolAlias(name)} (saved to user project grants)`)
               } catch (error) { addLog("error", `Could not save project tool authorization: ${String(error)}. Approved this command only.`) }
             } else if (choice === "deny") {
-              addLog("system", `Permission: user denied ${getToolAlias(name)}`)
+              addLog("system", `Permission: user denied ${getToolAlias(name)}`, undefined, undefined, undefined, {
+                permissionBlock: { action: permissionAction(name, ar), reason: "Declined by you" },
+              })
             }
             if (choice === "deny") permissionManager.recordDenial(name, ar, context)
             else if (choice === "once") permissionManager.recordOnceApproval(name, ar, context)
@@ -219,7 +226,11 @@ export function usePermissionApproval(
       const { mode, decision } = evaluate(toolName, args, context)
       if (decision.decision === "ask" && !logAsk) return decision
       try { appLogger.info("permission_decision", { tool: toolName, mode, decision: decision.decision, category: decision.category, tier: decision.tier, source: decision.source, reason: decision.reason }) } catch {}
-      if (decision.decision === "deny") addLog("system", `Permission: denied ${getToolAlias(toolName)} — ${decision.reason}`)
+      if (decision.decision === "deny") {
+        addLog("system", `Permission: denied ${getToolAlias(toolName)} — ${decision.reason}`, undefined, undefined, undefined, {
+          permissionBlock: { action: permissionAction(toolName, args), reason: decision.reason },
+        })
+      }
       return decision
     },
     [addLog, evaluate],

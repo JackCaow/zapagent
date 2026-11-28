@@ -49,9 +49,7 @@ export function useLogs() {
     tool?: ToolCallInfo,
     images?: UserImageRef[],
     agentPath?: string[],
-    // Mostly UI-only metadata (e.g. thinkingMs). Restore hints are persisted:
-    // restore:false skips display-only rows; restoreText replays compact rows
-    // with their full model-facing content.
+    // Persist restore hints and permission denial details with the journal row.
     extra?: Partial<LogEntry>,
   ) => {
     const id = logId++
@@ -60,6 +58,7 @@ export function useLogs() {
     const journalIdx = journalAppend(type, text, tool, images, agentPath, {
       restore: extra?.restore,
       restoreText: extra?.restoreText,
+      permissionBlock: extra?.permissionBlock,
     })
     if (journalIdx !== null) logIndexMap.current.set(id, journalIdx)
     const entry: LogEntry = { type, text, id, tool, images, agentPath, ...extra }

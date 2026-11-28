@@ -25,6 +25,8 @@ export interface LogEntry {
   type: LogType
   text: string
   id: number
+  /** Details kept with the denial notice in the session journal. */
+  permissionBlock?: PermissionBlock
   /** UI-only: keep an in-flight status outside Ink Static until it settles. */
   pending?: boolean
   tool?: ToolCallInfo
@@ -77,6 +79,11 @@ export interface LogEntry {
    *  covers an empty range at a turn boundary. */
   journalStartIndex?: number
   journalEndIndex?: number
+}
+
+export interface PermissionBlock {
+  action: string
+  reason: string
 }
 
 export type Route = "home" | "session"

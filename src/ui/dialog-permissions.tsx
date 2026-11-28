@@ -1,218 +1,213 @@
 /** @jsxImportSource react */
-// /permissions — list every active permission rule (across all four
-// scopes: session / local / project / global) with shadow markers,
-// allow per-rule deletion (`d` then `d` again to confirm) and a full
-// clear (`c` then `c` again) for persisted rules.
-//
-// Layout matches the opentui-era dialog so users get the same visual:
-//
-//   global (~/.zapcode/settings.json)  (Global)
-//   ❯ allow Bash(pwd:*)
-//     allow Bash(printf:*)              ⤴ shadowed by allow Bash(*) (project)
-//     ...
-//
-//   ┌──────────────────────────────────────┐
-//   │ ↑↓ navigate · d delete · c clear all │
-//   └──────────────────────────────────────┘
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Box, Text, useInput } from "ink"
+import stripAnsi from "strip-ansi"
 import { permissionManager, appLogger } from "../singletons.js"
-import { SANDBOX_ESCAPE_RULE } from "../permissions.js"
-import type { AnnotatedRuleGroup, RuleRemovalScope } from "../permissions.js"
-import { useHideNativeCursor } from "./dialog-frame.js"
+import { SANDBOX_ESCAPE_RULE, type AnnotatedRuleGroup, type RuleRemovalScope } from "../permissions.js"
+import type { WorkspaceChoice } from "../workspace-access.js"
+import { DialogFrame } from "./dialog-frame.js"
 import { c } from "./theme.js"
 import { truncateToWidth } from "./truncate.js"
 import { ToolGrantDialog } from "./dialog-tool-grant.js"
 import { buildToolGrantRules } from "../tool-grants.js"
-import { commandInput } from "./controlled-input.js"
+import { commandInput, isReturnInput } from "./controlled-input.js"
 import { describeCapabilityPatterns } from "../capabilities.js"
+import { useTermWidth } from "./term-width.js"
+import { readCurrentSessionLogs, type SessionLog } from "../session.js"
+import type { LogEntry } from "./types.js"
 
-interface Props { onCancel: () => void; availableTools: string[]; onProjectAccess?: () => void }
+interface Props {
+  cwd: string
+  remembered: boolean
+  readOnly: boolean
+  logs: readonly LogEntry[]
+  availableTools: string[]
+  onWorkspaceChoice: (choice: WorkspaceChoice) => void
+  onCancel: () => void
+}
+
+const tabs = ["Workspace", "Rules", "Recently blocked"] as const
+const filters = ["all", "allow", "ask", "deny"] as const
+const filterLabels = ["All rules", "Allow", "Ask", "Deny"] as const
+const pageSize = 6
 
 function scopeOf(group: AnnotatedRuleGroup): RuleRemovalScope {
   if (group.label === "project grants") return "project-grants"
   return group.label === "personal" ? "local" : group.label === "session" ? "session" : group.label === "global" ? "global" : "project"
 }
 
-interface FlatRule {
-  group: AnnotatedRuleGroup
-  groupIdx: number
-  ruleIdx: number
-  flatIdx: number
+function recentBlocks(logs: readonly SessionLog[]) {
+  const blocks: Array<{ id: number; action: string; reason: string }> = []
+  for (let i = logs.length - 1; i >= 0 && blocks.length < 20; i--) {
+    const log = logs[i]
+    if (log.type !== "system") continue
+    if (log.permissionBlock) {
+      blocks.push({ id: i, ...log.permissionBlock })
+      continue
+    }
+    // Restored transcripts already contain these notices, including older sessions.
+    const denied = /^Permission: denied (.+?) — (.+)/s.exec(log.text)
+    const declined = /^Permission: user denied (.+)/s.exec(log.text)
+    if (denied) blocks.push({ id: i, action: denied[1], reason: denied[2] })
+    else if (declined) blocks.push({ id: i, action: declined[1], reason: "Declined by you" })
+  }
+  return blocks
 }
 
-function flattenRules(groups: AnnotatedRuleGroup[]): FlatRule[] {
-  const out: FlatRule[] = []
-  let flat = 0
-  groups.forEach((group, groupIdx) => {
-    group.rules.forEach((_rule, ruleIdx) => {
-      out.push({ group, groupIdx, ruleIdx, flatIdx: flat++ })
-    })
-  })
-  return out
-}
-
-export function PermissionsDialog({ onCancel, availableTools, onProjectAccess }: Props) {
-  useHideNativeCursor()
-  const [tick, setTick] = useState(0)
+export function PermissionsDialog({ cwd, remembered, readOnly, logs, availableTools, onWorkspaceChoice, onCancel }: Props) {
+  const width = Math.max(8, useTermWidth() - 2)
+  const [cursor, setCursor] = useState({ tabIndex: 0, filterIndex: 0, selected: 0 })
+  const nextCursor = useRef(cursor)
+  nextCursor.current = cursor
+  const [revision, setRevision] = useState(0)
+  const [confirming, setConfirming] = useState<"delete" | "clear">()
   const [grantOpen, setGrantOpen] = useState(false)
   const [error, setError] = useState("")
-  const groups = useMemo(() => permissionManager.getSummaryAnnotated()
-    .map(group => ({ ...group, rules: group.rules.filter(({ rule }) => rule.pattern !== SANDBOX_ESCAPE_RULE) }))
-    .filter(group => group.rules.length), [tick])
-  const flatRules = useMemo(() => flattenRules(groups), [groups])
-  const total = flatRules.length
+  const { tabIndex, filterIndex, selected } = cursor
+  const tab = tabs[tabIndex]
+  const filter = filters[filterIndex]
 
-  const [selectedIdx, setSelectedIdx] = useState(0)
-  const [confirmingDeleteIdx, setConfirmingDeleteIdx] = useState(-1)
-  const [confirmingClear, setConfirmingClear] = useState(false)
+  const workspaceOptions: Array<{ id: WorkspaceChoice; text: string }> = [
+    { id: "project", text: "Always allow work in this project" },
+    { id: "analyze", text: "Keep this session read-only" },
+  ]
+  if (remembered) workspaceOptions.push({ id: "revoke", text: "Forget project access" })
 
-  // Keep selection in range as rules are deleted.
-  const safeIdx = total === 0 ? -1 : Math.min(selectedIdx, total - 1)
+  const rules = useMemo(() => permissionManager.getSummaryAnnotated().flatMap(group => group.rules
+    .filter(({ rule }) => rule.pattern !== SANDBOX_ESCAPE_RULE)
+    .map(annotated => ({ group, ...annotated }))), [revision])
+  const filteredRules = filter === "all" ? rules : rules.filter(({ rule }) => rule.type === filter)
+  const [journalBlocks, setJournalBlocks] = useState<ReturnType<typeof recentBlocks>>([])
+  const latestBlock = tab === "Recently blocked" ? logs.findLast(log => log.permissionBlock) : undefined
+  useEffect(() => {
+    // The transcript can be cleared during compaction. Reread the same session
+    // journal on arrival and when the visible transcript receives a new denial.
+    if (tab === "Recently blocked") setJournalBlocks(recentBlocks(readCurrentSessionLogs()))
+  }, [tab, latestBlock])
+  const blocked = tab === "Recently blocked" && !journalBlocks.length ? recentBlocks(logs) : journalBlocks
+  const total = tab === "Workspace" ? workspaceOptions.length : tab === "Rules" ? filteredRules.length : blocked.length
+  const index = Math.max(0, Math.min(selected, total - 1))
+  const start = Math.max(0, Math.min(index - Math.floor(pageSize / 2), total - pageSize))
+  const selectedBlock = blocked[index]
+
+  const removeRule = ({ group, rule }: typeof rules[number]) => {
+    try { permissionManager.removeRule(rule.pattern, rule.type, scopeOf(group), rule.canonicalPath === true) }
+    catch (failure) { setError(String(failure)) }
+  }
+
+  const moveCursor = (next: typeof cursor) => {
+    nextCursor.current = next
+    setCursor(next)
+    setConfirming(undefined)
+  }
 
   useInput((input, key) => {
     const cmd = commandInput(input, key)
+    const next = nextCursor.current
     if (key.escape) {
-      if (confirmingDeleteIdx >= 0) { setConfirmingDeleteIdx(-1); return }
-      if (confirmingClear)          { setConfirmingClear(false);  return }
-      onCancel(); return
-    }
-    if (cmd === "a") { setGrantOpen(true); return }
-    if (cmd === "p" && onProjectAccess) { onProjectAccess(); return }
-    if (total === 0) return
-
-    if (key.upArrow) {
-      setSelectedIdx(i => (i - 1 + total) % total)
-      setConfirmingDeleteIdx(-1)
-      setConfirmingClear(false)
+      if (confirming) setConfirming(undefined)
+      else onCancel()
       return
     }
-    if (key.downArrow) {
-      setSelectedIdx(i => (i + 1) % total)
-      setConfirmingDeleteIdx(-1)
-      setConfirmingClear(false)
+    if (key.leftArrow || key.rightArrow || cmd === "p") {
+      moveCursor({ ...next, tabIndex: cmd === "p" ? 0 : (next.tabIndex + (key.leftArrow ? -1 : 1) + tabs.length) % tabs.length, selected: 0 })
+      setError("")
       return
     }
-
-    // Two-press delete: first `d` arms, second `d` commits.
-    if (cmd === "d") {
-      if (confirmingDeleteIdx === safeIdx) {
-        const flat = flatRules[safeIdx]
-        if (flat) {
-          const rule = flat.group.rules[flat.ruleIdx]
-          if (rule) {
-            try {
-              permissionManager.removeRule(rule.rule.pattern, rule.rule.type, scopeOf(flat.group), rule.rule.canonicalPath === true)
-              try { appLogger.info(`permission_remove pattern=${rule.rule.pattern} type=${rule.rule.type}`) } catch {}
-            } catch (failure) { setError(String(failure)) }
-          }
-        }
-        setConfirmingDeleteIdx(-1)
-        setTick(t => t + 1)
-        return
+    if (key.upArrow || key.downArrow) {
+      if (total && next.tabIndex === tabIndex && next.filterIndex === filterIndex) {
+        const selected = (Math.min(next.selected, total - 1) + (key.upArrow ? -1 : 1) + total) % total
+        moveCursor({ ...next, selected })
       }
-      setConfirmingDeleteIdx(safeIdx)
-      setConfirmingClear(false)
       return
     }
-
-    // Two-press clear-all: first `c` arms, second `c` commits.
-    if (cmd === "c") {
-      if (confirmingClear) {
-        // Drop every rule in every persisted scope. Session rules are
-        // not touched (those die when the process exits anyway).
-        for (const g of groups) {
-          if (g.label === "session") continue
-          for (const r of g.rules) {
-            try { permissionManager.removeRule(r.rule.pattern, r.rule.type, scopeOf(g), r.rule.canonicalPath === true) } catch (failure) { setError(String(failure)) }
-          }
-        }
-        try { appLogger.info("permission_clear_all") } catch {}
-        setConfirmingClear(false)
-        setConfirmingDeleteIdx(-1)
-        setTick(t => t + 1)
-        return
-      }
-      setConfirmingClear(true)
-      setConfirmingDeleteIdx(-1)
+    // Ink can deliver navigation and confirmation in one input batch.
+    // Act only on a selection the dialog has rendered.
+    if (next !== cursor) return
+    if (tab === "Workspace" && isReturnInput(input, key)) {
+      onWorkspaceChoice(workspaceOptions[index].id)
       return
     }
+    if (cmd === "a") {
+      moveCursor({ tabIndex: 1, filterIndex: 0, selected: 0 })
+      setGrantOpen(true)
+      return
+    }
+    if (tab !== "Rules") return
+    if (cmd === "f") {
+      moveCursor({ ...cursor, filterIndex: (filterIndex + 1) % filters.length, selected: 0 })
+      return
+    }
+    const rule = filteredRules[index]
+    if (cmd === "d" && rule) {
+      if (confirming !== "delete") { setConfirming("delete"); return }
+      removeRule(rule)
+      try { appLogger.info(`permission_remove pattern=${rule.rule.pattern} type=${rule.rule.type}`) } catch {}
+    } else if (cmd === "c" && rules.some(({ group }) => group.label !== "session")) {
+      if (confirming !== "clear") { setConfirming("clear"); return }
+      rules.filter(({ group }) => group.label !== "session").forEach(removeRule)
+      try { appLogger.info("permission_clear_all") } catch {}
+    } else return
+    setConfirming(undefined)
+    setRevision(value => value + 1)
   }, { isActive: !grantOpen })
 
   if (grantOpen) return <ToolGrantDialog availableTools={availableTools} onCancel={() => setGrantOpen(false)} onSave={(request, reviewedRules) => {
     try {
-      permissionManager.addToolRules(buildToolGrantRules(request, availableTools, process.cwd(), reviewedRules), request.lifetime)
-      setGrantOpen(false); setTick(value => value + 1)
+      permissionManager.addToolRules(buildToolGrantRules(request, availableTools, cwd, reviewedRules), request.lifetime)
+      setGrantOpen(false)
+      setRevision(value => value + 1)
     } catch (failure) { return String(failure) }
   }} />
 
-  if (total === 0) {
-    return (
-      <Box flexDirection="column" paddingX={1} marginTop={1}>
-        <Text color={c.text.muted}>No permission rules active.</Text>
-        {!!error && <Text color={c.error}>{error}</Text>}
-        <Text color={c.text.ghost}>Press a to add tool authorization.</Text>
-        <Box paddingX={1} marginTop={1}>
-          <Text color={c.text.faint}>a add authorization{onProjectAccess ? " · p project access" : ""} · esc close</Text>
-        </Box>
-      </Box>
-    )
-  }
+  const labels = width >= 37 ? tabs : ["Work", "Rules", "Blocked"]
+  const hint = tab === "Workspace" ? "←→ tabs · ↑↓ select · enter confirm · esc close"
+    : tab === "Rules" ? "←→ tabs · ↑↓ select · f filter · a add · d delete · c clear all · esc close"
+    : "←→ tabs · ↑↓ select · esc close"
+  const row = (text: string, active: boolean) => <Text color={active ? c.accent : c.text.primary} bold={active}>
+    {active ? "› " : "  "}{truncateToWidth(stripAnsi(text), width - 2)}
+  </Text>
 
-  return (
+  return <DialogFrame title="Permissions" hint={hint}>
+    <Text wrap="truncate-end">
+      {width < 22 ? <Text bold color={c.accent}>{`[${truncateToWidth(tab, width - 2)}]`}</Text>
+      : labels.map((label, i) => <Text key={tabs[i]} bold={i === tabIndex} color={i === tabIndex ? c.accent : c.text.muted}>
+        {i ? "  " : ""}{i === tabIndex ? `[${label}]` : label}
+      </Text>)}
+    </Text>
     <Box flexDirection="column" marginTop={1}>
-      <Box flexDirection="column" paddingX={1}>
-        {groups.map((group) => (
-          <Box key={group.source} flexDirection="column" marginBottom={1}>
-            <Text color={c.text.ghost}>{`${group.source}  (${group.label})`}</Text>
-            {group.rules.map((annotated, ruleIdx) => {
-              const flatIdx = flatRules.findIndex(
-                f => f.group === group && f.ruleIdx === ruleIdx,
-              )
-              const isSelected   = flatIdx === safeIdx
-              const isConfirming = flatIdx === confirmingDeleteIdx
-              const { rule, shadowedBy } = annotated
-              return (
-                <Box
-                  key={`${group.label}::${rule.type}::${rule.pattern}::${rule.canonicalPath ? "canonical" : "legacy"}`}
-                  flexDirection="column"
-                >
-                  <Box flexDirection="row">
-                    <Box width={6}>
-                      <Text color={isSelected ? c.text.primary : c.text.muted} bold={isSelected}>
-                        {rule.type}
-                      </Text>
-                    </Box>
-                    <Text color={isSelected ? c.text.primary : c.text.muted} wrap="truncate-end">
-                      {truncateToWidth(rule.pattern, 60)}
-                    </Text>
-                    {rule.canonicalPath && <Text color={c.text.ghost}> (fixed folder target)</Text>}
-                    {describeCapabilityPatterns([rule.pattern]) && <Text color={c.text.ghost} wrap="truncate-end"> — {describeCapabilityPatterns([rule.pattern])}</Text>}
-                    {shadowedBy && (
-                      <Text color={c.text.ghost} wrap="truncate-end">
-                        {truncateToWidth(`  ⤴ shadowed by ${shadowedBy.rule.type} ${shadowedBy.rule.pattern} (${shadowedBy.scope})`, 70)}
-                      </Text>
-                    )}
-                  </Box>
-                  {isConfirming && (
-                    <Box paddingLeft={4}>
-                      <Text color={c.error}>Press d again to delete this rule</Text>
-                    </Box>
-                  )}
-                </Box>
-              )
-            })}
+      {tab === "Workspace" && <>
+        <Text color={c.text.muted} wrap="truncate-middle">{`Project · ${cwd}`}</Text>
+        <Text color={c.text.secondary}>{remembered ? "Project access saved" : "Project access is not saved"}</Text>
+        {readOnly && <Text color={c.warning}>Session is read-only</Text>}
+        <Box flexDirection="column" marginTop={1}>
+          {workspaceOptions.map((option, i) => <Box key={option.id}>{row(option.text, i === index)}</Box>)}
+        </Box>
+        {workspaceOptions[index].id === "project" && <Text color={c.text.faint}>Commands run with your account’s permissions.</Text>}
+      </>}
+      {tab === "Rules" && <>
+        <Text color={c.text.muted}>{`${filterLabels[filterIndex]} · ${filteredRules.length}`}</Text>
+        {!total && <Text color={c.text.muted}>{filter === "all" ? "No permission rules active." : "No matching permission rules."}</Text>}
+        {filteredRules.slice(start, start + pageSize).map(({ group, rule, shadowedBy }, offset) => {
+          const i = start + offset
+          const capability = describeCapabilityPatterns([rule.pattern])
+          return <Box key={i} flexDirection="column">
+            {(offset === 0 || filteredRules[i - 1].group !== group) &&
+              <Text color={c.text.faint} wrap="truncate-middle">{`${group.label} · ${group.source}`}</Text>}
+            {row(`${rule.type} ${rule.pattern}${rule.canonicalPath ? " (fixed folder target)" : ""}${capability ? ` — ${capability}` : ""}`, i === index)}
+            {i === index && shadowedBy && <Text color={c.text.faint} wrap="truncate-end">{`  Shadowed by ${shadowedBy.rule.type} ${shadowedBy.rule.pattern} (${shadowedBy.scope})`}</Text>}
           </Box>
-        ))}
-      </Box>
-      {!!error && <Text color={c.error}>{error}</Text>}
-      <Box paddingX={1} marginTop={1} flexDirection="column">
-        {confirmingClear ? (
-          <Text color={c.error}>Press c again to remove ALL persisted rules (session rules untouched)</Text>
-        ) : (
-          <Text color={c.text.faint}>↑↓ navigate · d delete · c clear all · a add authorization{onProjectAccess ? " · p project access" : ""} · esc close</Text>
-        )}
-      </Box>
+        })}
+        {confirming === "clear" && <Text color={c.error}>Press c again to clear all persisted rules.</Text>}
+        {confirming === "delete" && <Text color={c.error}>Press d again to delete this rule.</Text>}
+        {!!error && <Text color={c.error}>{error}</Text>}
+      </>}
+      {tab === "Recently blocked" && <>
+        <Text color={c.text.muted}>{total ? "Blocked in this conversation" : "No blocked actions in this conversation."}</Text>
+        {blocked.slice(start, start + pageSize).map((block, offset) => <Box key={block.id}>{row(block.action, index === start + offset)}</Box>)}
+        {selectedBlock && <Box marginTop={1}><Text color={c.text.secondary}>{stripAnsi(selectedBlock.reason)}</Text></Box>}
+      </>}
+      {total > pageSize && <Text color={c.text.faint}>{`${index + 1}/${total}`}</Text>}
     </Box>
-  )
+  </DialogFrame>
 }

@@ -107,7 +107,7 @@ export function parseCommand(input: string): CommandResult | null {
           "  /<name> [args]   — Run any installed skill",
           "",
           "  Permissions:",
-          "  /permissions     — Manage active permission rules (interactive)",
+          "  /permissions     — Manage project access and rules, review blocked actions",
           "  /mode [name]     — Choose how Zap works (auto | manual | bypass)",
           "",
           "",
