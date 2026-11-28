@@ -9,7 +9,7 @@ import type { ImageContent } from "../../zapsdk/core/types.js"
 import { createLocalProcessBroker } from "../../zapsdk/execution/process.js"
 import type { ApprovalCallback, ApprovalContext } from "../../zapsdk/tools/executor.js"
 import { VERSION } from "../version.js"
-import { createNativePreview, type NativePreview } from "./native-preview.js"
+import { createNativeWorkspace, type NativePreview, type NativeShell } from "./native-workspace.js"
 
 /** Host hooks shared across the native session. Approval is per turn. */
 export interface RemoteAgentHost {
@@ -24,7 +24,7 @@ interface LiveSession {
   spec: AcpAgentSpec
   session: AcpAgentSession
   handlers: AcpHostHandlers
-  preview?: ReturnType<typeof createNativePreview>
+  preview?: ReturnType<typeof createNativeWorkspace>
 }
 
 /** One external ACP agent driving the TUI conversation ("session mode").
@@ -53,6 +53,7 @@ export class RemoteAgentManager {
   async prompt(spec: AcpAgentSpec, cwd: string, text: string, images: ImageContent[] | undefined, options: {
     signal: AbortSignal
     preview?: NativePreview
+    shell?: NativeShell
     approve?: ApprovalCallback
     onEvent: (event: AgentEvent) => void
     onModelId?: (model: string) => void
@@ -69,7 +70,7 @@ export class RemoteAgentManager {
     let sent = false
     try {
       options.signal.throwIfAborted()
-      live = await this.ensure(spec, cwd, options.signal, options.onStarted, !!options.preview)
+      live = await this.ensure(spec, cwd, options.signal, options.onStarted, !!options.preview, options.shell)
       const content: ContentBlock[] = [{ type: "text", text }]
       if (images?.length) {
         if (!live.session.supportsImages) throw new Error(`${spec.id} does not accept images`)
@@ -81,7 +82,7 @@ export class RemoteAgentManager {
       options.signal.throwIfAborted()
       if (this.live !== live) throw new Error(`${spec.id} session was closed`)
       this.turn = { signal: AbortSignal.any([options.signal, turn.signal]), approve: options.approve }
-      if (options.preview) releasePreview = live.preview?.bind(options.preview, this.turn.signal)
+      if (options.preview) releasePreview = live.preview?.bind(options.preview, this.turn.signal, options.shell)
       options.onAccepted?.()
       sent = true
       const result = await live.session.prompt(content, {
@@ -117,9 +118,9 @@ export class RemoteAgentManager {
     for (const transport of this.transports) transport.kill?.()
   }
 
-  private async ensure(spec: AcpAgentSpec, cwd: string, signal: AbortSignal, onStarted?: (session: AcpAgentSession) => void, previewRequested = false): Promise<LiveSession> {
+  private async ensure(spec: AcpAgentSpec, cwd: string, signal: AbortSignal, onStarted?: (session: AcpAgentSession) => void, previewRequested = false, shell?: NativeShell): Promise<LiveSession> {
     if (this.host.blocked) throw new Error(this.host.blocked)
-    const key = JSON.stringify([spec.id, spec.command, spec.args ?? [], spec.requireSettings, spec.env, spec.model, spec.config, cwd, previewRequested])
+    const key = JSON.stringify([spec.id, spec.command, spec.args ?? [], spec.requireSettings, spec.env, spec.model, spec.config, cwd, previewRequested, !!shell])
     const live = this.live
     if (live?.key === key) {
       if (live.spec.mode === spec.mode && (!spec.mode || live.session.currentModeId === spec.mode)) return live
@@ -150,11 +151,17 @@ export class RemoteAgentManager {
       trackEdit: paths => this.host.trackEdit?.(paths) ?? Promise.resolve(),
       signal: () => generation === this.generation ? this.turn?.signal ?? this.inactive : this.inactive,
     })
-    const transport = this.transportFor(spec, cwd)
+    const preview = previewRequested ? createNativeWorkspace(shell?.definition) : undefined
+    let transport: AcpTransport
+    try {
+      transport = this.transportFor(preview?.command && spec.id === "codex" ? codexWorkspaceSpec(spec, preview) : spec, cwd)
+    } catch (error) {
+      preview?.close()
+      throw error
+    }
     this.transports.add(transport)
     void transport.exited.then(() => this.transports.delete(transport))
-    const preview = previewRequested ? createNativePreview() : undefined
-    const mcpServers = preview ? [{
+    const mcpServers = preview && !preview.command ? [{
       type: "http" as const, name: preview.name, url: preview.url, headers: [{ name: "Authorization", value: preview.authorization }],
     }] : undefined
     const session = await AcpAgentSession.start({ spec, cwd, transport, handlers, signal, mcpServers, clientVersion: VERSION })
@@ -170,6 +177,22 @@ export class RemoteAgentManager {
     onStarted?.(session)
     return started
   }
+}
+
+function codexWorkspaceSpec(spec: AcpAgentSpec, endpoint: NonNullable<ReturnType<typeof createNativeWorkspace>>): AcpAgentSpec {
+  const raw = spec.env?.CODEX_CONFIG ?? process.env.CODEX_CONFIG
+  const config = raw ? JSON.parse(raw) : {}
+  return { ...spec, env: { ...spec.env, CODEX_CONFIG: JSON.stringify({
+    ...config,
+    features: { ...config.features, shell_tool: false },
+    mcp_servers: { ...config.mcp_servers, [endpoint.name]: {
+      url: endpoint.url,
+      http_headers: { Authorization: endpoint.authorization },
+      required: true,
+      tool_timeout_sec: 600,
+      tools: { run_command: { approval_mode: "approve" } },
+    } },
+  }) } }
 }
 
 /** Agents inherit zap's environment, like any host process zap starts. */

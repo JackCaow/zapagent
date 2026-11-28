@@ -12,7 +12,7 @@ import { codexModelIdentity } from "./codex-model.js"
 import { AgentOutputThroughput } from "./outputThroughput.js"
 import { remoteAgents } from "./remote-agent.js"
 import type { ApprovalCallback } from "../../zapsdk/tools/executor.js"
-import { createNativePreview, type NativePreview } from "./native-preview.js"
+import { createNativeWorkspace, type NativePreview, type NativeShell } from "./native-workspace.js"
 
 export interface RemoteTurnDeps extends Omit<RunHandlersDeps, "preview" | "setContextTokens" | "setContextPending" | "currentConfig"> {
   currentConfig: RunHandlersDeps["currentConfig"]
@@ -20,6 +20,7 @@ export interface RemoteTurnDeps extends Omit<RunHandlersDeps, "preview" | "setCo
   setRemoteContext: (usage: { used: number; size: number } | undefined) => void
   approve?: ApprovalCallback
   previewArtifact?: NativePreview
+  workspaceShell?: NativeShell
   nativeClaude?: boolean
   spec: AcpAgentSpec
   cwd: string
@@ -37,6 +38,7 @@ const claudeSessions = new WeakMap<ConversationManager, { tip: unknown; sessionI
 
 const zapInstructions = "You are running inside Zap. For an implementation request, make the requested changes and verify them. Plan internally and ask only about choices that matter to the outcome. If the user asks for analysis or a proposal without changes, respect that scope. Zap handles tool approvals. Do not direct users to native CLI mode controls."
 const readOnlyInstructions = "This turn is read-only. Do not attempt changes. If the user requests implementation, mention that selecting Auto in Zap's /mode returns to normal work."
+const workspaceShellInstructions = "Use Zap's run_command tool for shell commands. It applies this session's approval mode. Declare network_destinations when the task requires a specific destination. Let the tool request approval, and do not retry denied actions."
 const codexManualInstructions = "This turn uses Zap's Manual mode. For edits and commands, send an actual approval request using the native tool's approval mechanism. For exec_command, set sandbox_permissions to require_escalated and supply the justification in the tool call so Zap can ask the user. Do not ask for approval in chat or repeat an action that was denied."
 const codexAutoInstructions = "Keep routine actions inside the project. If the user requests an operation that needs external access, use the tool's actual approval request. For exec_command, include sandbox_permissions: require_escalated and the specific destination in the justification. Do not repeat a denied action."
 
@@ -50,8 +52,8 @@ export async function runRemoteTurn(deps: RemoteTurnDeps, task: string, images?:
   const emitter = new AgentEventEmitter()
   handlers.wire(emitter)
   const { spec, controller } = deps
-  const nativePreview = deps.nativeClaude && deps.previewArtifact ? createNativePreview() : undefined
-  if (nativePreview && deps.previewArtifact) nativePreview.bind(deps.previewArtifact, controller.signal)
+  const nativePreview = deps.nativeClaude && deps.previewArtifact ? createNativeWorkspace(deps.workspaceShell?.definition) : undefined
+  if (nativePreview && deps.previewArtifact) nativePreview.bind(deps.previewArtifact, controller.signal, deps.workspaceShell)
   await deps.checkpointTurn?.begin().catch(() => {})
   try {
     if (remoteAgents.host.blocked) throw new Error(remoteAgents.host.blocked)
@@ -73,11 +75,12 @@ export async function runRemoteTurn(deps: RemoteTurnDeps, task: string, images?:
     }
     const readOnly = deps.currentConfig.permissionMode === "plan"
     const manual = deps.currentConfig.permissionMode === "default"
-    const nativeInstructions = readOnly ? zapInstructions + "\n" + readOnlyInstructions
-      : spec.id !== "codex" ? zapInstructions
-      : manual ? zapInstructions + "\n" + codexManualInstructions
-      : deps.currentConfig.permissionMode === "acceptEdits" ? zapInstructions + "\n" + codexAutoInstructions
-      : zapInstructions
+    let nativeInstructions = zapInstructions
+    if (readOnly) nativeInstructions += "\n" + readOnlyInstructions
+    else if (deps.workspaceShell) nativeInstructions += "\n" + workspaceShellInstructions
+    else if (spec.id === "codex" && deps.currentConfig.permissionMode !== "bypassPermissions") {
+      nativeInstructions += "\n" + (manual ? codexManualInstructions : codexAutoInstructions)
+    }
     const turn = deps.nativeClaude ? await promptClaudeCode({
       command: spec.command, args: spec.args, cwd: deps.cwd, text: task, images, signal: controller.signal,
       model: deps.currentConfig.claudeModelPreference,
@@ -91,6 +94,7 @@ export async function runRemoteTurn(deps: RemoteTurnDeps, task: string, images?:
       signal: controller.signal,
       approve: deps.approve,
       preview: spec.id === "codex" ? deps.previewArtifact : undefined,
+      shell: spec.id === "codex" ? deps.workspaceShell : undefined,
       onEvent,
       onAccepted,
       onModelId: spec.id === "codex" ? model => {

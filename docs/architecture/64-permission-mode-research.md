@@ -26,6 +26,7 @@
 | E4 | Codex，Auto 和 Manual 发布 | Auto 下回环连接失败，Zap 未显示审批；Manual 下表示将请求审批，75 秒仍无 Zap 审批，随后中断。两次均无写入。 |
 | E5 | 普通回复和失败工具结果 | Codex、Claude 的普通回复无固定验收提示。Zap 原生失败 Shell 执行一次，真实错误可见。 |
 | E6 | Codex Manual 下只写临时项目文件，观察两段协议 | Zap 收到 read-only 模式切换回执。原生服务以 on-request 开始回合，并启动本机的 PermissionRequest hook。75 秒内未收到 ACP 审批，临时文件未写入。 |
+| E7 | 候选版使用真实 Codex 和 Claude Code，通过 Zap 执行工作区命令 | 两条链路使用原本的本机配置完成工作区写入与外发的批准、拒绝。命令由同一个 Zap 执行器处理。 |
 
 E1 来自用户截图。E2–E5 来自已安装版本的实测，两段原生录屏已在会话中交付。写入使用本机回环服务与合成数据。
 
