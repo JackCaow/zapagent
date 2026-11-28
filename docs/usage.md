@@ -172,7 +172,7 @@ also skip CI, headless output and ACP; explicit `zap update` still checks.
 | `/model` | Search and switch models across all configured connections |
 | `/effort` | Set reasoning effort (`off`, `cycle`, or a provider value) |
 | `/agent` | List conversation agents (`agy`, `codex`, `claude-code`); `/agent <id>` sends messages to that agent, `/agent zap` switches back |
-| `/mode` | Choose Auto (default) or Manual. Shift+Tab switches between them when idle. |
+| `/mode` | Choose Auto (default), Manual, or Bypass. Shift+Tab cycles Auto and Manual when idle. |
 | `/permissions` | Manage active permission rules |
 | `/sessions` | Browse saved sessions |
 | `/queue` | Manage individual follow-ups: edit, delete, reorder, retry, Steer, or toggle default queuing (also Ctrl+Q) |
@@ -196,6 +196,8 @@ also skip CI, headless output and ACP; explicit `zap update` still checks.
 Describe what you want to build or change. In Auto, Zap can make routine
 edits and run commands in authorized projects. In Manual, Zap asks before
 making changes or running commands. Use Shift+Tab at the prompt to switch modes.
+Select Bypass in `/mode` to skip routine approvals. Press Shift+Tab from Bypass
+to return to Auto.
 Say “review this first without editing” to ask the agent for analysis only.
 
 In Auto, the agent organizes its work and reports progress through actual
