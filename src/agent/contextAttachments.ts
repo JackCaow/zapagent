@@ -1,4 +1,3 @@
-import type { LoopAgentResult } from "../../zapsdk/index.js"
 import { buildMdIndex, buildMdPack } from "../../zapsdk/memory/md-pack.js"
 import type { MdPackRecordDiagnostic } from "../../zapsdk/memory/md-pack.js"
 import { openMdStore } from "../../zapsdk/memory/md-store.js"
@@ -1286,20 +1285,4 @@ function buildDiagnosticsFromSegments(segments: ContextSegment[], fullText: stri
       ...(s.meta ? { meta: s.meta } : {}),
     })),
   }
-}
-
-/** Reconcile failed tool results before finishing. LoopAgent bounds this to one review. */
-export function reviewFailedTools(result?: Pick<LoopAgentResult, "toolResults">): string | null {
-  if (!result?.toolResults.some(result => !result.success)) return null
-  return (
-    "<system-reminder>\n" +
-      "Review the original user request and latest authorized steering against the actual " +
-      "observations from this run. Do not substitute your own plan or a weaker success criterion. " +
-      "If evidence contradicts a requirement and a useful authorized check or repair remains " +
-      "possible within the budget, take that step. Otherwise report verified results and " +
-      "unresolved limitations honestly. A successful tool call does not establish functional " +
-      "correctness. You may finish with an honest incomplete or unverified result; " +
-      "do not invent checks or repeat an external side effect just to obtain evidence.\n" +
-      "</system-reminder>"
-  )
 }

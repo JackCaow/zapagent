@@ -40,6 +40,39 @@ const decide = (manager: PermissionManager, name: string, args: Record<string, u
 const project = (rules: PermissionRule[]) => savePermissionSettings(getProjectSettingsPath(cwd), { rules })
 
 describe("capabilities derived from effects", () => {
+  it("does not convert remembered workspace access into consent for a shell call", () => {
+    const manager = new PermissionManager(cwd)
+    const args = { command: "fixture" }
+    const definition: ToolDefinition = {
+      name: "bash", description: "fixture", parameters: {} as never,
+      executionLocation: "workspace", resolveShellCommands: () => [args.command],
+    }
+    const local: ToolEffects = {
+      ...emptyToolEffects(), process: [{ kind: "process", operation: "spawn", commandClass: "shell" }],
+    }
+    const decideWithEffects = (effects: ToolEffects) => evaluateApprovalPolicy(manager, "bash", args, {
+      cwd, mode: "acceptEdits", hostCommands: "trusted", context: contextFor(definition, args, effects),
+    })
+    expect(decideWithEffects(local)).toMatchObject({ decision: "ask", source: "fallback" })
+    expect(decideWithEffects({
+      ...local, external: [{ kind: "external", system: "fixture", operation: "mutate" }],
+    })).toMatchObject({ decision: "ask", source: "fallback" })
+  })
+
+  it("preserves headless automatic approval only for contained, offline workspace commands", () => {
+    const options = { cwd, permissionMode: "acceptEdits" } as const
+    const offline = buildHeadlessApproval({ ...options, disableShellNetwork: true })
+    const online = buildHeadlessApproval(options)
+    const authorized = buildHeadlessApproval({ ...options, allowedTools: ["bash"] })
+    const args = { command: "printf fixture" }
+    for (const approval of [offline, online, authorized]) approval.setSandboxConfined(true)
+    expect(offline.onApproval.precheck?.("bash", args)).toBe(true)
+    expect(online.onApproval.precheck?.("bash", args)).toMatchObject({ approved: false })
+    expect(authorized.onApproval.precheck?.("bash", args)).toBe(true)
+    offline.setSandboxExcludedCommands([args.command])
+    expect(offline.onApproval.precheck?.("bash", args)).toMatchObject({ approved: false })
+  })
+
   it("maps declared network and external effects to host-scoped capabilities", () => {
     const fetch = httpFetchTool().definition, request = httpRequestTool().definition
     expect(contextFor(fetch, { url: "https://API.github.com/repos" }).authorization?.capabilities)

@@ -11,7 +11,9 @@ const fixture = String.raw`
   import { dirname, join } from "node:path";
   import { PermissionManager, getProjectSettingsPath, getProjectAuthorizationSettingsPath, savePermissionSettings } from "./src/permissions.ts";
   let pending = null, sessionId = "first";
-  const mgr = new PermissionManager(process.env.ZAPCODE_DATA_DIR);
+  const cwd = join(dirname(process.env.ZAPCODE_DATA_DIR), "project");
+  mkdirSync(cwd);
+  const mgr = new PermissionManager(cwd);
   const logs = [];
   mock.module("react", () => ({ useState: () => [null, value => { pending = typeof value === "function" ? value(pending) : value; }], useCallback: callback => callback, useRef: value => ({ current: value }), useEffect() {} }));
   mock.module("./src/singletons.ts", () => ({ appLogger: { info() {}, warn() {} }, permissionManager: mgr }));
@@ -19,8 +21,7 @@ const fixture = String.raw`
   const { usePermissionApproval } = await import("./src/hooks/usePermissionApproval.ts");
   const configRef = { current: { permissionMode: "default" } };
   const { WorkspaceAccess } = await import("./src/workspace-access.ts");
-  const cwd = join(process.env.ZAPCODE_DATA_DIR, "project");
-  mkdirSync(cwd);
+  process.chdir(cwd);
   const access = new WorkspaceAccess(cwd);
   const scope = access.begin(sessionId, "run", "auto", { kind: "user" });
   configRef.current.permissionMode = "acceptEdits";
@@ -41,9 +42,15 @@ const fixture = String.raw`
     }
     result.prompted ??= false;
   } else if (scenario === "project") {
-    const first = request(); result.projectOption = pending.projectAccess;
+    const first = request(); result.projectOption = pending.allowScope;
     pending.resolve("forever"); result.first = await first;
-    result.next = await request({ command: "echo different" });
+    const same = request();
+    if (pending) pending.resolve("deny");
+    result.same = await same;
+    const next = request({ command: "echo different" });
+    result.nextAsked = !!pending;
+    if (pending) pending.resolve("deny");
+    await next;
     result.persisted = new WorkspaceAccess(cwd).remembered();
     access.choose("revoke", sessionId);
     configRef.current.permissionMode = "plan";
@@ -69,7 +76,7 @@ const fixture = String.raw`
   } else if (scenario === "late-ask" || scenario === "late-deny") {
     const first = request();
     const type = scenario === "late-ask" ? "ask" : "deny";
-    savePermissionSettings(getProjectSettingsPath(process.env.ZAPCODE_DATA_DIR), { rules: [{ pattern: "Bash(*)", type }] });
+    savePermissionSettings(getProjectSettingsPath(cwd), { rules: [{ pattern: "Bash(*)", type }] });
     pending.resolve("forever");
     result.first = await first;
   } else if (scenario === "mode-change") {
@@ -82,9 +89,9 @@ const fixture = String.raw`
     mkdirSync(dirname(dirname(path)), { recursive: true }); writeFileSync(dirname(path), "blocked");
     const first = request(); pending.resolve("forever"); result.first = await first;
   } else if (["danger", "ask", "deny", "plan", "ordinary-allow"].includes(scenario)) {
-    if (scenario === "ordinary-allow") savePermissionSettings(getProjectSettingsPath(process.env.ZAPCODE_DATA_DIR), { rules: [{ pattern: "Bash(*)", type: "allow" }] });
+    if (scenario === "ordinary-allow") savePermissionSettings(getProjectSettingsPath(cwd), { rules: [{ pattern: "Bash(*)", type: "allow" }] });
     else access.choose("project", sessionId);
-    if (["ask", "deny"].includes(scenario)) savePermissionSettings(getProjectSettingsPath(process.env.ZAPCODE_DATA_DIR), { rules: [{ pattern: "Bash(*)", type: scenario }] });
+    if (["ask", "deny"].includes(scenario)) savePermissionSettings(getProjectSettingsPath(cwd), { rules: [{ pattern: "Bash(*)", type: scenario }] });
     mgr.reload();
     if (scenario === "plan") configRef.current.permissionMode = "plan";
     const first = request(scenario === "danger" ? { ...args, command: "rm -rf /" } : args);
@@ -100,8 +107,8 @@ const fixture = String.raw`
 function run(scenario: string) {
   const root = mkdtempSync(join(tmpdir(), "zap-approval-hook-"))
   try {
-    const child = spawnSync(process.execPath, ["-e", fixture], { encoding: "utf8", cwd: process.cwd(),
-      env: { ...process.env, ZAPCODE_DATA_DIR: root, SCENARIO: scenario } })
+    const child = spawnSync(process.execPath, ["-e", fixture], { encoding: "utf8", cwd: process.cwd(), timeout: 10000,
+      env: { ...process.env, ZAPCODE_DATA_DIR: join(root, "data"), SCENARIO: scenario } })
     expect({ status: child.status, stderr: child.stderr }).toEqual({ status: 0, stderr: "" })
     return JSON.parse(child.stdout)
   } finally { rmSync(root, { recursive: true, force: true }) }
@@ -117,7 +124,8 @@ describe("local project authorization through the real hook", () => {
     const result = run("project")
     expect(result.projectOption).toBe(true)
     expect(result.first).toBe(true)
-    expect(result.next).toBe(true)
+    expect(result.same).toBe(true)
+    expect(result.nextAsked).toBe(true)
     expect(result.persisted).toBe(true)
     expect(result.revoked).toMatchObject({ approved: false })
     expect(result.grant).toBe(false)

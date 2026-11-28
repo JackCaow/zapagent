@@ -545,7 +545,7 @@ describe("LoopAgent repeat guard", () => {
     })
   })
 
-  it("does not abort a repeated status poll while its observed output advances", async () => {
+  it("bounds an identical shell command even when its observed output changes", async () => {
     let polls = 0
     const provider = makeRepeatingProvider(
       "bash",
@@ -568,9 +568,8 @@ describe("LoopAgent repeat guard", () => {
 
     const result = await agent.run("wait for the build")
 
-    expect(polls).toBe(7)
-    expect(result.stopped).toBeUndefined()
-    expect(result.text).toBe("build completed")
+    expect(polls).toBe(5)
+    expect(result.stopped).toBe("max_repeat")
   })
 
   it("still stops an unchanged status poll so a contingency can take over", async () => {

@@ -1,7 +1,6 @@
 import type { ToolResult } from "../tools/types.js";
 import type { ToolExecutionHooks } from "./streaming-tool-executor.js";
 import { canonicalizeJsonSchema } from "../tools/schema.js";
-import { sliceHeadCodePoints } from "../utils/logical-lines.js";
 import { createHash } from "node:crypto";
 
 // Only results created before executor dispatch carry this in-process proof.
@@ -223,26 +222,4 @@ export function isLiveTaskWait(
       && result?.success === true && tasks?.length === 1
       && tasks[0]!.taskId === call.arguments.task_id && tasks[0]!.status === "running";
   });
-}
-
-/** A bounded status poll is not the same thing as a blind retry. The
- * repetition guard may only reset for it when the observed output changed;
- * unchanged polling still reaches the normal repeat limit and asks the model
- * to use its contingency instead of waiting forever. */
-export function progressPollSignature(
-  toolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }>,
-  results: ReadonlyMap<string, ToolResult>,
-): string | undefined {
-  if (toolCalls.length !== 1) return undefined;
-  const [call] = toolCalls;
-  if (call.name !== "bash" || typeof call.arguments.command !== "string") return undefined;
-  const command = call.arguments.command;
-  // Intentionally narrow: status-only shell snippets like the Terminal-Bench
-  // `sleep; tail log; pgrep` pattern. Redirects other than stderr suppression
-  // would make it too easy to disguise a mutation as a poll.
-  if (!/\b(?:tail|pgrep|ps)\b/.test(command) || !/\b(?:sleep|tail|pgrep|ps)\b/.test(command)) return undefined;
-  if (/(?:^|[^2])>>?/.test(command)) return undefined;
-  const result = results.get(call.id);
-  if (!result?.success) return undefined;
-  return `${command}\n${sliceHeadCodePoints(result.output ?? "", 2_048)}`;
 }

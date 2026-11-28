@@ -13,6 +13,7 @@ import type { NetworkPolicy } from "../../zapsdk/execution/network-proxy.js"
 export interface HeadlessApprovalOptions {
   cwd: string
   permissionMode: PermissionMode
+  disableShellNetwork?: boolean
   allowedTools?: string[]
   disallowedTools?: string[]
   /** Called every time a tool gets denied (so the runner can flip its
@@ -54,7 +55,7 @@ export function buildHeadlessApproval(opts: HeadlessApprovalOptions): HeadlessAp
   }
 
   const evaluate = (toolName: string, args: Record<string, unknown>, context?: Parameters<ApprovalCallback>[3]) => evaluateApprovalPolicy(mgr, toolName, args, {
-    mode: opts.permissionMode, cwd: opts.cwd, context,
+    mode: opts.permissionMode, cwd: opts.cwd, context, disableShellNetwork: opts.disableShellNetwork,
     allowedTools: [...allowed], disallowedTools: [...disallowed],
   })
   /** The answer when no host needs asking, else undefined. */

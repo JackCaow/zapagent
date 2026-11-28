@@ -1149,8 +1149,7 @@ export function App() {
           repeats={pendingApproval.repeats}
           onGrant={pendingApproval.grant}
           availableTools={agentRef.current.registry.definitions().filter(tool => tool.permission === "confirm").map(tool => tool.name)}
-          projectAccess={pendingApproval.projectAccess}
-          rulePreview={inferInvocationRules(pendingApproval.name, pendingApproval.args, process.cwd(), pendingApproval.context).map(rule => rule.pattern).join(", ") || null}
+          rulePreview={inferInvocationRules(pendingApproval.name, pendingApproval.args, process.cwd(), pendingApproval.context, true).map(rule => rule.pattern).join(", ") || null}
           cwd={pendingApproval.context?.cwd}
           workspaceRoot={pendingApproval.context?.workspaceRoot}
           requester={pendingApproval.context?.actor?.kind === "root" ? undefined : pendingApproval.context?.actor?.id}

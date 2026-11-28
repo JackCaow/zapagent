@@ -36,7 +36,6 @@ import {
   buildMemoryQueryForRun,
   buildPerTurnAttachments,
   makeContextBuilders,
-  reviewFailedTools,
   MEMORY_QUERY_HISTORY_LIMIT,
   memoryQueryHistoryText,
   type MemoryQueryHistoryLog,
@@ -929,7 +928,6 @@ export function useAgentRunner({
         images,
         contextPrefix,
         contextDiagnostics,
-        turnEndGuard: reviewFailedTools,
         onInputAccepted: invocation?.onInputAccepted,
         hasSteering: invocation?.hasSteering,
         takeSteering: invocation?.takeSteering,
@@ -943,7 +941,6 @@ export function useAgentRunner({
         outcomeExecutionError = new Error(runError)
         caughtError = outcomeExecutionError
       }
-      if (execution?.outcome.acceptance.status === "unverified") addLog("system", "本轮执行已结束；结果尚未经过外部验收。")
       completedResult = result
       // Log entries were already committed by content_final handlers; just
       // persist the canonical final text for the /copy command.

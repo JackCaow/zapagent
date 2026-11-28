@@ -9,8 +9,9 @@ import type { ApprovalContext } from "../zapsdk/tools/executor.js"
 import type { Logger } from "../zapsdk/debug/logger.js"
 import { writeFileAtomic } from "./utils/secure-write.js"
 import { canonicalizeWithNearestExistingAncestorSync, resolveToolPathCanonical } from "../zapsdk/builtin-tools/filesystem.js"
-import type { ToolCapability } from "../zapsdk/tools/approval.js"
+import type { ToolApprovalFacts, ToolCapability } from "../zapsdk/tools/approval.js"
 import { decideHost, destinationHostPattern, type NetworkPolicy } from "../zapsdk/execution/network-proxy.js"
+import { pathIsInsideRoot } from "../zapsdk/tools/effects.js"
 export { WORKSPACE_EDIT_TOOLS } from "./capabilities.js"
 import { REQUEST_CAPABILITIES_TOOL, capabilityFileTools, capabilityPattern, fileToolCapabilities, isFileCapability, matchCapabilityScope, parseCapabilityPattern, parseCapabilityRequest } from "./capabilities.js"
 
@@ -131,12 +132,24 @@ export function savePermissionSettings(filePath: string, settings: PermissionSet
  * Source order breaks ties within the same decision type. Evaluation always
  * gives deny precedence over ask and allow, independent of source order.
  */
-export function loadMergedSettings(cwd: string): PermissionSettings {
+export function loadMergedSettings(cwd: string, hostShellConsent?: "session" | "project"): PermissionSettings {
   const global  = loadPermissionSettings(getGlobalSettingsPath())
   const shared  = loadPermissionSettings(getProjectSettingsPath(cwd))
   const local   = loadPermissionSettings(getProjectLocalSettingsPath(cwd))
   const grants = loadPermissionSettings(getProjectAuthorizationSettingsPath(cwd))
-  return { rules: [...grants.rules.filter(rule => rule.pattern !== SANDBOX_ESCAPE_RULE), ...local.rules, ...shared.rules, ...global.rules] }
+  const restrictions = (rules: PermissionRule[]) => rules.filter(rule => rule.type !== "allow")
+  const projectRules = grants.rules.filter(rule => rule.pattern !== SANDBOX_ESCAPE_RULE)
+  if (!hostShellConsent) return { rules: [...projectRules, ...local.rules, ...shared.rules, ...global.rules] }
+  // A checkout may restrict an unrestricted command, but only consent kept
+  // outside that checkout (or in the live session) can authorize it.
+  const privateRules = (path: string, rules: PermissionRule[]) =>
+    pathIsInsideRoot(canonicalizeWithNearestExistingAncestorSync(path), canonicalizeWithNearestExistingAncestorSync(cwd))
+      ? restrictions(rules) : rules
+  return { rules: [
+    ...(hostShellConsent === "project" ? privateRules(getProjectAuthorizationSettingsPath(cwd), projectRules) : restrictions(projectRules)),
+    ...restrictions(local.rules), ...restrictions(shared.rules),
+    ...privateRules(getGlobalSettingsPath(), global.rules),
+  ] }
 }
 
 // ─── Process wrapper stripping ────────────────────────────────────────────────
@@ -681,7 +694,11 @@ export function inferPattern(toolName: string, args: Record<string, unknown>, cw
 }
 
 /** The same complete rule set powers previews and both persistence lifetimes. */
-export function inferInvocationRules(name: string, args: Record<string, unknown>, cwd: string, context?: Readonly<ApprovalContext>): PermissionRule[] {
+export function inferInvocationRules(name: string, args: Record<string, unknown>, cwd: string, context?: Readonly<ApprovalContext>, hostShell = false): PermissionRule[] {
+  if (hostShell && approvalFacts(name, args, context).shellCommands !== undefined) {
+    const pattern = hostShellPattern(name, args, cwd, context)
+    return pattern ? [{ pattern, type: "allow" }] : []
+  }
   if (name === REQUEST_CAPABILITIES_TOOL) {
     // Saved exactly as requested; file scopes are never widened to `**`.
     const requested = parseCapabilityRequest(args)
@@ -701,6 +718,19 @@ export function inferInvocationRules(name: string, args: Record<string, unknown>
   const patterns = invocations.map(value => inferPattern(name, value, cwd)).filter((pattern): pattern is string => !!pattern)
   patterns.push(...pathPatterns)
   return [...new Set(patterns)].map(pattern => ({ pattern, type: "allow" }))
+}
+
+/** Reusable host consent covers one literal command in the project root.
+ * A prefix grant could silently include another script or different arguments. */
+function hostShellPattern(name: string, args: Record<string, unknown>, cwd: string, context?: Readonly<ApprovalContext>): string | undefined {
+  const facts = approvalFacts(name, args, context)
+  if (!facts.workspaceShell || facts.sandboxEscape) return
+  const [command, ...remaining] = facts.shellCommands ?? []
+  const root = canonicalizeWithNearestExistingAncestorSync(cwd)
+  const directory = effectiveCommandCwd(root, args.cwd ?? context?.cwd)
+  if (!command?.trim() || remaining.length || directory !== root || opaqueShell(facts, context)
+      || /[*?\r\n]/.test(command) || splitShellSubcommands(command, context?.shell?.syntax).length !== 1) return
+  return `${name === "bash" ? "Bash" : name}(${command.trim()})`
 }
 
 /** Hosts a shell declares beyond the sandbox allowlist. */
@@ -745,7 +775,13 @@ export class PermissionManager {
   private sandboxExcluded: string[] = []
   setSandboxExcludedCommands(patterns: string[] | undefined): void { this.sandboxExcluded = patterns ?? [] }
 
-  isSandboxConfined(): boolean { return this.sandboxConfined }
+  isConfinedWorkspaceShell(facts: Readonly<ToolApprovalFacts>): boolean {
+    return this.sandboxConfined && facts.workspaceShell && !this.leavesSandbox(facts)
+  }
+
+  private leavesSandbox(facts: Readonly<ToolApprovalFacts>): boolean {
+    return facts.sandboxEscape || (facts.shellCommands ?? []).some(command => matchesAnyCommandPattern(command, this.sandboxExcluded))
+  }
 
   /** The allowlist the sandbox proxy enforces; undefined when egress is not filtered. */
   private sandboxNetworkPolicy?: NetworkPolicy
@@ -908,8 +944,8 @@ export class PermissionManager {
    * commands that produced them. See `normalizeBashSubcommand` for the
    * companion fix that strips wrappers (nohup/cd&&/timeout/...) symmetrically.
    */
-  checkPermission(toolName: string, args: Record<string, unknown>, context?: Readonly<ApprovalContext>): PermissionDecision {
-    const base = this.checkPermissionCore(toolName, args, context)
+  checkPermission(toolName: string, args: Record<string, unknown>, context?: Readonly<ApprovalContext>, hostShellConsent?: "session" | "project"): PermissionDecision {
+    const base = this.checkPermissionCore(toolName, args, context, hostShellConsent)
     if (toolName !== "bash" || base.decision === "deny") return base
     const decisions = [base, this.checkShellPaths(args, context), this.checkShellNetwork(args, context)]
     return decisions.find(value => value.decision === "deny")
@@ -953,7 +989,7 @@ export class PermissionManager {
     if (!policy) return { decision: "allow" }
     const facts = approvalFacts("bash", args, context)
     // Outside the sandbox no proxy applies; that path has its own consent.
-    if (facts.sandboxEscape || (facts.shellCommands ?? []).some(command => matchesAnyCommandPattern(command, this.sandboxExcluded))) return { decision: "allow" }
+    if (this.leavesSandbox(facts)) return { decision: "allow" }
     this.merged = loadMergedSettings(this.cwd)
     const granted = [...this.sessionRules, ...loadPermissionSettings(getProjectAuthorizationSettingsPath(this.cwd)).rules,
       ...loadPermissionSettings(getGlobalSettingsPath()).rules].filter(rule => rule.type === "allow")
@@ -973,12 +1009,12 @@ export class PermissionManager {
       ?? decisions.find(value => value.decision === "ask") ?? { decision: "allow" }
   }
 
-  private checkPermissionCore(toolName: string, args: Record<string, unknown>, context?: Readonly<ApprovalContext>): PermissionDecision {
+  private checkPermissionCore(toolName: string, args: Record<string, unknown>, context?: Readonly<ApprovalContext>, hostShellConsent?: "session" | "project"): PermissionDecision {
     // Normalize once at the entry; rule evaluation and generation both
     // operate in cwd-relative space afterwards. This is the fix for the
     // "I selected 'always allow' but keep getting reprompted" bug —
     // patterns are saved cwd-relative but subjects can arrive absolute.
-    this.merged = loadMergedSettings(this.cwd)
+    this.merged = loadMergedSettings(this.cwd, hostShellConsent)
     const a = normalizeFileArgs(toolName, args, this.cwd, context)
     if (FILE_TOOLS.has(toolName)) {
       const lexical = normalizeFileArgs(toolName, args, this.cwd, context, false)
@@ -1001,8 +1037,7 @@ export class PermissionManager {
       const wholeRestriction = this.matchRules(rule => rule.type !== "allow" && isWholeToolRule(rule, toolName))
       if (wholeRestriction?.decision === "deny") return wholeRestriction
       const commands = facts.shellCommands ?? []
-      const leavesSandbox = facts.sandboxEscape || commands.some(command => matchesAnyCommandPattern(command, this.sandboxExcluded))
-      const runDir = leavesSandbox || !facts.workspaceShell ? null : effectiveCommandCwd(this.cwd, args.cwd)
+      const runDir = this.leavesSandbox(facts) || !facts.workspaceShell ? null : effectiveCommandCwd(this.cwd, args.cwd)
       const decisions = commands.map(command => this.checkShellCommand(command, runDir, context?.shell?.syntax, toolName))
       const restriction = decisions.find(decision => decision.decision === "deny")
         ?? wholeRestriction
@@ -1011,11 +1046,21 @@ export class PermissionManager {
       if (opaqueShell(facts, context)) {
         const unresolved = this.matchRules(rule => rule.type !== "allow" && parsePattern(rule.pattern).toolNames.includes(toolName))
         if (unresolved) return { ...unresolved, decision: "ask", reason: `cannot verify command restriction ${unresolved.rule?.pattern} for opaque shell input` }
+        if (hostShellConsent) return { decision: "ask" }
         const whole = this.matchRules(rule => isWholeToolRule(rule, toolName))
         if (whole) return whole
         if (commands.length && this.sandboxConfined && this.sandboxAutoAllow && runDir !== null)
           return { decision: "allow", reason: "sandbox execution capability" }
         return { decision: "ask" }
+      }
+      if (hostShellConsent) {
+        const pattern = hostShellPattern(toolName, args, this.cwd, context)
+        const command = pattern && parsePattern(pattern).argPattern
+        return (command && this.matchRules(rule => {
+          if (rule.type !== "allow") return false
+          const parsed = parsePattern(rule.pattern)
+          return parsed.toolNames.includes(toolName) && parsed.argPattern === command
+        })) || { decision: "ask" }
       }
       return decisions.find(decision => decision.decision === "ask") ?? decisions[0] ?? { decision: "ask" }
     }
@@ -1131,8 +1176,8 @@ export class PermissionManager {
   /** Allow for the rest of this session (in-memory only). Bash compounds are
    *  split into per-subcommand session rules — symmetric with `addProjectRule`
    *  and required for `checkShellCommand`'s per-subcommand lookup to find them. */
-  addSessionRule(toolName: string, args: Record<string, unknown>, context?: Readonly<ApprovalContext>): void {
-    const rules = inferInvocationRules(toolName, args, this.cwd, context)
+  addSessionRule(toolName: string, args: Record<string, unknown>, context?: Readonly<ApprovalContext>, hostShell = false): void {
+    const rules = inferInvocationRules(toolName, args, this.cwd, context, hostShell)
     if (!rules.length) { this.logRuleRefused(toolName, args, "session", "allow"); return }
     this.addToolRules(rules, "session")
   }
@@ -1164,8 +1209,8 @@ export class PermissionManager {
   /**
    * Persist every approved subcommand as one atomic host-owned project grant.
    */
-  addProjectRule(toolName: string, args: Record<string, unknown>, context?: Readonly<ApprovalContext>): void {
-    const rules = inferInvocationRules(toolName, args, this.cwd, context)
+  addProjectRule(toolName: string, args: Record<string, unknown>, context?: Readonly<ApprovalContext>, hostShell = false): void {
+    const rules = inferInvocationRules(toolName, args, this.cwd, context, hostShell)
     if (!rules.length) { this.logRuleRefused(toolName, args, "project", "allow"); return }
     this.addToolRules(rules, "project")
   }
@@ -1218,8 +1263,9 @@ export class PermissionManager {
     args: Record<string, unknown>,
     writtenTo?: string,
   ): void {
+    const privateCommand = rule.type === "allow" && parsePattern(rule.pattern).toolNames.includes("bash")
     this.logger?.log("info", "permission_rule_added", {
-      pattern: rule.pattern,
+      ...(privateCommand ? { patternHash: argsFingerprint({ pattern: rule.pattern }) } : { pattern: rule.pattern }),
       type: rule.type,
       scope,
       writtenTo,

@@ -34,7 +34,6 @@ interface PendingApproval {
   name: string
   args: Record<string, unknown>
   allowScope: boolean
-  projectAccess: boolean
   /** One-time approvals of the same consent earlier this session. */
   repeats: number
   resolve: (choice: ApprovalChoice) => void
@@ -91,7 +90,6 @@ export function usePermissionApproval(
       ar: Record<string, unknown>,
       signal: AbortSignal | undefined,
       allowScope: boolean,
-      projectAccess: boolean,
       context?: Readonly<ApprovalContext>,
       id = "",
     ): Promise<ApprovalResponse> => {
@@ -151,7 +149,7 @@ export function usePermissionApproval(
             return "Approval session changed"
           }
           const { decision: current } = evaluate(name, ar, context)
-          if (current.decision === "ask" && (!current.allowScope || (projectAccess && current.source !== "project"))) scopeAllowed = false
+          if (current.decision === "ask" && !current.allowScope) scopeAllowed = false
           if (current.decision === "deny") {
             clear()
             settle({ approved: false, source: "policy", reason: current.reason })
@@ -165,15 +163,15 @@ export function usePermissionApproval(
           name,
           args: ar,
           allowScope,
-          projectAccess,
-          repeats: projectAccess || name === REQUEST_CAPABILITIES_TOOL ? 0 : permissionManager.priorOnceApprovals(name, ar, context),
+          repeats: name === REQUEST_CAPABILITIES_TOOL ? 0 : permissionManager.priorOnceApprovals(name, ar, context),
           grant: (request, availableTools, reviewedRules) => {
             const expired = validate()
             if (expired) return expired
-            if (!scopeAllowed || projectAccess) return "This approval only supports its displayed choices"
+            if (!scopeAllowed) return "This approval only supports its displayed choices"
             try {
               const rules = buildToolGrantRules(request, availableTools, context?.workspaceRoot ?? process.cwd(), reviewedRules)
               if (!permissionManager.grantCoversCall(rules, name, ar, context)) return "The selected authorization must cover this waiting call"
+              if (name === "bash" && request.lifetime === "project") allowProjectCommands()
               permissionManager.addToolRules(rules, request.lifetime)
               addLog("system", `Permission: ${request.lifetime} allow saved: ${rules.map(rule => rule.pattern).join(", ")}; manage in /permissions`)
               clear()
@@ -184,23 +182,24 @@ export function usePermissionApproval(
             if (validate()) return
             clear()
             // A stale or synthetic scope choice cannot extend a one-time prompt.
-            if ((!scopeAllowed || (projectAccess && choice === "always")) && choice !== "deny") choice = "once"
+            if (!scopeAllowed && choice !== "deny") choice = "once"
             try { appLogger.info("permission_user", { tool: name, choice }) } catch {}
-            if (projectAccess && choice === "forever") {
-              try { allowProjectCommands(); addLog("system", "Project access saved. Manage it in /permissions.") }
-              catch (error) {
-                addLog("error", `Could not save project access: ${String(error)}`)
-                settle(false)
-                return
-              }
-            } else if (choice === "always") {
+            if (choice === "always") {
               try {
-                permissionManager.addSessionRule(name, ar, context)
+                permissionManager.addSessionRule(name, ar, context, true)
                 addLog("system", `Permission: session allow added for ${getToolAlias(name)}`)
               } catch (error) { addLog("error", `Could not save session tool authorization: ${String(error)}. Approved this command only.`) }
             } else if (choice === "forever") {
+              if (name === "bash") {
+                try { allowProjectCommands() }
+                catch (error) {
+                  addLog("error", `Could not save project access: ${String(error)}`)
+                  settle(false)
+                  return
+                }
+              }
               try {
-                permissionManager.addProjectRule(name, ar, context)
+                permissionManager.addProjectRule(name, ar, context, true)
                 addLog("system", `Permission: project allow added for ${getToolAlias(name)} (saved to user project grants)`)
               } catch (error) { addLog("error", `Could not save project tool authorization: ${String(error)}. Approved this command only.`) }
             } else if (choice === "deny") {
@@ -246,7 +245,7 @@ export function usePermissionApproval(
         if (decision.decision === "allow") return Promise.resolve(true)
         if (decision.decision === "deny") return Promise.resolve({ approved: false, source: "policy", reason: decision.reason })
         if (decision.source === "dangerous") addLog("system", `Approval required for ${decision.reason}`)
-        return promptApproval(toolName, args, signal, decision.allowScope, decision.source === "project" && decision.allowScope, context, id)
+        return promptApproval(toolName, args, signal, decision.allowScope, context, id)
       }, signal)
     },
     [addLog, decide, promptApproval, queue],
