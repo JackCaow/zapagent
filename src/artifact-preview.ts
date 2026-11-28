@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url"
 import { promisify } from "node:util"
 import { parseHTML } from "linkedom"
 import { z } from "zod"
-import { isPathAllowed, isToolPathAllowed, resolveToolPath } from "../zapsdk/builtin-tools/filesystem.js"
+import { isPathAllowed, isToolPathAllowed, resolveToolPath, resolveToolPathCanonical } from "../zapsdk/builtin-tools/filesystem.js"
 import type { Tool } from "../zapsdk/tools/types.js"
 
 const launch = promisify(execFile)
@@ -47,7 +47,7 @@ export function artifactPreviewTool(root: string, open = openPreview): Tool {
       parameters: z.object({ path: z.string().min(1).describe("Path to the file inside the workspace") }),
       permission: "confirm",
       resolveEffects: args => ({
-        filesystem: [{ kind: "filesystem", operation: "read", paths: [resolveToolPath(String(args.path), root)] }],
+        filesystem: [{ kind: "filesystem", operation: "read", paths: [resolveToolPathCanonical(String(args.path), root)] }],
         network: [], process: [], external: [{ kind: "external", system: "artifact:preview", operation: "read" }],
         workspace: { mode: "none" }, confidence: "declared",
       }),
