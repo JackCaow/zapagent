@@ -64,7 +64,6 @@ import {
   buildMemoryQueryForRun,
   buildPerTurnAttachments,
   makeContextBuilders,
-  reviewFailedTools,
 } from "../agent/contextAttachments.js"
 import { buildRepoMapAttachment } from "../agent/repoMap.js"
 import { appendCacheableSystemSection, buildRuntimePromptToolInputs } from "../agent/systemPrompt.js"
@@ -424,9 +423,17 @@ export async function runHeadless(args: HeadlessArgs, host: HeadlessHost = {}): 
     resumedFrom,
   })
 
+  const executionBackend = resolveExecutionBackend(config.executionBackend)
+  // Without explicit Shell authorization, acceptEdits can still run local
+  // builds and checks using the broker's existing offline execution profile.
+  const offlineShell = host.disableShellNetwork === true
+    || ((host.getPermissionMode?.() ?? args.permissionMode) === "acceptEdits"
+      && !args.allowedTools?.includes("bash") && !args.dangerouslyDisableOsSandbox && !args.serviceOwner
+      && executionBackend === "local" && process.env.ZAPCODE_RESIDENT_AGENT !== "1")
   const approval = buildHeadlessApproval({
     cwd,
     get permissionMode() { return host.getPermissionMode?.() ?? args.permissionMode },
+    disableShellNetwork: offlineShell,
     onAsk: host.onAsk,
     allowedTools: args.allowedTools,
     disallowedTools: args.disallowedTools,
@@ -491,12 +498,17 @@ export async function runHeadless(args: HeadlessArgs, host: HeadlessHost = {}): 
     if (args.serviceOwner || args.dangerouslyDisableOsSandbox || process.env.ZAPCODE_RESIDENT_AGENT === "1") {
       throw new Error("Goal offline shell requires the local OS sandbox")
     }
-    executionEnvironment = createExecutionEnvironment(cwd, "required", resolveExecutionBackend(config.executionBackend), false, config.sandboxNetwork, [])
-    executionEnvironment.commandOptions.sandboxNetwork = false
-    executionEnvironment.commandOptions.restrictedNetwork = false
+    executionEnvironment = createExecutionEnvironment(cwd, "required", executionBackend, false, config.sandboxNetwork, [])
     executionEnvironment.commandOptions.workspaceOnly = true
     executionEnvironment.commandOptions.disableBackgroundTasks = true
     if (host.requireProcessSeal) executionEnvironment.broker = requireProcessSealing(executionEnvironment.broker, host.onProcessSealUnconfirmed)
+  }
+  if (offlineShell) {
+    executionEnvironment ??= createExecutionEnvironment(cwd, "required", executionBackend, config.allowUnsandboxedCommands !== false,
+      config.sandboxNetwork, config.sandboxExcludedCommands)
+    executionEnvironment.commandOptions.sandboxNetwork = false
+    executionEnvironment.commandOptions.restrictedNetwork = false
+    executionEnvironment.commandOptions.declaredNetwork = false
   }
   const { provider: llmProvider, registry, executor: baseExecutor, createRegistryForCwd, executionFacts, executionCapacity, sandboxConfined, sandboxNetworkPolicy } = buildAgentObjects(
     config,
@@ -806,7 +818,6 @@ export async function runHeadless(args: HeadlessArgs, host: HeadlessHost = {}): 
       images: host.images,
       contextPrefix,
       contextDiagnostics,
-      turnEndGuard: reviewFailedTools,
     }
     repairResult = repairSession ? await repairSession.run(args.prompt, { images: host.images, contextPrefix, contextDiagnostics }) : undefined
     const execution = repairResult ? repairResult.attempts.at(-1)

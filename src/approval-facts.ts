@@ -33,7 +33,7 @@ export function approvalFacts(name: string, args: Record<string, unknown>, conte
     editOnly: legacyEdits.has(name),
     sandboxEscape: name === "bash" && args.dangerouslyDisableSandbox === true,
     workspaceShell: name === "bash",
-    ...(legacyShells.has(name) ? { shellCommands: shellExecutionCommands(args) } : {}),
+    ...(acpKind === "execute" ? { shellCommands: null } : legacyShells.has(name) ? { shellCommands: shellExecutionCommands(args) } : {}),
   }
 }
 

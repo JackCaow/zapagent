@@ -3,6 +3,7 @@ import { executeCommandTool } from "../../builtin-tools/command.js";
 import { describe, expect, it } from "bun:test";
 import { AgentEventEmitter } from "../../agent/events.js";
 import type { LoopAgentResult, RunOptions } from "../../agent/loop.js";
+import { createRunToolExecutionHooks } from "../../agent/tool-execution-guards.js";
 import { AgentRuntime } from "../../runtime/agent-runtime.js";
 import { classifyExecution, classifyObservedAcceptance, executionExitCode } from "../../runtime/outcome.js";
 import { InMemoryRuntimeEventStore, JsonlRuntimeEventStore } from "../../runtime/event-store.js";
@@ -30,6 +31,15 @@ describe("execution and acceptance", () => {
     expect(classifyExecution({ attemptId: "a", result }).status).toBe("finished");
     expect(classifyObservedAcceptance("a", result, 1).status).toBe("not_requested");
     expect(classifyObservedAcceptance("a", { ...result, toolResults: [{ success: true, output: "written" }] }, 1)).toMatchObject({ status: "unverified", checks: [] });
+  });
+  it("ignores only host-confirmed read reuse when observing acceptance", () => {
+    const hooks = createRunToolExecutionHooks(() => {});
+    const args = { url: "https://example.com/" };
+    expect(hooks.beforeExecute!("http_fetch", args)).toBeUndefined();
+    const reuse = hooks.beforeExecute!("http_fetch", args)!;
+    expect(reuse.runtime?.suppression).toBe("duplicate");
+    expect(classifyObservedAcceptance("a", { ...result, toolResults: [reuse] }, 1).status).toBe("not_requested");
+    expect(classifyObservedAcceptance("a", { ...result, toolResults: [structuredClone(reuse)] }, 1).status).toBe("unverified");
   });
   it("prioritizes accepted cancellation over faults, blockers and budget", () => {
     const input = { attemptId: "a", result: { ...result, stopped: "budget" as const }, error: new Error("broken"), cancelled: true };

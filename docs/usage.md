@@ -209,7 +209,16 @@ by Allow, Ask, or Deny. Recently blocked shows denials from the current
 conversation, newest first, including after compaction or session restore.
 In Workspace, you can save project access, make the session read-only, or
 forget the saved decision. Saved project access lives in
-Zap's user data and is bound to the directory's identity.
+Zap's user data and is bound to the directory's identity. Locally executed
+Shell commands need an approval or a matching user command rule, including
+in Bypass. Zap can remember a literal command in the project root. Saving
+project access enables the project's saved command rules. Shell requests
+forwarded by another agent are approved one call at a time. Repository
+settings can restrict these calls. A local command approval covers the whole
+invocation, including scripts it runs, with your account's file and network access.
+Headless `acceptEdits` runs ordinary local Shell commands in the existing
+offline sandbox. Use `--allowed-tools bash` when a trusted automation needs
+the configured network access. Explicit Ask and Deny rules still apply.
 
 Claude Code and `/agent codex` show the last cached model on startup, then
 refresh it from the installed CLI in the background. Once a conversation starts,

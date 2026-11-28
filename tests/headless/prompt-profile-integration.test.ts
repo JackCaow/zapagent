@@ -49,9 +49,7 @@ it("real CLI sends the selected profile with user/project text and unchanged sch
       finally { clearTimeout(timer); }
       if (code !== 0) throw new Error(stderr + stdout);
       expect(code).toBe(0);
-      expect(requests).toHaveLength(3);
-      expect(requests[2].messages.some((message: any) => message.role === "user" && String(message.content).includes("Review the original user request"))).toBe(true);
-      expect(JSON.stringify(requests[2].messages.filter((m: any) => m.role === "tool"))).toContain("CHECK_FAILURE_SENTINEL");
+      expect(requests).toHaveLength(2);
       const system = requests[0].messages.find((m: any) => m.role === "system").content as string;
       expect(system).toContain("PREPEND_SENTINEL"); expect(system).toContain("APPEND_SENTINEL");
       expect(system).toContain("PROJECT_SENTINEL");

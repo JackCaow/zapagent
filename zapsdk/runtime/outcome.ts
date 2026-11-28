@@ -1,6 +1,7 @@
 import { ServiceReceiptSchema, type ServiceReceipt } from "../services/contracts.js";
 import { ServiceOperationObservationSchema, type ServiceOperationObservation } from "../services/contracts.js";
 import type { LoopAgentResult } from "../agent/loop.js";
+import { isHostDuplicateSuppression } from "../agent/tool-execution-guards.js";
 
 export class OutcomeProtocolError extends Error {
   constructor(readonly code: string, message: string) {
@@ -84,6 +85,7 @@ function observeAcceptance(attemptId: string, result: LoopAgentResult, now: numb
   let mutated = false;
   const checks: AcceptanceCheckResult[] = [];
   for (const [index, tool] of result.toolResults.entries()) {
+    if (isHostDuplicateSuppression(tool)) continue;
     const runtime = tool.runtime;
     const effects = runtime?.effects;
     mutated ||= !effects || Boolean(runtime?.writeEvidence?.paths.length) || Boolean(effects && (

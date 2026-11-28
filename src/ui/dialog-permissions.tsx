@@ -68,7 +68,7 @@ export function PermissionsDialog({ cwd, remembered, readOnly, logs, availableTo
   const filter = filters[filterIndex]
 
   const workspaceOptions: Array<{ id: WorkspaceChoice; text: string }> = [
-    { id: "project", text: "Always allow work in this project" },
+    { id: "project", text: "Remember project access" },
     { id: "analyze", text: "Keep this session read-only" },
   ]
   if (remembered) workspaceOptions.push({ id: "revoke", text: "Forget project access" })
@@ -183,7 +183,7 @@ export function PermissionsDialog({ cwd, remembered, readOnly, logs, availableTo
         <Box flexDirection="column" marginTop={1}>
           {workspaceOptions.map((option, i) => <Box key={option.id}>{row(option.text, i === index)}</Box>)}
         </Box>
-        {workspaceOptions[index].id === "project" && <Text color={c.text.faint}>Commands run with your account’s permissions.</Text>}
+        {workspaceOptions[index].id === "project" && <Text color={c.text.faint}>Shell approvals use separate command rules.</Text>}
       </>}
       {tab === "Rules" && <>
         <Text color={c.text.muted}>{`${filterLabels[filterIndex]} · ${filteredRules.length}`}</Text>

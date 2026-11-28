@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, realpathSync, renameSync, rmSync, symlinkSync, 
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { WorkspaceAccess } from "../src/workspace-access.js"
-import { getProjectAuthorizationSettingsPath, PermissionManager } from "../src/permissions.js"
+import { getProjectAuthorizationSettingsPath, getProjectSettingsPath, PermissionManager, savePermissionSettings } from "../src/permissions.js"
 import { evaluateApprovalPolicy } from "../src/permission-policy.js"
 import { parseCommand } from "../src/commands.js"
 
@@ -120,10 +120,34 @@ it("revokes active and future work and asks about an edit beyond the assigned wo
   }
   const publishing = evaluateApprovalPolicy(manager, "bash", { command: "git status && git push origin topic" }, { mode, cwd: project })
   expect(publishing.decision).toBe("ask")
-  expect(publishing.allowScope).toBe(false)
   access.choose("revoke", "a")
   expect(access.mode("default", "a")).toBe("plan")
   expect(new WorkspaceAccess(project).remembered()).toBe(false)
+})
+
+it("reuses user command rules without letting the checkout or project access authorize a shell", () => {
+  const manager = new PermissionManager(project)
+  const context = { cwd: project, workspaceRoot: project, shell: { syntax: "posix", filesystem: "host" } } as const
+  savePermissionSettings(getProjectSettingsPath(project), { rules: [{ type: "allow", pattern: "Bash(*)" }] })
+  const decide = (command: string, hostCommands: "trusted" | "untrusted" = "trusted", mode: "acceptEdits" | "bypassPermissions" = "acceptEdits") =>
+    evaluateApprovalPolicy(manager, "bash", { command }, { mode, cwd: project, context, hostCommands }).decision
+  expect(decide("sh ./publish.sh")).toBe("ask")
+  expect(decide("sh ./publish.sh", "trusted", "bypassPermissions")).toBe("ask")
+  manager.addProjectRule("bash", { command: "sh ./check.sh" }, context, true)
+  expect(decide("sh ./check.sh")).toBe("allow")
+  expect(decide("sh ./check.sh && sh ./publish.sh")).toBe("ask")
+  expect(decide("sh ./check.sh other-script")).toBe("ask")
+  expect(decide("sh ./check.sh", "untrusted")).toBe("ask")
+  manager.addToolRules([{ type: "allow", pattern: "bash(printf fixture)" }], "project")
+  expect(decide("printf fixture")).toBe("allow")
+  const forwarded = evaluateApprovalPolicy(manager, "bash", { command: "printf fixture" }, {
+    mode: "acceptEdits", cwd: project, hostCommands: "trusted", context: { ...context, authorization: {
+      readOnly: false, editOnly: false, sandboxEscape: false, workspaceShell: false, shellCommands: ["printf fixture"],
+    } },
+  })
+  expect(forwarded).toMatchObject({ decision: "ask", allowScope: false })
+  savePermissionSettings(getProjectSettingsPath(project), { rules: [{ type: "deny", pattern: "Bash(sh ./check.sh:*)" }] })
+  expect(decide("sh ./check.sh")).toBe("deny")
 })
 
 it("stops a project-authorized task when another host forgets the project", async () => {

@@ -8,7 +8,7 @@ import { normalizeAssistantText } from "./output-text.js";
 import { earliestDeadlineAt } from "../execution/deadline.js";
 import { toolOutputTool } from "../builtin-tools/tool-output.js";
 import { assembleSubagentTool } from "./subagent-assembly.js";
-import { primaryArgSig, stepSignature, createRunToolExecutionHooks, duplicateQueryKey, isDuplicateQuery, isRepeatFriendlyStep, isLiveTaskWait, progressPollSignature } from "./tool-execution-guards.js";
+import { primaryArgSig, stepSignature, createRunToolExecutionHooks, duplicateQueryKey, isDuplicateQuery, isRepeatFriendlyStep, isLiveTaskWait } from "./tool-execution-guards.js";
 import type { LLMProvider, LLMCallOptions } from "../core/llm.js";
 import { hasMeaningfulOutput } from "../core/provider-request.js";
 import { assertProviderRequestAllowed } from "../core/provider-deadline.js";
@@ -1023,7 +1023,6 @@ export class LoopAgent {
     // count as duplicates (which is the case we want to catch).
     let lastStepSignature: string | null = null;
     let repeatStreak = 0;
-    let lastProgressPoll: string | undefined;
     const REPEAT_LIMIT = 5;
     const observeProgress = (calls: ToolCallRequest[], results: Map<string, ToolResult>) => {
       const observation = progressTracker.observeRound(calls.map((call) => {
@@ -1504,20 +1503,10 @@ export class LoopAgent {
           // Steps composed entirely of repeat-friendly tools (edit_file,
           // multi_edit) reset the tracker — those tools are
           // designed for successive edits to the same file.
-          const poll = progressPollSignature(toolCalls, results);
           if (isRepeatFriendlyStep(toolCalls) || isLiveTaskWait(toolCalls, results)) {
             lastStepSignature = null;
             repeatStreak = 0;
-            lastProgressPoll = undefined;
-          } else if (poll !== undefined && poll !== lastProgressPoll) {
-            // The same poll command observed new output (for example a build
-            // log advanced). Count that as real progress; do not turn it into
-            // a max_repeat abort merely because its command string is stable.
-            lastStepSignature = null;
-            repeatStreak = 0;
-            lastProgressPoll = poll;
           } else {
-            if (poll === undefined) lastProgressPoll = undefined;
             const sig = stepSignature(toolCalls);
             if (sig === lastStepSignature) {
               repeatStreak++;

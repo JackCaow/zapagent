@@ -46,7 +46,6 @@ interface Props {
    *  null (no pattern can be inferred), falls back to the legacy generic
    *  wording. */
   rulePreview?: string | null
-  projectAccess?: boolean
   allowScope?: boolean
   /** One-time approvals of the same consent earlier this session. */
   repeats?: number
@@ -62,7 +61,7 @@ interface Option {
   label: string
 }
 
-export function ApprovalBar({ toolName, args, onChoose, rulePreview, projectAccess, allowScope = true, repeats = 0, availableTools = [], cwd, workspaceRoot, requester, onGrant }: Props) {
+export function ApprovalBar({ toolName, args, onChoose, rulePreview, allowScope = true, repeats = 0, availableTools = [], cwd, workspaceRoot, requester, onGrant }: Props) {
   useHideNativeCursor()
   // Three accept tiers ("once" / session-scoped "always" / persistent
   // "forever") + deny. Both persistent consent and ordinary tool grants
@@ -75,7 +74,7 @@ export function ApprovalBar({ toolName, args, onChoose, rulePreview, projectAcce
     ? rulePreview === toolName ? `${getToolAlias(toolName)} (entire tool)` : `${rulePreview}`
     : `${getToolAlias(toolName)} commands`)
   const request = toolName === REQUEST_CAPABILITIES_TOOL
-  const canCustomize = allowScope && !projectAccess && !request && toolName !== "delegate_agent" && toolName !== "acp_agent" && availableTools.includes(toolName) && !!onGrant
+  const canCustomize = allowScope && !request && toolName !== "bash" && toolName !== "delegate_agent" && toolName !== "acp_agent" && availableTools.includes(toolName) && !!onGrant
   const directory = canCustomize ? suggestToolGrantDirectory(toolName, args, cwd) : undefined
   // A capability request is only worth something when it is remembered.
   const options: Option[] = request && allowScope ? [
@@ -88,11 +87,7 @@ export function ApprovalBar({ toolName, args, onChoose, rulePreview, projectAcce
         { value: "once", label: "Yes, this once" },
         { value: "deny", label: "No" },
       ]
-    : projectAccess ? [
-        { value: "once", label: "Yes, this once" },
-        { value: "forever", label: "Yes, allow commands in this project" },
-        { value: "deny", label: "No" },
-      ] : [
+    : [
         { value: "once",    label: "Yes" },
         { value: "always",  label: `Yes, and don't ask again for ${scopeText} (this session)` },
         { value: "forever", label: `Yes, and don't ask again for ${scopeText} (this project)` },
@@ -132,7 +127,7 @@ export function ApprovalBar({ toolName, args, onChoose, rulePreview, projectAcce
         Array.isArray(args[field]) && args[field].length > 0
           ? <Text key={field} color={c.warning}>{label}: {JSON.stringify(args[field])}</Text> : null)}
       {request && typeof args.reason === "string" && <Text color={c.text.secondary} wrap="truncate-end">{`Reason: ${args.reason.replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ")}`}</Text>}
-      {projectAccess && <Text color={c.text.secondary}>Commands run with your account’s permissions.</Text>}
+      {toolName === "bash" && <Text color={c.text.secondary}>Commands run with your account’s permissions.</Text>}
       <Text color={c.warning} bold>{requester ? `Approve request from ${requester}?` : "Approve?"}</Text>
       <Box flexDirection="column">
         {options.map((opt, i) => {
@@ -147,7 +142,7 @@ export function ApprovalBar({ toolName, args, onChoose, rulePreview, projectAcce
           )
         })}
       </Box>
-      {allowScope && !projectAccess && !request && repeats >= 2 && <Text color={c.text.muted}>{`Approved ${repeats} times this session; 2 stops asking for the rest of it`}</Text>}
+      {allowScope && !request && repeats >= 2 && <Text color={c.text.muted}>{`Approved ${repeats} times this session; 2 stops asking for the rest of it`}</Text>}
       {canCustomize && <Text color={c.text.muted}>g customize scope / select tools</Text>}
       {directory && <Text color={c.text.muted}>d authorize folder / select tools: {directory}</Text>}
     </Box>

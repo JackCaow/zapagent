@@ -15,12 +15,18 @@ ptyTest("Auto works across turns, with project access and revocation managed in 
   const { workspaceTempRoot } = await workspaceContext(cwd)
   const todoExposure = new Map<string, { tool: boolean; instructions: boolean }>()
   let readOnlyPlanTool = false
+  let declinedRequests = 0
+  let published = 0
   let escapeParameter = false
   let releaseChild!: () => void
   const childMayContinue = new Promise<void>(resolve => { releaseChild = resolve })
   let childWaiting = false
   const childRequests: unknown[] = []
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    if (new URL(request.url).pathname === "/artifact") {
+      if (request.method === "POST" && await request.text() === "fixture") published++
+      return new Response("fixture accepted")
+    }
     if (request.method === "GET") return Response.json({ data: [{ id: "fixture" }] })
     const body = await request.json() as {
       messages: Array<{ role: string; content: unknown }>
@@ -28,11 +34,12 @@ ptyTest("Auto works across turns, with project access and revocation managed in 
     }
     const task = body.messages.filter(message => message.role === "user").reverse()
       .map(message => typeof message.content === "string" ? message.content : JSON.stringify(message.content ?? ""))
-      .find(text => /<task-notification|LOCAL_SHELL|MANUAL_SHELL|BACKGROUND_AUTO|REVOKE_BACKGROUND|START_REVOCATION_CHILD|REVOCATION_CHILD_PROBE|WRITE_/.test(text)) ?? ""
+      .find(text => /<task-notification|LOCAL_SHELL|OUTBOUND_SHELL|MANUAL_SHELL|BACKGROUND_AUTO|REVOKE_BACKGROUND|START_REVOCATION_CHILD|REVOCATION_CHILD_PROBE|WRITE_/.test(text)) ?? ""
     const completion = task.includes("<task-notification")
     const background = !completion && task.includes("BACKGROUND_AUTO")
     const name = completion ? task.includes("REVOKE_BACKGROUND") ? "revoked-continuation" : "continued"
       : task.includes("LOCAL_SHELL") ? "shell"
+      : task.includes("OUTBOUND_SHELL") ? "outbound"
       : task.includes("MANUAL_SHELL") ? "manual-shell"
       : background ? "background"
       : task.includes("REVOKE_BACKGROUND") ? "long-background"
@@ -47,6 +54,7 @@ ptyTest("Auto works across turns, with project access and revocation managed in 
     }
     escapeParameter ||= !!body.tools?.some(tool => tool.function.name === "bash" && JSON.stringify(tool.function.parameters ?? {}).includes("dangerouslyDisableSandbox"))
     if (name === "five") readOnlyPlanTool ||= !!body.tools?.some(tool => /^(enter|exit)_plan_mode$/.test(tool.function.name))
+    if (name === "declined") declinedRequests++
     const lastTool = body.messages.findLast(message => message.role === "tool")
     const childFollowUp = name === "child" && !!lastTool
     if (name === "child") childRequests.push(lastTool?.content)
@@ -64,6 +72,7 @@ ptyTest("Auto works across turns, with project access and revocation managed in 
       ? { name: "agent", arguments: JSON.stringify({ task: "REVOCATION_CHILD_PROBE", agent_type: "general" }) }
       : name === "child"
       ? { name: "write_file", arguments: JSON.stringify({ path: childFollowUp ? "child-late" : "child-armed", content: "fixture" }) }
+      : name === "outbound" ? { name: "bash", arguments: JSON.stringify({ command: "sh ./fixture.sh" }) }
       : name === "shell" || name === "manual-shell"
       ? { name: "bash", arguments: JSON.stringify({ command: `printf local > ${name}-proof` }) }
       : background
@@ -74,6 +83,7 @@ ptyTest("Auto works across turns, with project access and revocation managed in 
     const event = (delta: unknown, finish_reason: string | null) => `data: ${JSON.stringify({ choices: [{ index: 0, delta, finish_reason }] })}\n\n`
     return new Response(event(delta, null) + event({}, call ? "tool_calls" : "stop") + "data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } })
   } })
+  writeFileSync(join(cwd, "fixture.sh"), `curl -fsS --data fixture http://127.0.0.1:${server.port}/artifact\n`)
   writeFileAtomic(join(root, "config.json"), JSON.stringify({
     providers: [{ id: "fixture", name: "HarnessFixture", baseURL: `http://127.0.0.1:${server.port}/v1`, apiKey: "test-only", models: ["fixture"], protocol: "openai", contextWindow: 128000, contextWindowMode: "manual" }],
     active: { providerId: "fixture", model: "fixture" }, maxTokens: 1024, maxSteps: 6, mcpServers: [],
@@ -136,20 +146,38 @@ ptyTest("Auto works across turns, with project access and revocation managed in 
     await submit("WRITE_one")
     await visible("FINISHED_one"); expect(readFileSync(join(cwd, "one"), "utf8")).toContain("one")
     await submit("WRITE_two"); await visible("FINISHED_two"); expect(existsSync(join(cwd, "two"))).toBe(true)
+    expect(tmux("capture-pane", "-p", "-S", "-200", "-t", "work")).not.toContain("结果尚未经过外部验收")
     await submit("LOCAL_SHELL")
-    await visible("allow commands in this project")
+    await visible("this project")
     await visible("Commands run with your account")
-    await key("2")
+    await key("3")
     await visible("FINISHED_shell")
     expect(readFileSync(join(cwd, "shell-proof"), "utf8")).toBe("local")
+    writeFileSync(join(cwd, "shell-proof"), "stale")
+    await submit("LOCAL_SHELL")
+    for (let i = 0; i < 80 && readFileSync(join(cwd, "shell-proof"), "utf8") !== "local"; i++) {
+      expect(tmux("capture-pane", "-p", "-t", "work")).not.toContain("Approve?")
+      await sleep(75)
+    }
+    expect(readFileSync(join(cwd, "shell-proof"), "utf8")).toBe("local")
     expect(escapeParameter).toBe(false)
-    await submit("BACKGROUND_AUTO"); await visible("FINISHED_continued"); expect(existsSync(join(cwd, "continued"))).toBe(true)
+    await submit("OUTBOUND_SHELL"); await visible("Approve?")
+    expect(published).toBe(0)
+    await key("Escape"); await visible("FINISHED_outbound")
+    expect(published).toBe(0)
+    await submit("OUTBOUND_SHELL"); await visible("Approve?")
+    await key("1")
+    for (let i = 0; i < 80 && published === 0; i++) await sleep(75)
+    expect(published).toBe(1)
+    await visible("FINISHED_outbound")
+    await submit("BACKGROUND_AUTO"); await visible("Approve?"); await key("1")
+    await visible("FINISHED_continued"); expect(existsSync(join(cwd, "continued"))).toBe(true)
     for (const name of ["one", "two", "background", "continued"]) {
       expect(todoExposure.get(name)).toEqual({ tool: false, instructions: false })
     }
     await submit("/permissions"); await visible("[Workspace]")
     await visible("Project access saved")
-    await visible("Always allow work in this project"); await key("Enter")
+    await visible("Remember project access"); await key("Enter")
     await key("BTab"); await visible("Manual · Shift+Tab")
     await submit("WRITE_manual"); await visible("Approve?")
     expect(existsSync(join(cwd, "manual"))).toBe(false)
@@ -167,13 +195,14 @@ ptyTest("Auto works across turns, with project access and revocation managed in 
     await visible("Write(declined)")
     if (!tmux("capture-pane", "-p", "-t", "work").includes("Declined by you")) await key("Down")
     await visible("Declined by you")
+    expect(declinedRequests).toBe(2)
     await key("Escape")
     await key("BTab"); await visible("Auto · Shift+Tab")
     await submit("WRITE_three")
     await visible("FINISHED_three"); expect(existsSync(join(cwd, "three"))).toBe(true)
     expect(todoExposure.get("three")).toEqual({ tool: false, instructions: false })
     await submit("WRITE_four"); await visible("FINISHED_four"); expect(existsSync(join(cwd, "four"))).toBe(true)
-    await submit("REVOKE_BACKGROUND"); await visible("FINISHED_long-background")
+    await submit("REVOKE_BACKGROUND"); await visible("Approve?"); await key("1"); await visible("FINISHED_long-background")
     for (let i = 0; i < 120 && !existsSync(join(cwd, "background-armed")); i++) await sleep(75)
     expect(existsSync(join(cwd, "background-armed"))).toBe(true)
     await submit("START_REVOCATION_CHILD")
