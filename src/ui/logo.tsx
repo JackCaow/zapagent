@@ -26,7 +26,7 @@ export const SHORTCUTS: Array<[string, string]> = [
 export const SLASH_INTRO: Array<[string, string]> = [
   ["/connect",  "set up provider & API key"],
   ["/model",    "switch model"],
-  ["/mode",     "permission mode (plan / acceptEdits / bypass)"],
+  ["/mode",     "permission mode (Auto / Manual / Bypass)"],
   ["/sessions", "browse saved sessions"],
   ["/compact",  "compress conversation context"],
   ["/help",     "full command reference"],

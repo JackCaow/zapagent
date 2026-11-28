@@ -5,7 +5,7 @@ import { join } from "node:path"
 import { describeCapabilityPatterns, matchCapabilityScope, parseCapabilityPattern } from "../src/capabilities.js"
 import { buildHeadlessApproval } from "../src/headless/approval.js"
 import { evaluateApprovalPolicy } from "../src/permission-policy.js"
-import { getProjectSettingsPath, inferInvocationRules, PermissionManager, savePermissionSettings, type PermissionRule } from "../src/permissions.js"
+import { getProjectAuthorizationSettingsPath, getProjectSettingsPath, inferInvocationRules, PermissionManager, savePermissionSettings, type PermissionRule } from "../src/permissions.js"
 import { httpFetchTool, httpRequestTool } from "../zapsdk/builtin-tools/http.js"
 import { resolveToolApprovalFacts, resolveToolCapabilities } from "../zapsdk/tools/approval.js"
 import { emptyToolEffects, type ToolEffects } from "../zapsdk/tools/effects.js"
@@ -40,6 +40,27 @@ const decide = (manager: PermissionManager, name: string, args: Record<string, u
 const project = (rules: PermissionRule[]) => savePermissionSettings(getProjectSettingsPath(cwd), { rules })
 
 describe("capabilities derived from effects", () => {
+  it("limits interactive Bypass to granted scope and keeps explicit Ask effective without prompting", () => {
+    const manager = new PermissionManager(cwd)
+    const args = { url: "https://api.example.com/upload", method: "POST" }
+    const context = contextFor(httpRequestTool().definition, args)
+    const options = { cwd, mode: "bypassPermissions", hostCommands: "trusted", context } as const
+    const evaluate = () => evaluateApprovalPolicy(manager, "http_request", args, options)
+    const rule: PermissionRule = { type: "allow", pattern: "http_request" }
+
+    expect(evaluate()).toMatchObject({ decision: "deny", allowScope: false })
+    project([rule])
+    expect(evaluate().decision).toBe("deny")
+    savePermissionSettings(getProjectAuthorizationSettingsPath(cwd), { rules: [rule] })
+    expect(evaluate().decision).toBe("allow")
+    project([{ ...rule, type: "ask" }])
+    expect(evaluate()).toMatchObject({ decision: "deny", allowScope: false, source: "rule" })
+    project([{ ...rule, type: "deny" }])
+    expect(evaluate()).toMatchObject({ decision: "deny", allowScope: false, source: "rule" })
+    const outside = evaluateApprovalPolicy(manager, "read_file", { path: join(root, "private.txt") }, { ...options, context: undefined })
+    expect(outside).toMatchObject({ decision: "deny", allowScope: false })
+  })
+
   it("does not convert remembered workspace access into consent for a shell call", () => {
     const manager = new PermissionManager(cwd)
     const args = { command: "fixture" }

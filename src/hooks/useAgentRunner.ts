@@ -653,6 +653,7 @@ export function useAgentRunner({
         if (!remoteSpec) throw new Error(`Agent ${agentId} is unavailable. ${agentInstallHint(agentId)}`)
         if (invocation?.goalTurn) throw new Error("/goal runs on zap's own model; /agent zap switches back")
         if (systemPrompt) throw new Error("This command runs on zap's own model; /agent zap switches back")
+        const shell = workspaceRun ? objects.registry.get("bash") : undefined
         completedResult = await runRemoteTurn({
           spec: remoteSpec, nativeClaude, setRemoteContext, cwd, conversation, currentConfig: turnConfig, controller,
           onModel: identity => {
@@ -661,6 +662,11 @@ export function useAgentRunner({
             })
           },
           approve: workspaceRun?.bindApproval(rootExecutor.onApproval),
+          previewArtifact: workspaceRun ? (path, signal) => rootExecutor.execute("preview_artifact", { path }, signal) : undefined,
+          workspaceShell: shell && workspaceRun ? {
+            definition: shell.definition,
+            execute: (args, signal) => rootExecutor.execute("bash", args, signal, { sessionId: workspaceRun.actor.id }),
+          } : undefined,
           createPreview: () => {
             const next = createStreamingPreview({ addLog, setStreamingText, setIsStreaming, setThinkingText, setIsThinking, getIsFrozen: getIsFrozen ?? (() => false) })
             registerStaticFlushCallback?.(() => next.onStaticFlushed())

@@ -87,6 +87,7 @@ abstract class CommandWrappingSandbox implements OsSandbox {
       protectedPaths: string[];
       networkAllowed: boolean;
       proxyPort?: number;
+      proxyOnly?: boolean;
       tempDir: string;
     },
   ): { executable: string; args: string[]; release?: () => void };
@@ -158,12 +159,13 @@ abstract class CommandWrappingSandbox implements OsSandbox {
           protectedPaths,
           networkAllowed,
           proxyPort: proxy?.port,
+          proxyOnly: proxy?.proxyOnly,
           tempDir: canonicalPath(tempDir),
         });
         let released = false;
         return {
           ...wrapped,
-          env: sandboxEnvironment(tempDir, options, this.trustedEnvironmentNames, proxy?.url, runtimeDirectory, runtimeTemp),
+          env: sandboxEnvironment(tempDir, options, this.trustedEnvironmentNames, proxy, runtimeDirectory, runtimeTemp),
           networkDenials: () => [...(proxy?.blockedHosts() ?? [])].map(([host, reason]) => ({ host, reason })),
           release: () => {
             if (released) return;
@@ -240,6 +242,7 @@ class MacOsSeatbeltSandbox extends CommandWrappingSandbox {
       protectedPaths: string[];
       networkAllowed: boolean;
       proxyPort?: number;
+      proxyOnly?: boolean;
       tempDir: string;
     },
   ): { executable: string; args: string[] } {
@@ -275,7 +278,9 @@ class MacOsSeatbeltSandbox extends CommandWrappingSandbox {
       // With a proxy the command may only dial loopback (the proxy and its own dev servers);
       // a tool that ignores the proxy settings cannot reach anything else.
       input.networkAllowed && input.proxyPort !== undefined
-        ? `(allow network-outbound (remote ip "localhost:*")) (allow network-bind (local ip "localhost:*")) (allow network-inbound (local ip "localhost:*"))`
+        ? input.proxyOnly
+          ? `(allow network-outbound (remote ip "localhost:${input.proxyPort}"))`
+          : `(allow network-outbound (remote ip "localhost:*")) (allow network-bind (local ip "localhost:*")) (allow network-inbound (local ip "localhost:*"))`
         : input.networkAllowed ? "(allow network*)" : "",
     ].filter(Boolean).join(" ");
     return {
@@ -525,7 +530,7 @@ function sandboxEnvironment(
   tempDir: string,
   options: SandboxCommandOptions,
   trustedEnvironmentNames: string[] = [],
-  proxyUrl?: string,
+  proxy?: NetworkProxy,
   runtimeDirectory?: string,
   runtimeTemp?: string,
 ): NodeJS.ProcessEnv {
@@ -569,9 +574,9 @@ function sandboxEnvironment(
   // zsh uses TMPPREFIX rather than TMPDIR for heredoc temporary files.
   env.TMPPREFIX = join(env.TMPDIR!, "zsh");
   env.GIT_CONFIG_GLOBAL = "/dev/null";
-  if (proxyUrl) {
-    for (const name of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]) env[name] = proxyUrl;
-    env.NO_PROXY = env.no_proxy = "localhost,127.0.0.1,::1";
+  if (proxy) {
+    for (const name of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]) env[name] = proxy.url;
+    env.NO_PROXY = env.no_proxy = proxy.proxyOnly ? "" : "localhost,127.0.0.1,::1";
     env.NODE_USE_ENV_PROXY = "1";
     const preload = join(tempDir, "node-proxy.cjs");
     writeFileSync(preload, NODE_PROXY_PRELOAD, { mode: 0o600 });

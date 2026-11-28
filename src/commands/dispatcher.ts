@@ -472,7 +472,7 @@ export function dispatchSlashCommand(
         return true
       }
       deps.updateConfig({ ...deps.configRef.current, permissionMode: v })
-      deps.addToast(v === "auto" ? "Auto is on" : v === "default" ? "Manual is on" : "Bypass is on")
+      deps.addToast(v === "auto" ? "Auto is on" : v === "default" ? "Manual is on" : "Bypass is on for this session. /permissions shows granted access.")
       return true
     }
 

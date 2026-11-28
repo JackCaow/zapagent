@@ -672,7 +672,7 @@ function mergeProjectMCPJson(base: AppConfig): AppConfig {
 }
 
 export function saveAppConfig(configPath: string, config: AppConfig): void {
-  const { activeAgent: _sessionOnly, ...persisted } = config
+  const { activeAgent: _sessionAgent, permissionMode: _sessionMode, ...persisted } = config
   writeFileAtomic(configPath, JSON.stringify(persisted, null, 2) + "\n", { mode: 0o600 })
 }
 

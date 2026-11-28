@@ -28,7 +28,7 @@ interface DialogProps {
 const MODES: { id: PermissionMode; label: string; meta: string }[] = [
   { id: "auto",              label: "Auto",               meta: "work in this project, ask when needed" },
   { id: "default",           label: "Manual",             meta: "ask before edits and commands" },
-  { id: "bypassPermissions", label: "Bypass",             meta: "skip routine approvals" },
+  { id: "bypassPermissions", label: "Bypass",             meta: "run within granted access, block requests that need approval" },
 ]
 
 export function ModeDialog({ config, onCommit, onCancel }: DialogProps) {

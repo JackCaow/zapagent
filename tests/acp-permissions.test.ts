@@ -136,7 +136,7 @@ describe("ACP agent permission requests", () => {
     const unmappedShell = permissionTarget("codex", request({ kind: "execute", title: "Run task" }) as never, new AcpWorkspace(cwd))
     expect(evaluateApprovalPolicy(manager, unmappedShell.name, unmappedShell.args,
       { cwd, mode: "bypassPermissions", hostCommands: "trusted", context: unmappedShell.context }))
-      .toMatchObject({ decision: "ask", allowScope: false, category: "shell" })
+      .toMatchObject({ decision: "deny", allowScope: false, category: "shell" })
     const decision = evaluateApprovalPolicy(manager, "acp_agy_edit", { title: "x", paths: [cwd] }, { cwd, mode: "default" })
     expect(decision).toMatchObject({ decision: "ask", allowScope: false })
     expect(inferPattern("acp_agy_edit", { title: "x" }, cwd)).toBeNull()

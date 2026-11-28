@@ -93,12 +93,13 @@ macDescribe("macOS Seatbelt confines a command to the proxy", () => {
   afterAll(() => { proxy.close(); origin.close(); rmSync(root, { recursive: true, force: true }) })
 
   // Async: the proxy lives in this process, so a blocking spawn would starve it.
-  async function run(command: string): Promise<{ stdout: string; status: number | null }> {
-    const sandbox = createPlatformSandbox({ networkProxy: proxy, tempRoot: join(root, "tmp") })
+  async function run(command: string, networkProxy = proxy, declaredNetworkDomains?: string[]): Promise<{ stdout: string; status: number | null }> {
+    const sandbox = createPlatformSandbox({ networkProxy, tempRoot: join(root, "tmp") })
     const context = sandbox.createContext({
       executionId: "t", workspace: { root, mode: "root-integration" } as never,
       effects: { filesystem: [], network: [], process: [], external: [], workspace: { mode: "root-integration" }, confidence: "declared" } as never,
       grant: { filesystem: { read: [root], write: [root] }, network: { destinations: ["*"], methods: [] } } as never,
+      declaredNetworkDomains,
     })
     const prepared = context.prepareShell(command, { cwd: root })
     try {
@@ -119,6 +120,18 @@ macDescribe("macOS Seatbelt confines a command to the proxy", () => {
   it("gets 403 for a host that is not allowed", async () => {
     const r = await run("/usr/bin/curl -s --max-time 8 -o /dev/null -w '%{http_code}' http://attacker.example/")
     expect(r.stdout).toBe("403")
+  })
+
+  it("admits a granted loopback host only through its command-owned proxy", async () => {
+    const scoped = new NetworkProxy(() => ({ allowedDomains: [], proxyOnly: true }))
+    try {
+      const url = `http://127.0.0.1:${originPort}/`
+      const curl = "/usr/bin/curl --max-time 5 -fsS"
+      expect((await run(`${curl} ${url}`, scoped)).status).toBe(22)
+      expect((await run(`${curl} ${url}`, scoped, ["127.0.0.1"])).stdout).toBe("origin-ok")
+      expect((await run(`${curl} --noproxy '*' ${url}`, scoped, ["127.0.0.1"])).status).toBe(7)
+      expect((await run(`${curl} ${url}`, scoped)).status).toBe(22)
+    } finally { scoped.close() }
   })
 
   it("cannot dial an external host directly when the proxy settings are ignored", async () => {

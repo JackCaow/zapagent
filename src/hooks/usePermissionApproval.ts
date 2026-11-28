@@ -29,6 +29,7 @@ function permissionAction(name: string, args: Record<string, unknown>): string {
 }
 
 interface PendingApproval {
+  scopedShell: boolean
   id: string
   context?: Readonly<ApprovalContext>
   name: string
@@ -78,8 +79,9 @@ export function usePermissionApproval(
       mode,
       cwd: process.cwd(),
       context,
+      workspaceScopedShell: true,
       hostCommands: configRef.current.allowUnsandboxedCommands === false ? "disabled"
-        : name === "bash" && access.canRunHostCommands(getCurrentSessionId(), run) ? "trusted" : "untrusted",
+        : access.canRunHostCommands(getCurrentSessionId(), run) ? "trusted" : "untrusted",
     })
     return { mode, decision }
   }, [access, configRef, effectiveMode])
@@ -95,6 +97,7 @@ export function usePermissionApproval(
     ): Promise<ApprovalResponse> => {
       const sessionId = getCurrentSessionId()
       if (signal?.aborted) return false
+      const scopedShell = !!context?.authorization && permissionManager.isConfinedWorkspaceShell(context.authorization)
       // For edit/create tools, push a scrollback "approval" log carrying the
       // proposed diff *before* showing the live ApprovalBar. The entry is
       // finalized at addLog time (no replaceLog) so it commits to Static
@@ -159,6 +162,7 @@ export function usePermissionApproval(
         }
         setPendingApproval({
           id,
+          scopedShell,
           context,
           name,
           args: ar,
@@ -186,7 +190,7 @@ export function usePermissionApproval(
             try { appLogger.info("permission_user", { tool: name, choice }) } catch {}
             if (choice === "always") {
               try {
-                permissionManager.addSessionRule(name, ar, context, true)
+                permissionManager.addSessionRule(name, ar, context, !scopedShell)
                 addLog("system", `Permission: session allow added for ${getToolAlias(name)}`)
               } catch (error) { addLog("error", `Could not save session tool authorization: ${String(error)}. Approved this command only.`) }
             } else if (choice === "forever") {
@@ -199,7 +203,7 @@ export function usePermissionApproval(
                 }
               }
               try {
-                permissionManager.addProjectRule(name, ar, context, true)
+                permissionManager.addProjectRule(name, ar, context, !scopedShell)
                 addLog("system", `Permission: project allow added for ${getToolAlias(name)} (saved to user project grants)`)
               } catch (error) { addLog("error", `Could not save project tool authorization: ${String(error)}. Approved this command only.`) }
             } else if (choice === "deny") {

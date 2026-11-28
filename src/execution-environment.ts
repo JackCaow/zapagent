@@ -118,8 +118,7 @@ function sandboxNetworkPolicy(config: SandboxNetworkConfig | undefined): Network
 
 /** Each command owns a proxy with a policy snapshot, including subagents.
  * Configuration changes cannot close a running background command's proxy. */
-function networkProxyFor(config: SandboxNetworkConfig | undefined): NetworkProxy | undefined {
-  const policy = sandboxNetworkPolicy(config)
+function networkProxyFor(policy: NetworkPolicy | undefined): NetworkProxy | undefined {
   // Initialization failure must not silently turn an allowlist into open egress.
   return policy ? new NetworkProxy(() => policy) : undefined
 }
@@ -134,9 +133,11 @@ export function createExecutionEnvironment(
   /** Command patterns that always run outside the host sandbox. */
   sandboxExcludedCommands?: string[],
   serviceOwner?: AuthorizedServiceBackend,
+  options?: { workspaceScoped: true },
 ): ExecutionEnvironment {
   const runtime = resolveRuntime(cwd, backend)
   const { resident, cloud, installation } = runtime
+  const workspaceScoped = options?.workspaceScoped === true
   if (serviceOwner && (backend !== "local" || resident || cloud || installation || sandboxMode !== "required" || allowUnsandboxed)) {
     throw new Error("Local service owner requires the selected local required sandbox with escapes disabled")
   }
@@ -145,14 +146,17 @@ export function createExecutionEnvironment(
     const network = open ? { mode: "open" as const } : { mode: "allowlist" as const, allowedDomains: [...DEFAULT_ALLOWED_DOMAINS, ...(sandboxNetwork?.allowedDomains ?? [])], deniedDomains: sandboxNetwork?.deniedDomains ?? [] }
     if (serviceOwner.capabilities.networkPolicyDigest !== localServiceOwnerNetworkPolicyDigest(network)) throw new Error("Service owner network policy differs from selected Host policy")
   }
+  const proxyPolicy: NetworkPolicy | undefined = workspaceScoped
+    ? process.platform === "darwin" ? { allowedDomains: [], deniedDomains: sandboxNetwork?.deniedDomains, proxyOnly: true } : undefined
+    : sandboxNetworkPolicy(sandboxNetwork)
   const local = new DefaultExecutionBroker({
     services: serviceOwner,
     sandbox: sandboxMode === "disabled" ? undefined : createPlatformSandbox({
       rootWorkspaceGitWrites: true,
       workspaceStateRoot: resident || installation || cloud ? undefined : join(getAppDataDir(), "sandbox", "workspaces"),
       // Trusted outer mounts/egress are enforcement details, not Agent policy.
-      trustedWritablePaths: resident ? ["/nix"] : (installation || cloud ? [] : hostPackageWriteRoots()),
-      networkProxy: resident || installation || cloud ? undefined : () => networkProxyFor(sandboxNetwork),
+      trustedWritablePaths: resident ? ["/nix"] : (workspaceScoped || installation || cloud ? [] : hostPackageWriteRoots()),
+      networkProxy: resident || installation || cloud ? undefined : () => networkProxyFor(proxyPolicy),
       trustedEnvironmentNames: resident
         ? ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy"]
         : [],
@@ -163,7 +167,7 @@ export function createExecutionEnvironment(
   // A VM or resident boundary has no host sandbox to step out of, and a VM
   // failure must never fall back to an arbitrary host shell.
   const hostSandboxed = sandboxMode !== "disabled" && !installation && !cloud && !resident
-  const networkPolicy = hostSandboxed && local.sandboxStatus().available ? sandboxNetworkPolicy(sandboxNetwork) : undefined
+  const networkPolicy = hostSandboxed && local.sandboxStatus().available ? proxyPolicy : undefined
   return {
     ...(serviceOwner ? { workspaceId: serviceOwner.capabilities.workspaceId } : {}),
     facts: describeExecutionEnvironment(runtime, sandboxMode !== "disabled" && local.sandboxStatus().available),
@@ -180,14 +184,14 @@ export function createExecutionEnvironment(
       // These transports cannot retain a detached child beyond its lease.
       // Other backends defer to the user's env setting instead of overriding it.
       disableBackgroundTasks: cloud !== undefined || resident ? true : undefined,
-      restrictedNetwork: cloud !== undefined || installation !== undefined || resident,
+      restrictedNetwork: cloud !== undefined || installation !== undefined || resident || (workspaceScoped && networkPolicy !== undefined),
       preserveEnvironment: resident ? ["ZAPVM_ARTIFACT_DIR"] : undefined,
       allowUnsandboxed: allowUnsandboxed && hostSandboxed,
       sandboxExcludedCommands: hostSandboxed && sandboxExcludedCommands?.length ? sandboxExcludedCommands : undefined,
       // Host sandbox confines writes to the workspace; network stays open so
       // installs and fetches work, like Claude Code's default sandbox.
-      sandboxNetwork: hostSandboxed ? true : undefined,
-      declaredNetwork: networkPolicy ? true : undefined,
+      sandboxNetwork: hostSandboxed && !workspaceScoped ? true : undefined,
+      declaredNetwork: !workspaceScoped && networkPolicy ? true : undefined,
     },
   }
 }

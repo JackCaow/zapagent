@@ -28,6 +28,7 @@ interface Options {
   signal: AbortSignal
   approve?: ApprovalCallback
   appInstructions?: string
+  preview?: { name: string; url: string; authorization: string; command: boolean }
   onEvent: (event: AgentEvent) => void
   onModel?: (identity: ExternalModelIdentity) => void
   onAccepted?: () => void
@@ -70,6 +71,12 @@ export async function promptClaudeCode(options: Options): Promise<AcpTurnResult 
     options.resume ? "--resume" : "--session-id", sessionId]
   if (options.model) args.push(`--model=${options.model}`)
   if (options.appInstructions) args.push("--append-system-prompt", options.appInstructions)
+  if (options.preview) {
+    const { name, url, authorization, command } = options.preview
+    args.push("--mcp-config", JSON.stringify({ mcpServers: { [name]: { type: "http", url, headers: { Authorization: authorization } } } }),
+      "--allowedTools", `mcp__${name}__preview_artifact`)
+    if (command) args.push(`mcp__${name}__run_command`, "--disallowedTools", "Bash")
+  }
   if (options.plan) args.push("--tools", "Read,Grep,Glob")
   if (options.manual) {
     args.push("--settings", JSON.stringify({ permissions: { ask: ["Bash", "Write", "Edit", "MultiEdit", "NotebookEdit"] } }))

@@ -3,7 +3,7 @@ import type { ChildProcess } from "node:child_process";
 import {
   client, ndJsonStream, PROTOCOL_VERSION,
   type AgentApp, type ClientConnection, type ContentBlock, type InitializeResponse,
-  type NewSessionResponse, type PromptResponse, type SessionUpdate, type SetSessionConfigOptionResponse,
+  type McpServer, type NewSessionResponse, type PromptResponse, type SessionUpdate, type SetSessionConfigOptionResponse,
 } from "@agentclientprotocol/sdk";
 import { AcpClientError, type AcpClientHandlers } from "./types.js";
 import { terminateProcessTree, terminateProcessTreeWithGrace } from "../execution/process.js";
@@ -126,8 +126,8 @@ export class AcpClientConnection {
     return this.info.agentInfo?.title || this.info.agentInfo?.name || "agent";
   }
 
-  async newSession(cwd: string, options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<NewSessionResponse> {
-    return this.call(this.connection.agent.request("session/new", { cwd, mcpServers: [] }), "session_failed", options);
+  async newSession(cwd: string, options: { signal?: AbortSignal; timeoutMs?: number; mcpServers?: McpServer[] } = {}): Promise<NewSessionResponse> {
+    return this.call(this.connection.agent.request("session/new", { cwd, mcpServers: options.mcpServers ?? [] }), "session_failed", options);
   }
 
   /** Resume a prior session. Replayed history is dropped; only new turns are mapped. */

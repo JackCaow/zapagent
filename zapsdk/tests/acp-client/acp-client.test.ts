@@ -191,9 +191,11 @@ describe("runAcpTask (in-process agent)", () => {
           { toolCallId: "c", title: "ls", kind: "execute" as const, rawInput: { CommandLine: "ls -la" } },
           { toolCallId: "b", title: "Fetch docs", kind: "fetch" as const, rawInput: { url: "https://example.com" } },
           { toolCallId: "d", title: "Run with durable permission only", kind: "execute" as const, rawInput: { command: "pwd" } },
+          { toolCallId: "e", title: "Send with durable refusal only", kind: "other" as const },
         ]) {
           const response = await turn.client.request<RequestPermissionResponse>("session/request_permission", {
-            sessionId: turn.sessionId, toolCall, options: toolCall.toolCallId === "d" ? [options[0]!] : options,
+            sessionId: turn.sessionId, toolCall, options: toolCall.toolCallId === "d" ? [options[0]!]
+              : toolCall.toolCallId === "e" ? [options[1]!, { optionId: "never", name: "Never", kind: "reject_always" }] : options,
           });
           outcomes.push(response.outcome);
         }
@@ -205,17 +207,18 @@ describe("runAcpTask (in-process agent)", () => {
         { name: "bash", args: { command: "bun test", description: "Run tests" } },
         { name: "bash", args: { command: "ls -la", description: "ls" } },
         { name: "acp_fake_fetch", args: { title: "Fetch docs", input: { url: "https://example.com" } } },
-        { name: "bash", args: { command: "pwd", description: "Run with durable permission only" } },
+        { name: "acp_fake_other", args: { title: "Send with durable refusal only" } },
       ]);
       expect(outcomes).toEqual([
         { outcome: "selected", optionId: "once" }, { outcome: "selected", optionId: "once" },
-        { outcome: "selected", optionId: "no" }, { outcome: "cancelled" },
+        { outcome: "selected", optionId: "no" }, { outcome: "cancelled" }, { outcome: "cancelled" },
       ]);
       expect(handlers.decisions).toEqual([
         { title: "Run tests", kind: "execute", allowed: true },
         { title: "ls", kind: "execute", allowed: true },
         { title: "Fetch docs", kind: "fetch", allowed: false },
         { title: "Run with durable permission only", kind: "execute", allowed: false },
+        { title: "Send with durable refusal only", kind: "other", allowed: false },
       ]);
     } finally { await rm(cwd, { recursive: true, force: true }); }
   });
