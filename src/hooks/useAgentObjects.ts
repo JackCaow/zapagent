@@ -5,11 +5,13 @@ import type { AskUserCallbacks, Tool } from "../../zapsdk/index.js"
 import type { ApprovalCallback } from "../../zapsdk/tools/executor.js"
 import type { SkillDefinition } from "../../zapsdk/skills/types.js"
 import { buildAgentObjects } from "../agent-factory.js"
+import { createExecutionEnvironment, resolveExecutionBackend } from "../execution-environment.js"
 import { delegateProvidersReady, mdStore, permissionManager } from "../singletons.js"
 import { remoteAgents } from "../agent/remote-agent.js"
 import type { AgentObjects } from "../agent/types.js"
 import { REQUEST_CAPABILITIES_TOOL } from "../capabilities.js"
 import { requestCapabilitiesTool } from "../request-capabilities-tool.js"
+import { artifactPreviewTool } from "../artifact-preview.js"
 
 export interface UseAgentObjectsOptions {
   config: AppConfig
@@ -54,13 +56,18 @@ export function useAgentObjects(opts: UseAgentObjectsOptions & {
   const { config, onApproval, askUserCallbacks, checkpoint, skillsRef, mcpTools, externalRef } = opts
 
   const build = () => {
-    const objs = buildAgentObjects(config, onApproval, checkpoint, skillsRef.current, undefined, "disabled", undefined, undefined, askUserCallbacks)
+    const environment = createExecutionEnvironment(process.cwd(), "best-effort", resolveExecutionBackend(config.executionBackend),
+      false, config.sandboxNetwork, undefined, undefined, { workspaceScoped: true })
+    const objs = buildAgentObjects(config, onApproval, checkpoint, skillsRef.current, undefined, "best-effort", environment, undefined, askUserCallbacks)
     remoteAgents.host.trackEdit = checkpoint?.createEditTracker()
     remoteAgents.host.blocked = config.allowUnsandboxedCommands === false
       ? "External agents require local command access, which is disabled by your configuration."
       : undefined
     permissionManager.setProjectMemoryLookup(name => !!mdStore.get(`${name}.md`))
+    permissionManager.setSandboxConfined(objs.sandboxConfined, config.autoAllowSandboxedCommands !== false)
+    permissionManager.setSandboxNetworkPolicy(objs.sandboxNetworkPolicy)
     objs.registry.register(requestCapabilitiesTool(args => permissionManager.checkPermission(REQUEST_CAPABILITIES_TOOL, args).decision === "allow"))
+    objs.registry.register(artifactPreviewTool(objs.cwd))
     for (const tool of mcpTools) {
       // Defensive: skip name clashes rather than throw — a misconfigured
       // server shouldn't take down the whole agent registry. The MCP

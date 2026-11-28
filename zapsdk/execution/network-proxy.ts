@@ -5,6 +5,8 @@ export interface NetworkPolicy {
   /** Exact hosts, `*.example.com` (subdomains only), or `*` for everything. */
   allowedDomains: string[];
   deniedDomains?: string[];
+  /** Restrict direct loopback access to the command's own proxy. */
+  proxyOnly?: boolean;
 }
 
 /** Hosts a dev workflow needs: package registries, git hosts, toolchain
@@ -68,7 +70,7 @@ export function decideHost(policy: NetworkPolicy, rawHost: string): NetworkDecis
   if (policy.deniedDomains?.some((pattern) => matches(pattern, host))) {
     return { allowed: false, reason: `${host} is in sandboxNetwork.deniedDomains` };
   }
-  if (isLoopbackAddress(host)) return { allowed: true };
+  if (!policy.proxyOnly && isLoopbackAddress(host)) return { allowed: true };
   if (policy.allowedDomains.some((pattern) => matches(pattern, host))) return { allowed: true };
   return { allowed: false, reason: `${host} is not in the sandbox network allowlist` };
 }
@@ -84,6 +86,7 @@ const MAX_HEAD_BYTES = 64 * 1024;
 export class NetworkProxy {
   readonly port: number;
   readonly url: string;
+  get proxyOnly(): boolean { return this.policy().proxyOnly === true; }
   private readonly server: Server;
   private readonly sockets = new Set<Socket>();
   private readonly blocked = new Map<string, string>();

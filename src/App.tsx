@@ -1149,7 +1149,8 @@ export function App() {
           repeats={pendingApproval.repeats}
           onGrant={pendingApproval.grant}
           availableTools={agentRef.current.registry.definitions().filter(tool => tool.permission === "confirm").map(tool => tool.name)}
-          rulePreview={inferInvocationRules(pendingApproval.name, pendingApproval.args, process.cwd(), pendingApproval.context, true).map(rule => rule.pattern).join(", ") || null}
+          rulePreview={inferInvocationRules(pendingApproval.name, pendingApproval.args, process.cwd(), pendingApproval.context, !pendingApproval.scopedShell).map(rule => rule.pattern).join(", ") || null}
+          scopedShell={pendingApproval.scopedShell}
           cwd={pendingApproval.context?.cwd}
           workspaceRoot={pendingApproval.context?.workspaceRoot}
           requester={pendingApproval.context?.actor?.kind === "root" ? undefined : pendingApproval.context?.actor?.id}

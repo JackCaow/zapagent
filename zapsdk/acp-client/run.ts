@@ -1,5 +1,5 @@
 import type {
-  AvailableCommand, ContentBlock, PlanEntry, SessionConfigOption, SessionModeState, SessionUpdate, StopReason,
+  AvailableCommand, ContentBlock, McpServer, PlanEntry, SessionConfigOption, SessionModeState, SessionUpdate, StopReason,
 } from "@agentclientprotocol/sdk";
 import type { AgentEvent } from "../agent/events.js";
 import type { TokenUsage } from "../core/types.js";
@@ -20,6 +20,7 @@ export interface AcpSessionStartOptions {
   clientVersion?: string;
   /** Bound for initialize/session setup; prompts are bounded by their signal. */
   setupTimeoutMs?: number;
+  mcpServers?: McpServer[];
 }
 
 export interface AcpTurnOptions {
@@ -69,7 +70,7 @@ export class AcpAgentSession {
         await connection.loadSession(options.sessionId, options.cwd, setup);
         session = new AcpAgentSession(connection, spec, options.sessionId, true);
       } else {
-        const created = await connection.newSession(options.cwd, setup);
+        const created = await connection.newSession(options.cwd, { ...setup, mcpServers: options.mcpServers });
         session = new AcpAgentSession(connection, spec, created.sessionId, false);
         session.modes = created.modes;
         session.currentModeId = created.modes?.currentModeId;

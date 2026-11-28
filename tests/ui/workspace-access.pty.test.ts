@@ -72,7 +72,7 @@ ptyTest("Auto works across turns, with project access and revocation managed in 
       ? { name: "agent", arguments: JSON.stringify({ task: "REVOCATION_CHILD_PROBE", agent_type: "general" }) }
       : name === "child"
       ? { name: "write_file", arguments: JSON.stringify({ path: childFollowUp ? "child-late" : "child-armed", content: "fixture" }) }
-      : name === "outbound" ? { name: "bash", arguments: JSON.stringify({ command: "sh ./fixture.sh" }) }
+      : name === "outbound" ? { name: "bash", arguments: JSON.stringify({ command: "sh ./fixture.sh", network_destinations: ["127.0.0.1"] }) }
       : name === "shell" || name === "manual-shell"
       ? { name: "bash", arguments: JSON.stringify({ command: `printf local > ${name}-proof` }) }
       : background
@@ -138,8 +138,12 @@ ptyTest("Auto works across turns, with project access and revocation managed in 
     expect(tmux("capture-pane", "-p", "-t", "work")).not.toMatch(/Require project access|Allow edits|read-only research/)
     await key("Down"); await key("Down"); await key("Enter")
     await visible("Bypass · Shift+Tab")
-    await submit("/mode"); await visible("skip routine approvals (current)")
+    await submit("/mode"); await visible("block requests that need approval (current)")
     await key("Escape")
+    await submit("LOCAL_SHELL"); await visible("FINISHED_shell")
+    expect(readFileSync(join(cwd, "shell-proof"), "utf8")).toBe("local")
+    await submit("OUTBOUND_SHELL"); await visible("FINISHED_outbound")
+    expect(published).toBe(0)
     await key("BTab"); await visible("Auto · Shift+Tab")
     await key("BTab"); await visible("Manual · Shift+Tab")
     await key("BTab"); await visible("Auto · Shift+Tab")
@@ -147,12 +151,6 @@ ptyTest("Auto works across turns, with project access and revocation managed in 
     await visible("FINISHED_one"); expect(readFileSync(join(cwd, "one"), "utf8")).toContain("one")
     await submit("WRITE_two"); await visible("FINISHED_two"); expect(existsSync(join(cwd, "two"))).toBe(true)
     expect(tmux("capture-pane", "-p", "-S", "-200", "-t", "work")).not.toContain("结果尚未经过外部验收")
-    await submit("LOCAL_SHELL")
-    await visible("this project")
-    await visible("Commands run with your account")
-    await key("3")
-    await visible("FINISHED_shell")
-    expect(readFileSync(join(cwd, "shell-proof"), "utf8")).toBe("local")
     writeFileSync(join(cwd, "shell-proof"), "stale")
     await submit("LOCAL_SHELL")
     for (let i = 0; i < 80 && readFileSync(join(cwd, "shell-proof"), "utf8") !== "local"; i++) {
@@ -161,22 +159,24 @@ ptyTest("Auto works across turns, with project access and revocation managed in 
     }
     expect(readFileSync(join(cwd, "shell-proof"), "utf8")).toBe("local")
     expect(escapeParameter).toBe(false)
-    await submit("OUTBOUND_SHELL"); await visible("Approve?")
-    expect(published).toBe(0)
-    await key("Escape"); await visible("FINISHED_outbound")
-    expect(published).toBe(0)
-    await submit("OUTBOUND_SHELL"); await visible("Approve?")
-    await key("1")
-    for (let i = 0; i < 80 && published === 0; i++) await sleep(75)
-    expect(published).toBe(1)
-    await visible("FINISHED_outbound")
-    await submit("BACKGROUND_AUTO"); await visible("Approve?"); await key("1")
+    if (process.platform === "darwin") {
+      await submit("OUTBOUND_SHELL"); await visible("Approve?")
+      expect(published).toBe(0)
+      await key("Escape"); await visible("FINISHED_outbound")
+      expect(published).toBe(0)
+      await submit("OUTBOUND_SHELL"); await visible("Approve?")
+      await key("1")
+      for (let i = 0; i < 80 && published === 0; i++) await sleep(75)
+      expect(published).toBe(1)
+      await visible("FINISHED_outbound")
+    }
+    await submit("BACKGROUND_AUTO")
     await visible("FINISHED_continued"); expect(existsSync(join(cwd, "continued"))).toBe(true)
     for (const name of ["one", "two", "background", "continued"]) {
       expect(todoExposure.get(name)).toEqual({ tool: false, instructions: false })
     }
     await submit("/permissions"); await visible("[Workspace]")
-    await visible("Project access saved")
+    await visible("Project access is not saved")
     await visible("Remember project access"); await key("Enter")
     await key("BTab"); await visible("Manual · Shift+Tab")
     await submit("WRITE_manual"); await visible("Approve?")
@@ -202,7 +202,7 @@ ptyTest("Auto works across turns, with project access and revocation managed in 
     await visible("FINISHED_three"); expect(existsSync(join(cwd, "three"))).toBe(true)
     expect(todoExposure.get("three")).toEqual({ tool: false, instructions: false })
     await submit("WRITE_four"); await visible("FINISHED_four"); expect(existsSync(join(cwd, "four"))).toBe(true)
-    await submit("REVOKE_BACKGROUND"); await visible("Approve?"); await key("1"); await visible("FINISHED_long-background")
+    await submit("REVOKE_BACKGROUND"); await visible("FINISHED_long-background")
     for (let i = 0; i < 120 && !existsSync(join(cwd, "background-armed")); i++) await sleep(75)
     expect(existsSync(join(cwd, "background-armed"))).toBe(true)
     await submit("START_REVOCATION_CHILD")

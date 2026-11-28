@@ -34,7 +34,8 @@ const fixture = String.raw`
   if (scenario === "reads") {
     for (const mode of ["default", "bypassPermissions"]) {
       configRef.current.permissionMode = mode;
-      for (const path of ["/fixture/screenshots/first.jpg", "/fixture/screenshots/second.jpg"]) {
+      const directory = mode === "default" ? "/fixture/screenshots" : cwd;
+      for (const path of [join(directory, "first.jpg"), join(directory, "second.jpg")]) {
         const approval = hook.onApproval("read_file", { path });
         if (pending) { result.prompted = true; pending.resolve("deny"); }
         (result.decisions ??= []).push(await approval);

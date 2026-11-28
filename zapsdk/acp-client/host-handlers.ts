@@ -1,6 +1,6 @@
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
-import { RequestError, type PermissionOption, type RequestPermissionRequest, type RequestPermissionResponse } from "@agentclientprotocol/sdk";
+import { RequestError, type RequestPermissionRequest, type RequestPermissionResponse } from "@agentclientprotocol/sdk";
 import type { ApprovalCallback, ApprovalContext, ApprovalResponse } from "../tools/executor.js";
 import { resolveToolPathCanonical } from "../builtin-tools/filesystem.js";
 import { shellExecutionCommands } from "../utils/shell.js";
@@ -100,10 +100,12 @@ export function createAcpHostHandlers(policy: AcpHostPolicy): AcpHostHandlers {
       const diffs = tool.content?.flatMap(item => item.type === "diff" ? [item.path] : []) ?? [];
       const mutation = tool.kind === "edit" || tool.kind === "delete" || tool.kind === "move";
       const paths = mutation ? [...diffs, ...(tool.locations ?? []).map(location => location.path)] : diffs;
-      const response = paths.some(path => workspace.protectsWrite(path))
-        ? false : await approve(permissionTarget(policy.agentId, request, workspace), live);
+      const allowOnce = request.options.find(option => option.kind === "allow_once");
+      const response = allowOnce && !paths.some(path => workspace.protectsWrite(path))
+        ? await approve(permissionTarget(policy.agentId, request, workspace), live) : false;
       if (live.aborted) return { outcome: { outcome: "cancelled" } };
-      const option = pickOption(request.options, response === true);
+      // Native agents must never save an approval or refusal on Zap's behalf.
+      const option = response === true ? allowOnce : request.options.find(option => option.kind === "reject_once");
       decisions.push({ title, kind: tool.kind ?? undefined, allowed: option?.kind === "allow_once" });
       return option ? { outcome: { outcome: "selected", optionId: option.optionId } } : { outcome: { outcome: "cancelled" } };
     },
@@ -225,12 +227,6 @@ export function permissionTarget(agentId: string, request: RequestPermissionRequ
 /** POSIX-quote one argv element unless it is plainly safe. */
 function quoteArg(arg: string): string {
   return /^[\w@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replace(/'/g, "'\\''")}'`;
-}
-
-function pickOption(options: PermissionOption[], allowed: boolean): PermissionOption | undefined {
-  // Never persist a grant inside the external agent: zap owns "always".
-  if (allowed) return options.find(option => option.kind === "allow_once");
-  return options.find(option => option.kind === "reject_once") ?? options.find(option => option.kind === "reject_always");
 }
 
 function denialText(response: ApprovalResponse): string {

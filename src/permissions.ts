@@ -216,7 +216,7 @@ const TOOL_ALIASES: Record<string, string[]> = {
   bash:   ["bash"],
   write:  ["write_file", "create_file"],
   edit:   ["edit_file"],
-  read:   ["read_file", "search_files", "glob_files", "read_document", "read_tool_output"],
+  read:   ["read_file", "search_files", "glob_files", "read_document", "read_tool_output", "preview_artifact"],
   delete: ["delete_file"],
   move:   ["move_file"],
   list:   ["list_tree"],
@@ -230,13 +230,13 @@ const FILE_TOOLS = new Set([
   "create_file", "move_file", "read_file",
   "list_tree",
   // read_tool_output is a session capability, not a project filesystem path.
-  "search_files", "glob_files", "read_document",
+  "search_files", "glob_files", "read_document", "preview_artifact",
 ])
 
 const MUTATION_TOOLS = new Set(["write_file", "create_file", "edit_file", "multi_edit", "delete_file", "move_file"])
 
 const PATH_READ_TOOLS = new Set([
-  "read_file", "list_tree", "search_files", "glob_files", "read_document",
+  "read_file", "list_tree", "search_files", "glob_files", "read_document", "preview_artifact",
 ])
 const DIRECTORY_READ_TOOLS = new Set([
   "list_tree", "search_files", "glob_files",
@@ -458,7 +458,7 @@ export function ruleMatchesTool(
   args: Record<string, unknown>,
 ): boolean {
   const { toolNames, argPattern } = parsePattern(rule.pattern)
-  if (!toolNames.some(n => n === toolName)) return false
+  if (!toolNames.includes(toolName) && !(toolName === "preview_artifact" && toolNames.includes("read_file"))) return false
   if ((isScopedAgentTool(toolName) || isAcpAgentRequest(toolName)) && argPattern === null) return rule.type === "deny"
   if (argPattern === null) return true
   if (toolName === "move_file") {
@@ -947,22 +947,27 @@ export class PermissionManager {
   checkPermission(toolName: string, args: Record<string, unknown>, context?: Readonly<ApprovalContext>, hostShellConsent?: "session" | "project"): PermissionDecision {
     const base = this.checkPermissionCore(toolName, args, context, hostShellConsent)
     if (toolName !== "bash" || base.decision === "deny") return base
-    const decisions = [base, this.checkShellPaths(args, context), this.checkShellNetwork(args, context)]
+    const decisions = [base, this.checkShellPaths(args, context, hostShellConsent), this.checkShellNetwork(args, context, hostShellConsent)]
     return decisions.find(value => value.decision === "deny")
       ?? decisions.find(value => value.decision === "ask" && value.rule)
       ?? decisions.find(value => value.decision === "ask") ?? base
   }
 
   /** Shell patterns cannot silently authorize new filesystem roots. */
-  checkShellPaths(args: Record<string, unknown>, context?: Readonly<ApprovalContext>): PermissionDecision {
-    this.merged = loadMergedSettings(this.cwd)
-    const decisions = shellPathRequests(args, context?.cwd ?? this.cwd).map(({ tool, path }) => {
+  checkShellPaths(args: Record<string, unknown>, context?: Readonly<ApprovalContext>, hostConsent?: "session" | "project"): PermissionDecision {
+    this.merged = loadMergedSettings(this.cwd, hostConsent)
+    const requested = shellPathRequests(args, context?.cwd ?? this.cwd)
+    if (hostConsent && typeof args.cwd === "string") {
+      const path = resolveToolPathCanonical(args.cwd, context?.cwd ?? this.cwd)
+      if (pathReadOutsideCwdReason("read_file", { path }, context?.workspaceRoot ?? this.cwd)) requested.push({ tool: "write_file", path })
+    }
+    const decisions = requested.map(({ tool, path }) => {
       // Grants cover descendants and write roots also permit reads/edits/removal.
       const names = tool === "read_file" ? [tool] : ["read_file", "write_file", "edit_file", "delete_file"]
       const restriction = this.matchRules(rule => rule.type !== "allow" && names.some(name =>
         directoryRuleIntersects(rule, name, { path }, this.cwd, context)))
       if (restriction) return restriction
-      const decision = this.checkPermissionCore(tool, { path }, context)
+      const decision = this.checkPermissionCore(tool, { path }, context, hostConsent)
       if (decision.decision === "allow") return decision
       if (!pathReadOutsideCwdReason("read_file", { path }, context?.workspaceRoot ?? this.cwd)) return { decision: "allow" as const }
       return { decision: "ask" as const, reason: `Shell ${tool === "read_file" ? "read" : "write"} path requires authorization: ${path}` }
@@ -970,6 +975,25 @@ export class PermissionManager {
     return decisions.find(value => value.decision === "deny")
       ?? decisions.find(value => value.decision === "ask" && value.rule)
       ?? decisions.find(value => value.decision === "ask") ?? { decision: "allow" }
+  }
+
+  /** A raw process can reach every path in each granted filesystem tree. */
+  checkScopedShellRestrictions(args: Record<string, unknown>, context?: Readonly<ApprovalContext>): PermissionDecision | null {
+    this.merged = loadMergedSettings(this.cwd)
+    const root = context?.workspaceRoot ?? this.cwd
+    const requested = shellPathRequests(args, context?.cwd ?? this.cwd)
+    const path = resolveToolPathCanonical(typeof args.cwd === "string" ? args.cwd : root, context?.cwd ?? root)
+    requested.push({ tool: "write_file", path: pathIsInsideRoot(path, root) ? root : path })
+    return this.matchRules(rule => {
+      if (rule.type === "allow") return false
+      const capability = parseCapabilityPattern(rule.pattern)
+      const subject = capability && isFileCapability(capability.kind)
+        ? { ...rule, pattern: `write_file(${capability.scope})` } : rule
+      return requested.some(request => {
+        const tools = request.tool === "read_file" ? ["read_file"] : ["read_file", "write_file", "edit_file", "delete_file", "move_file"]
+        return tools.some(tool => directoryRuleIntersects(subject, tool, { path: request.path }, this.cwd, context))
+      })
+    })
   }
 
   /** A shell declares a host the sandbox allowlist would refuse. */
@@ -984,15 +1008,15 @@ export class PermissionManager {
    * Like `sandboxNetwork.allowedDomains`, only the user can widen egress:
    * allows count from this session, host-owned project grants and user
    * settings, never from repository `.zapcode/settings*.json` files. */
-  checkShellNetwork(args: Record<string, unknown>, context?: Readonly<ApprovalContext>): PermissionDecision {
+  checkShellNetwork(args: Record<string, unknown>, context?: Readonly<ApprovalContext>, hostConsent?: "session" | "project"): PermissionDecision {
     const policy = this.sandboxNetworkPolicy
     if (!policy) return { decision: "allow" }
     const facts = approvalFacts("bash", args, context)
     // Outside the sandbox no proxy applies; that path has its own consent.
     if (this.leavesSandbox(facts)) return { decision: "allow" }
-    this.merged = loadMergedSettings(this.cwd)
-    const granted = [...this.sessionRules, ...loadPermissionSettings(getProjectAuthorizationSettingsPath(this.cwd)).rules,
-      ...loadPermissionSettings(getGlobalSettingsPath()).rules].filter(rule => rule.type === "allow")
+    this.merged = loadMergedSettings(this.cwd, hostConsent)
+    const grantRules = hostConsent ? this.merged.rules : loadMergedSettings(this.cwd, "project").rules
+    const granted = [...this.sessionRules, ...grantRules].filter(rule => rule.type === "allow")
     const decisions = shellNetworkHosts(args).map((host): PermissionDecision => {
       const capability: ToolCapability = { kind: "net.write", scope: host }
       const restriction = this.matchRules(rule => rule.type !== "allow" && capabilityRuleMatches(rule, capability, this.cwd, context))

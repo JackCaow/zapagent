@@ -53,6 +53,7 @@ interface Props {
   cwd?: string
   requester?: string
   workspaceRoot?: string
+  scopedShell?: boolean
   onGrant?: (request: ToolGrantRequest, availableTools: string[], reviewedRules?: readonly PermissionRule[]) => string | void
 }
 
@@ -61,7 +62,7 @@ interface Option {
   label: string
 }
 
-export function ApprovalBar({ toolName, args, onChoose, rulePreview, allowScope = true, repeats = 0, availableTools = [], cwd, workspaceRoot, requester, onGrant }: Props) {
+export function ApprovalBar({ toolName, args, onChoose, rulePreview, allowScope = true, repeats = 0, availableTools = [], cwd, workspaceRoot, requester, onGrant, scopedShell }: Props) {
   useHideNativeCursor()
   // Three accept tiers ("once" / session-scoped "always" / persistent
   // "forever") + deny. Both persistent consent and ordinary tool grants
@@ -123,11 +124,12 @@ export function ApprovalBar({ toolName, args, onChoose, rulePreview, allowScope 
   return (
     <Box flexDirection="column" paddingX={1} marginTop={1}>
       <Text color={c.text.primary}>{formatToolCall(toolName, args)}</Text>
-      {toolName === "bash" && ([ ["read_paths", "Additional read access"], ["write_paths", "Additional write access"] ] as const).map(([field, label]) =>
+      {toolName === "bash" && ([ ["read_paths", "Additional read access"], ["write_paths", "Additional write access"],
+        ["network_destinations", "Network destinations"] ] as const).map(([field, label]) =>
         Array.isArray(args[field]) && args[field].length > 0
           ? <Text key={field} color={c.warning}>{label}: {JSON.stringify(args[field])}</Text> : null)}
       {request && typeof args.reason === "string" && <Text color={c.text.secondary} wrap="truncate-end">{`Reason: ${args.reason.replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ")}`}</Text>}
-      {toolName === "bash" && <Text color={c.text.secondary}>Commands run with your account’s permissions.</Text>}
+      {toolName === "bash" && !scopedShell && <Text color={c.text.secondary}>Commands run with your account’s permissions.</Text>}
       <Text color={c.warning} bold>{requester ? `Approve request from ${requester}?` : "Approve?"}</Text>
       <Box flexDirection="column">
         {options.map((opt, i) => {

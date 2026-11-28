@@ -94,4 +94,29 @@ describe("declared shell network destinations", () => {
     manager.addToolRules([{ pattern: "Capability(net.read:api.example.com)", type: "allow" }], "session")
     expect(decide(manager, curl("api.example.com")).decision).toBe("ask")
   })
+
+  it("uses actual egress scope for Auto and Bypass, even for a compound command", () => {
+    const manager = sandboxed()
+    manager.setSandboxNetworkPolicy({ allowedDomains: [], proxyOnly: true })
+    const command = "for item in *.svg; do printf '%s\\n' \"$item\"; done"
+    const approvalContext = {
+      ...context, cwd, workspaceRoot: cwd,
+      authorization: { readOnly: false, editOnly: false, sandboxEscape: false, workspaceShell: true, shellCommands: [command] },
+    }
+    const evaluate = (mode: "acceptEdits" | "default" | "bypassPermissions", hosts: string[] = []) =>
+      evaluateApprovalPolicy(manager, "bash", { command, network_destinations: hosts }, {
+        cwd, mode, context: approvalContext, workspaceScopedShell: true, hostCommands: "untrusted",
+      })
+    expect(evaluate("default").decision).toBe("ask")
+    expect(evaluate("acceptEdits").decision).toBe("allow")
+    expect(evaluate("bypassPermissions").decision).toBe("allow")
+    expect(evaluate("acceptEdits", ["github.com"]).reason).toContain("github.com")
+    expect(evaluate("acceptEdits", ["127.0.0.1"]).decision).toBe("ask")
+    expect(evaluate("bypassPermissions", ["127.0.0.1"]).decision).toBe("deny")
+    manager.addToolRules([{ pattern: "Capability(net.write:127.0.0.1)", type: "allow" }], "session")
+    expect(evaluate("bypassPermissions", ["127.0.0.1"]).decision).toBe("allow")
+    savePermissionSettings(getProjectSettingsPath(cwd), { rules: [{ pattern: "Capability(fs.write:secrets/**)", type: "deny" }] })
+    expect(evaluate("acceptEdits").reason).toContain("Capability(fs.write:secrets/**)")
+    expect(evaluate("bypassPermissions", ["127.0.0.1"]).decision).toBe("deny")
+  })
 })

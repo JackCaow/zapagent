@@ -9,6 +9,7 @@ import type { ImageContent } from "../../zapsdk/core/types.js"
 import { createLocalProcessBroker } from "../../zapsdk/execution/process.js"
 import type { ApprovalCallback, ApprovalContext } from "../../zapsdk/tools/executor.js"
 import { VERSION } from "../version.js"
+import { createNativePreview, type NativePreview } from "./native-preview.js"
 
 /** Host hooks shared across the native session. Approval is per turn. */
 export interface RemoteAgentHost {
@@ -23,6 +24,7 @@ interface LiveSession {
   spec: AcpAgentSpec
   session: AcpAgentSession
   handlers: AcpHostHandlers
+  preview?: ReturnType<typeof createNativePreview>
 }
 
 /** One external ACP agent driving the TUI conversation ("session mode").
@@ -50,6 +52,7 @@ export class RemoteAgentManager {
 
   async prompt(spec: AcpAgentSpec, cwd: string, text: string, images: ImageContent[] | undefined, options: {
     signal: AbortSignal
+    preview?: NativePreview
     approve?: ApprovalCallback
     onEvent: (event: AgentEvent) => void
     onModelId?: (model: string) => void
@@ -62,10 +65,11 @@ export class RemoteAgentManager {
     this.busy = true
     const turn = new AbortController()
     let live: LiveSession | undefined
+    let releasePreview: (() => void) | undefined
     let sent = false
     try {
       options.signal.throwIfAborted()
-      live = await this.ensure(spec, cwd, options.signal, options.onStarted)
+      live = await this.ensure(spec, cwd, options.signal, options.onStarted, !!options.preview)
       const content: ContentBlock[] = [{ type: "text", text }]
       if (images?.length) {
         if (!live.session.supportsImages) throw new Error(`${spec.id} does not accept images`)
@@ -77,6 +81,7 @@ export class RemoteAgentManager {
       options.signal.throwIfAborted()
       if (this.live !== live) throw new Error(`${spec.id} session was closed`)
       this.turn = { signal: AbortSignal.any([options.signal, turn.signal]), approve: options.approve }
+      if (options.preview) releasePreview = live.preview?.bind(options.preview, this.turn.signal)
       options.onAccepted?.()
       sent = true
       const result = await live.session.prompt(content, {
@@ -92,6 +97,7 @@ export class RemoteAgentManager {
       throw error
     } finally {
       turn.abort()
+      releasePreview?.()
       this.turn = undefined
       this.busy = false
     }
@@ -102,6 +108,7 @@ export class RemoteAgentManager {
     this.generation += 1
     const live = this.live
     this.live = undefined
+    live?.preview?.close()
     await live?.session.close().catch(() => {})
   }
 
@@ -110,9 +117,9 @@ export class RemoteAgentManager {
     for (const transport of this.transports) transport.kill?.()
   }
 
-  private async ensure(spec: AcpAgentSpec, cwd: string, signal: AbortSignal, onStarted?: (session: AcpAgentSession) => void): Promise<LiveSession> {
+  private async ensure(spec: AcpAgentSpec, cwd: string, signal: AbortSignal, onStarted?: (session: AcpAgentSession) => void, previewRequested = false): Promise<LiveSession> {
     if (this.host.blocked) throw new Error(this.host.blocked)
-    const key = JSON.stringify([spec.id, spec.command, spec.args ?? [], spec.requireSettings, spec.env, spec.model, spec.config, cwd])
+    const key = JSON.stringify([spec.id, spec.command, spec.args ?? [], spec.requireSettings, spec.env, spec.model, spec.config, cwd, previewRequested])
     const live = this.live
     if (live?.key === key) {
       if (live.spec.mode === spec.mode && (!spec.mode || live.session.currentModeId === spec.mode)) return live
@@ -146,13 +153,19 @@ export class RemoteAgentManager {
     const transport = this.transportFor(spec, cwd)
     this.transports.add(transport)
     void transport.exited.then(() => this.transports.delete(transport))
-    const session = await AcpAgentSession.start({ spec, cwd, transport, handlers, signal, clientVersion: VERSION })
+    const preview = previewRequested ? createNativePreview() : undefined
+    const mcpServers = preview ? [{
+      type: "http" as const, name: preview.name, url: preview.url, headers: [{ name: "Authorization", value: preview.authorization }],
+    }] : undefined
+    const session = await AcpAgentSession.start({ spec, cwd, transport, handlers, signal, mcpServers, clientVersion: VERSION })
+      .catch(error => { preview?.close(); throw error })
     if (generation !== this.generation) {
       // reset() ran while the agent was starting (/agent, /new, abort).
       await session.close().catch(() => {})
+      preview?.close()
       throw new Error(`${spec.id} start was cancelled`)
     }
-    const started = { key, spec, session, handlers }
+    const started = { key, spec, session, handlers, preview }
     this.live = started
     onStarted?.(session)
     return started

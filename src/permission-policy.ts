@@ -1,5 +1,5 @@
 import type { PermissionMode } from "./config.js"
-import { inferInvocationRules, PermissionManager, isPathReadTool } from "./permissions.js"
+import { inferInvocationRules, PermissionManager, isPathReadTool, pathReadOutsideCwdReason } from "./permissions.js"
 import type { ApprovalContext } from "../zapsdk/tools/executor.js"
 import { approvalFacts, isAcpAgentRequest } from "./approval-facts.js"
 import { matchDangerousToolCall } from "../zapsdk/utils/safety.js"
@@ -10,8 +10,9 @@ export interface ApprovalPolicyOptions {
   cwd: string
   context?: Readonly<ApprovalContext>
   hostCommands?: "trusted" | "untrusted" | "disabled"
-  /** The execution host enforces its offline Shell profile. */
   disableShellNetwork?: boolean
+  /** The execution host starts a scoped Shell with only authorized egress. */
+  workspaceScopedShell?: boolean
   allowedTools?: readonly string[]
   disallowedTools?: readonly string[]
 }
@@ -36,6 +37,10 @@ export function evaluateApprovalPolicy(manager: PermissionManager, name: string,
   // No session/project grant for an ACP agent's free-form request: a saved
   // rule could only be the bare tool name, which would allow every future one.
   const decision = isAcpAgentRequest(name) ? { ...decided, allowScope: false } : decided
+  if (decision.decision === "ask" && options.hostCommands !== undefined && options.mode === "bypassPermissions") {
+    return { ...decision, decision: "deny", allowScope: false,
+      reason: `Bypass blocked this action: ${decision.reason}. Review the scope in /permissions or switch modes.` }
+  }
   // Only a prompt the user already answered this turn becomes a refusal; a
   // mode change or new rule that allows the call still lets it run.
   return decision.decision === "ask" && manager.declinedThisTurn(name, args, options.context)
@@ -46,6 +51,7 @@ export function evaluateApprovalPolicy(manager: PermissionManager, name: string,
 
 function decide(manager: PermissionManager, name: string, args: Record<string, unknown>, options: ApprovalPolicyOptions): ApprovalPolicyDecision {
   const facts = approvalFacts(name, args, options.context)
+  const scopedBypass = options.hostCommands !== undefined && options.mode === "bypassPermissions"
   const escape = options.hostCommands === undefined && facts.sandboxEscape
   const confinedShell = manager.isConfinedWorkspaceShell(facts)
   const kind: ApprovalCategory = escape ? "sandbox-escape" : facts.shellCommands !== undefined ? "shell"
@@ -68,10 +74,13 @@ function decide(manager: PermissionManager, name: string, args: Record<string, u
     const requested = parseCapabilityRequest(args)
     if (typeof requested === "string") return result("deny", requested)
   }
+  const scopedShell = confinedShell && options.workspaceScopedShell && options.context?.authorization?.workspaceShell
   const requireShellConsent = facts.shellCommands !== undefined
-    && (options.hostCommands !== undefined || (options.mode === "acceptEdits" && !(confinedShell && options.disableShellNetwork)))
+    && (options.hostCommands !== undefined || options.mode === "acceptEdits")
+    && !(scopedShell || (confinedShell && options.disableShellNetwork && options.hostCommands === undefined))
   const shellConsent = options.hostCommands === "untrusted" ? "session" : "project"
-  const rule = manager.checkPermission(name, args, options.context, requireShellConsent ? shellConsent : undefined)
+  const rule = manager.checkPermission(name, args, options.context,
+    requireShellConsent || (options.hostCommands !== undefined && facts.shellCommands === undefined) ? shellConsent : undefined)
   const sandbox = escape ? manager.checkSandboxEscape() : undefined
   const denial = rule.decision === "deny" ? rule : sandbox?.decision === "deny" ? sandbox : undefined
   if (denial) return result("deny", denial.rule ? `matched deny rule ${denial.rule.pattern}` : denial.reason ?? "denied", "rule")
@@ -84,6 +93,11 @@ function decide(manager: PermissionManager, name: string, args: Record<string, u
   }
   const ask = rule.decision === "ask" && rule.rule ? rule : sandbox?.decision === "ask" && sandbox.rule ? sandbox : undefined
   if (ask) return result("ask", ask.reason ?? `ask rule ${ask.rule?.pattern}`, "rule")
+  if (scopedShell) {
+    const restriction = manager.checkScopedShellRestrictions(args, options.context)
+    if (restriction?.rule) return result("deny",
+      `Shell access overlaps ${restriction.rule.type} rule ${restriction.rule.pattern}. Use a file tool for the specific path.`, "rule")
+  }
   if (options.hostCommands !== undefined && options.mode === "default" && !facts.readOnly) {
     return result("ask", "Manual mode requires approval for this action")
   }
@@ -96,13 +110,14 @@ function decide(manager: PermissionManager, name: string, args: Record<string, u
       return result("allow", sandbox?.decision === "allow" ? `${sandbox.scope} sandbox authorization` : "unsandboxed under bypassPermissions", "sandbox")
     }
   }
-  if (name === "bash" && (requireShellConsent || options.mode !== "bypassPermissions")) {
-    const paths = manager.checkShellPaths(args, options.context)
+  if (name === "bash" && (requireShellConsent || scopedShell || options.mode !== "bypassPermissions")) {
+    const paths = manager.checkShellPaths(args, options.context, scopedShell ? shellConsent : undefined)
     if (paths.decision === "ask") return result("ask", paths.reason ?? "Shell filesystem paths require authorization", "fallback", !requireShellConsent)
-    const network = manager.checkShellNetwork(args, options.context)
+    const network = manager.checkShellNetwork(args, options.context, options.hostCommands === undefined ? undefined : shellConsent)
     if (network.decision === "ask") return result("ask", network.reason ?? "Shell network destinations require authorization", "fallback", !requireShellConsent)
   }
   if (requireShellConsent) {
+    if (scopedBypass) return result("ask", "This executor cannot limit the command to granted access")
     if (rule.decision === "allow" && rule.rule) return result("allow", "saved Shell command approval", "rule")
     if (options.allowedTools?.includes(name)) return result("allow", "allowed by --allowed-tools")
     return result("ask", "Shell command needs approval", "fallback", inferInvocationRules(name, args, options.cwd, options.context, true).length > 0)
@@ -118,8 +133,12 @@ function decide(manager: PermissionManager, name: string, args: Record<string, u
   // Reading screenshots, skill resources and reference files must not require
   // a new grant for every path. Explicit restrictions were checked above;
   // filesystem confinement remains the executor/backend's responsibility.
-  if (isPathReadTool(name) && facts.readOnly) return result("allow", "read-only filesystem access")
-  if (options.mode === "bypassPermissions") return result("allow", "bypassPermissions mode")
-  if (options.mode === "acceptEdits" && facts.editOnly && manager.changesOnlyWorkspaceFiles(name, args, options.context)) return result("allow", "approved workspace edit")
+  if (isPathReadTool(name) && facts.readOnly && (!scopedBypass || !pathReadOutsideCwdReason(name, args, options.context?.workspaceRoot ?? options.cwd))) {
+    return result("allow", "read-only filesystem access")
+  }
+  if (options.mode === "bypassPermissions" && !scopedBypass) return result("allow", "bypassPermissions mode")
+  if ((options.mode === "acceptEdits" || scopedBypass) && facts.editOnly && manager.changesOnlyWorkspaceFiles(name, args, options.context)) {
+    return result("allow", "approved workspace edit")
+  }
   return result("ask", "no rule, prompting user", "fallback", true)
 }

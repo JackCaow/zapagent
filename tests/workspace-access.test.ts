@@ -132,7 +132,7 @@ it("reuses user command rules without letting the checkout or project access aut
   const decide = (command: string, hostCommands: "trusted" | "untrusted" = "trusted", mode: "acceptEdits" | "bypassPermissions" = "acceptEdits") =>
     evaluateApprovalPolicy(manager, "bash", { command }, { mode, cwd: project, context, hostCommands }).decision
   expect(decide("sh ./publish.sh")).toBe("ask")
-  expect(decide("sh ./publish.sh", "trusted", "bypassPermissions")).toBe("ask")
+  expect(decide("sh ./publish.sh", "trusted", "bypassPermissions")).toBe("deny")
   manager.addProjectRule("bash", { command: "sh ./check.sh" }, context, true)
   expect(decide("sh ./check.sh")).toBe("allow")
   expect(decide("sh ./check.sh && sh ./publish.sh")).toBe("ask")

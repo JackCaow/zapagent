@@ -183,7 +183,6 @@ export function PermissionsDialog({ cwd, remembered, readOnly, logs, availableTo
         <Box flexDirection="column" marginTop={1}>
           {workspaceOptions.map((option, i) => <Box key={option.id}>{row(option.text, i === index)}</Box>)}
         </Box>
-        {workspaceOptions[index].id === "project" && <Text color={c.text.faint}>Shell approvals use separate command rules.</Text>}
       </>}
       {tab === "Rules" && <>
         <Text color={c.text.muted}>{`${filterLabels[filterIndex]} · ${filteredRules.length}`}</Text>

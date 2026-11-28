@@ -661,6 +661,7 @@ export function useAgentRunner({
             })
           },
           approve: workspaceRun?.bindApproval(rootExecutor.onApproval),
+          previewArtifact: workspaceRun ? (path, signal) => rootExecutor.execute("preview_artifact", { path }, signal) : undefined,
           createPreview: () => {
             const next = createStreamingPreview({ addLog, setStreamingText, setIsStreaming, setThinkingText, setIsThinking, getIsFrozen: getIsFrozen ?? (() => false) })
             registerStaticFlushCallback?.(() => next.onStaticFlushed())
