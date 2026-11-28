@@ -108,7 +108,7 @@ export function parseCommand(input: string): CommandResult | null {
           "",
           "  Permissions:",
           "  /permissions     — Manage active permission rules (interactive)",
-          "  /mode [name]     — Choose how Zap works (auto | manual)",
+          "  /mode [name]     — Choose how Zap works (auto | manual | bypass)",
           "",
           "",
           "  Settings:",

@@ -90,13 +90,16 @@ export const Footer = memo(function Footer({
     : contextBudget.severity === "notice" ? c.accent
     : c.text.faint
 
-  const modeLabel = permissionMode === "plan" ? "Read only" : permissionMode === "default" ? "Manual" : "Auto"
+  const modeLabel = permissionMode === "plan" ? "Read only"
+    : permissionMode === "default" ? "Manual"
+    : permissionMode === "bypassPermissions" ? "Bypass" : "Auto"
 
   type Seg = { text: string; fg: string; key: string }
   const rightSegments: Seg[] = []
   if (shellMode && !isRunning) rightSegments.push({ text: "shell", fg: c.warning, key: "shell" })
   rightSegments.push({ text: termWidth >= 100 ? `${modeLabel} · Shift+Tab` : modeLabel,
-    fg: permissionMode === "auto" ? c.text.muted : c.accent, key: "mode" })
+    fg: permissionMode === "bypassPermissions" ? c.warning : permissionMode === "auto" ? c.text.muted : c.accent,
+    key: "mode" })
   if (!hasApiKey && !showWelcome) rightSegments.push({ text: "! /connect", fg: c.warning, key: "connect" })
   if (showWelcome && !hasApiKey) rightSegments.push({ text: "/connect", fg: c.accent, key: "connect" })
   if (tpsText) rightSegments.push({ text: tpsText, fg: c.text.muted, key: "tps" })

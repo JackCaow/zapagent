@@ -465,13 +465,15 @@ export function dispatchSlashCommand(
 
     case "set_permission_mode": {
       const name = cmd.value ?? "auto"
-      const v = name === "auto" ? "auto" : name === "manual" || name === "default" ? "default" : null
+      const v = name === "auto" ? "auto"
+        : name === "manual" || name === "default" ? "default"
+        : name === "bypass" || name === "bypassPermissions" ? "bypassPermissions" : null
       if (!v) {
         deps.addLog("error", `Unknown permission mode: ${cmd.value}. Open /mode to see the available choices.`)
         return true
       }
       deps.updateConfig({ ...deps.configRef.current, permissionMode: v })
-      deps.addToast(v === "auto" ? "Auto is on" : "Manual is on")
+      deps.addToast(v === "auto" ? "Auto is on" : v === "default" ? "Manual is on" : "Bypass is on")
       return true
     }
 
