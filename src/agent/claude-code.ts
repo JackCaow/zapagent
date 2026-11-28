@@ -24,6 +24,7 @@ interface Options {
   resume?: string
   model?: string
   plan: boolean
+  manual?: boolean
   signal: AbortSignal
   approve?: ApprovalCallback
   appInstructions?: string
@@ -70,6 +71,9 @@ export async function promptClaudeCode(options: Options): Promise<AcpTurnResult 
   if (options.model) args.push(`--model=${options.model}`)
   if (options.appInstructions) args.push("--append-system-prompt", options.appInstructions)
   if (options.plan) args.push("--tools", "Read,Grep,Glob")
+  if (options.manual) {
+    args.push("--settings", JSON.stringify({ permissions: { ask: ["Bash", "Write", "Edit", "MultiEdit", "NotebookEdit"] } }))
+  }
   const images = await Promise.all((options.images ?? []).map(async image => ({ type: "image", source: {
     type: "base64", media_type: image.mediaType, data: image.base64 ?? (await readFile(image.filePath)).toString("base64"),
   } })))

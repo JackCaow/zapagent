@@ -4,7 +4,7 @@ import { RequestMeter } from "../../zapsdk/agent/request-meter.js"
 import { recordMaintenanceUsage } from "../agent/maintenanceUsage.js"
 import { existsSync, readFileSync } from "node:fs"
 import { spawnSync } from "node:child_process"
-import { parsePermissionMode, type AppConfig, type PermissionMode } from "../config.js"
+import type { AppConfig } from "../config.js"
 import {
   cycleEffort,
   agentManagingModel, conversationAgentId, getActiveProvider,
@@ -465,13 +465,13 @@ export function dispatchSlashCommand(
 
     case "set_permission_mode": {
       const name = cmd.value ?? "auto"
-      const v = name === "auto" ? "auto" : parsePermissionMode(name)
+      const v = name === "auto" ? "auto" : name === "manual" || name === "default" ? "default" : null
       if (!v) {
         deps.addLog("error", `Unknown permission mode: ${cmd.value}. Open /mode to see the available choices.`)
         return true
       }
       deps.updateConfig({ ...deps.configRef.current, permissionMode: v })
-      deps.addToast(v === "auto" ? "Auto is on" : `mode → ${v}`)
+      deps.addToast(v === "auto" ? "Auto is on" : "Manual is on")
       return true
     }
 

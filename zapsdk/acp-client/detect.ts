@@ -9,7 +9,7 @@ export const KNOWN_ACP_AGENTS: readonly AcpAgentSpec[] = [
   // Codex has no native ACP mode; the adapter (`npm i -g @agentclientprotocol/codex-acp`)
   // speaks ACP and reuses the codex login. Its default "agent" mode asks
   // zap only for actions it judges unsafe and writes workspace files itself.
-  // ("read-only" routes every edit to zap but stalls for minutes upstream.)
+  // In read-only mode, native PermissionRequest hooks run before ACP approvals.
   { id: "codex", name: "Codex", command: "codex-acp", args: [], selfGoverned: true,
     description: "OpenAI Codex through its ACP adapter." },
 ]

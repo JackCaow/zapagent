@@ -29,9 +29,7 @@ interface DialogProps {
 // ── Mode picker ──────────────────────────────────────────────────────────
 const MODES: { id: PermissionMode; label: string; meta: string }[] = [
   { id: "auto",              label: "Auto",               meta: "work in this project, ask when needed" },
-  { id: "default",           label: "Require project access", meta: "use access granted for this task or project" },
-  { id: "acceptEdits",       label: "Allow edits",        meta: "approve project file edits automatically" },
-  { id: "bypassPermissions", label: "Skip routine approvals", meta: "approve ordinary requests automatically" },
+  { id: "default",           label: "Manual",             meta: "ask before edits and commands" },
 ]
 
 export function ModeDialog({ config, onCommit, onCancel }: DialogProps) {

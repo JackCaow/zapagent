@@ -172,7 +172,7 @@ also skip CI, headless output and ACP; explicit `zap update` still checks.
 | `/model` | Search and switch models across all configured connections |
 | `/effort` | Set reasoning effort (`off`, `cycle`, or a provider value) |
 | `/agent` | List conversation agents (`agy`, `codex`, `claude-code`); `/agent <id>` sends messages to that agent, `/agent zap` switches back |
-| `/mode` | Choose how Zap works. Auto is the default. |
+| `/mode` | Choose Auto (default) or Manual. Shift+Tab switches between them when idle. |
 | `/permissions` | Manage active permission rules |
 | `/sessions` | Browse saved sessions |
 | `/queue` | Manage individual follow-ups: edit, delete, reorder, retry, Steer, or toggle default queuing (also Ctrl+Q) |
@@ -193,10 +193,10 @@ also skip CI, headless output and ACP; explicit `zap update` still checks.
 | `/supertask` | Start, resume, abort, status, or watch a long-horizon task |
 | `/exit` | Exit zapAgent (`/quit` and `/q` also work) |
 
-Describe what you want to build or change. In Auto, Zap can edit files and run
-confined project checks as part of your task. Zap asks when an operation requires
-extra access. Say “review this first without editing” to ask the agent for
-analysis only.
+Describe what you want to build or change. In Auto, Zap can make routine
+edits and run commands in authorized projects. In Manual, Zap asks before
+making changes or running commands. Use Shift+Tab at the prompt to switch modes.
+Say “review this first without editing” to ask the agent for analysis only.
 
 In Auto, the agent organizes its work and reports progress through actual
 changes and checks. Goals show execution and independent verification status.
@@ -211,17 +211,22 @@ refresh it from the installed CLI in the background. Once a conversation starts,
 the model reported by the live agent takes precedence. Model metadata is cached
 in Zap's user data, scoped to the workspace and runtime configuration.
 
-Codex applies workspace access to its native thread before sending the task.
-Claude Code uses manual stdio approvals for implementation and resumes its
-session. Identified project edits can be approved automatically. During an authorized
-implementation turn with an available sandbox, Claude runs foreground commands
-through Zap's project shell. Tests, builds, and lint use the same permissions as
-Zap's own commands. The shell starts in the project root on every call. Use Zap
-permission rules for this tool. When Claude reports native Bash restrictions,
-shell-related hooks, or its own active sandbox, Zap keeps the native shell and
-its permission flow. Analysis turns do not expose the project shell. In Zap, writing
-children keep their private workspaces and ask in the parent terminal when
-they need an additional permission.
+Codex uses native workspace access in Auto. In Manual, Codex asks Zap to
+approve edits and commands that need additional access. Read-only operations
+can proceed directly. Claude Code routes approvals to Zap and resumes the
+native session between turns. In Manual, it asks before writing files or running Bash.
+Writing subagents in Zap keep their private workspaces and use the parent's
+approval flow.
+
+If a Codex edit waits without a Zap prompt, check Codex's `PermissionRequest`
+hooks. Codex can run a hook before sending the approval to Zap. A hook that
+waits for a response in another app can keep the prompt from appearing here.
+For `/agent codex`, you can pass a session-only hook override in the existing
+`acpAgents` entry for `codex` as `env.CODEX_CONFIG`. For example, set it to
+`{"hooks":{"state":{"/absolute/path/to/hooks.json:permission_request:0:0":{"enabled":false}}}}`
+using the key of the external approval prompt you want to turn off for that
+adapter. For a Codex subscription connection, pass the same `CODEX_CONFIG`
+when launching Zap. Only override hooks that solicit a duplicate approval.
 
 The footer shows output speed as `105.4 token/s` for the latest root model request. `~` marks a live estimate (streamed characters ÷ 4); provider-reported output usage calibrates the final rate. Timing starts at first output and excludes tool execution. Missing usage keeps the estimate; non-streaming or very short responses may have no rate. In a local agent session, streamed chunks show an estimated rate. Buffered replies with reported output tokens show `avg` over the full turn, including tool time. When the agent reports its context window, the footer shows used tokens, capacity and percent occupied.
 

@@ -61,7 +61,19 @@ it("continues an owned Auto task once and refuses unknown, cancelled, or revoked
   expect(resume("a", ["known"])).toBe("plan")
   access.choose("revoke", "a")
   expect(resume("a", ["revoked"])).toBe("plan")
-  expect(access.begin("a", "manual", "acceptEdits", { kind: "task", ids: ["revoked"] }).mode).toBe("plan")
+  expect(access.begin("a", "manual", "default", { kind: "task", ids: ["revoked"] }).mode).toBe("plan")
+})
+
+it("keeps Manual one-time approvals independent of a saved project grant", () => {
+  const access = new WorkspaceAccess(project)
+  const manager = new PermissionManager(project)
+  access.choose("project", "a")
+  const run = access.begin("a", "manual", "default", { kind: "user" })
+  const options = { mode: run.mode, cwd: project, hostCommands: "trusted" as const }
+  expect(access.canRunHostCommands("a", "manual")).toBe(true)
+  expect(evaluateApprovalPolicy(manager, "read_file", { path: "src/main.ts" }, options).decision).toBe("allow")
+  expect(evaluateApprovalPolicy(manager, "edit_file", { path: "src/main.ts" }, options)).toMatchObject({ decision: "ask", allowScope: false })
+  expect(evaluateApprovalPolicy(manager, "bash", { command: "bun test" }, options)).toMatchObject({ decision: "ask", allowScope: false })
 })
 
 it("requires fresh consent before allowing commands with host permissions", () => {
@@ -100,8 +112,8 @@ it("revokes active and future work and asks about an edit beyond the assigned wo
   access.begin("a", "notification", "default", { kind: "task", ids: [] })
   expect(access.mode("default", "a")).toBe("plan")
   access.end("notification")
-  access.begin("a", "run", "default", { kind: "user" })
-  const mode = access.mode("default", "a")
+  access.begin("a", "run", "auto", { kind: "user" })
+  const mode = access.mode("auto", "a")
   const manager = new PermissionManager(project)
   for (const [path, decision] of [["src/main.ts", "allow"], [join(root, "other"), "ask"]]) {
     expect(evaluateApprovalPolicy(manager, "edit_file", { path }, { mode, cwd: project }).decision).toBe(decision)
@@ -120,14 +132,14 @@ it("stops a project-authorized task when another host forgets the project", asyn
   let onRevoked!: () => void
   const revoked = new Promise<void>(resolve => { onRevoked = resolve })
   const unwatch = second.watchProject(() => "two", onRevoked)
-  const scope = second.begin("two", "run", "default", { kind: "user" })
+  const scope = second.begin("two", "run", "auto", { kind: "user" })
   try {
-    expect(second.mode("default", "two")).toBe("acceptEdits")
+    expect(second.mode("auto", "two")).toBe("acceptEdits")
     scope.assertActive()
     first.choose("revoke", "one")
     expect(scope.assertActive).toThrow("no longer")
     await revoked
-    expect(second.mode("default", "two")).toBe("plan")
+    expect(second.mode("auto", "two")).toBe("plan")
   } finally { unwatch(); second.end("run") }
 })
 

@@ -58,10 +58,11 @@ function decide(manager: PermissionManager, name: string, args: Record<string, u
     : manager.changesOnlyWorkspaceFiles(name, args, options.context) ? "R1" : "R2"
   const result = (decision: ApprovalPolicyDecision["decision"], reason: string, source: ApprovalPolicyDecision["source"] = "policy", allowScope = false): ApprovalPolicyDecision =>
     ({ decision, reason, source, allowScope, category: source === "dangerous" ? "dangerous" : kind, tier: source === "dangerous" ? "R3" : tier() })
-  if (options.mode === "plan" && !facts.readOnly) return result("deny", "plan-mode is read-only")
+  if (options.mode === "plan" && (!facts.readOnly || name === REQUEST_CAPABILITIES_TOOL)) {
+    return result("deny", options.hostCommands === undefined ? "plan-mode is read-only" : "This session is read-only")
+  }
   if (options.disallowedTools?.includes(name)) return result("deny", "disallowed by --disallowed-tools")
   if (name === REQUEST_CAPABILITIES_TOOL) {
-    if (options.mode === "plan") return result("deny", "plan-mode is read-only")
     const requested = parseCapabilityRequest(args)
     if (typeof requested === "string") return result("deny", requested)
   }
@@ -82,6 +83,9 @@ function decide(manager: PermissionManager, name: string, args: Record<string, u
   }
   const ask = rule.decision === "ask" && rule.rule ? rule : sandbox?.decision === "ask" && sandbox.rule ? sandbox : undefined
   if (ask) return result("ask", ask.reason ?? `ask rule ${ask.rule?.pattern}`, "rule")
+  if (options.hostCommands !== undefined && options.mode === "default" && !facts.readOnly) {
+    return result("ask", "Manual mode requires approval for this action")
+  }
   if (facts.shellCommands === null) return result("ask", "shell adapter did not provide executable payloads; one-time review required")
   if (escape) {
     if (sandbox?.decision === "allow") return result("allow", `${sandbox.scope} sandbox authorization`, "sandbox")

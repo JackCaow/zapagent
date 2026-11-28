@@ -71,7 +71,7 @@ export async function runRemoteTurn(deps: RemoteTurnDeps, task: string, images?:
       command: spec.command, args: spec.args, cwd: deps.cwd, text: task, images, signal: controller.signal,
       model: deps.currentConfig.claudeModelPreference,
       onModel: identity => { if (!controller.signal.aborted && remoteAgents.epoch === epoch) deps.onModel(identity) },
-      plan: readOnly, approve: deps.approve, appInstructions: nativeInstructions,
+      plan: readOnly, manual: deps.currentConfig.permissionMode === "default", approve: deps.approve, appInstructions: nativeInstructions,
       resume: previous?.cwd === deps.cwd && previous.epoch === epoch && previous.tip === deps.conversation.getTurns().at(-1) ? previous.sessionId : undefined,
       onEvent, onAccepted,
     }) : await remoteAgents.prompt(spec, deps.cwd,

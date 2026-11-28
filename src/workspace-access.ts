@@ -124,7 +124,7 @@ export class WorkspaceAccess {
     const { device, inode } = this.identity()
     const projectId = base === "plan" ? undefined : this.projectGrant()
     const eligible = base !== "plan" && (origin.kind === "user" || this.canResume(session, origin.ids, projectId))
-    const grant = eligible && (projectId !== undefined || base !== "default") ? { projectId } : undefined
+    const grant = eligible ? { projectId } : undefined
     const active = this.active = { session, run, grant, revocation: new AbortController() }
     const actor = Object.freeze({ id: session, kind: "root" as const, runId: run })
     const signal = active.revocation.signal
@@ -168,10 +168,6 @@ export class WorkspaceAccess {
     this.active = undefined
   }
 
-  canWork(session: string, remembered: boolean): boolean {
-    return this.active ? this.active.session === session && !!this.active.grant : remembered
-  }
-
   canRunHostCommands(session: string, run?: string): boolean {
     const active = this.active
     return !!run && active?.run === run && active.session === session && !!active.grant?.projectId
@@ -181,8 +177,8 @@ export class WorkspaceAccess {
   mode(base: PermissionMode, session: string, actorRun?: string): PermissionMode {
     if (actorRun && (actorRun !== this.active?.run || session !== this.active?.session
       || this.active.revocation.signal.aborted || !this.active.grant || (!!this.active.grant.projectId && this.projectGrant() !== this.active.grant.projectId))) return "plan"
-    if (base !== "auto" && base !== "default") return base
-    if (!this.active) return "default"
-    return this.active.session === session && this.active.grant && (base === "auto" || !!this.active.grant.projectId) ? "acceptEdits" : "plan"
+    if (!this.active) return base === "auto" ? "default" : base
+    if (this.active.session !== session || !this.active.grant) return "plan"
+    return base === "auto" ? "acceptEdits" : base
   }
 }
